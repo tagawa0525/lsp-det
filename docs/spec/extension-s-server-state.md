@@ -121,7 +121,7 @@ interface ClientCapabilities {
 ## 6. セマンティクス
 
 1. **完全性**（`completeness` 宣言時）: `readiness` が `"ready"` のとき、7.1 のメソッドへの応答は完全な結果でなければならない
-2. **鮮度**（`freshness` 宣言時）: `readiness` が `"ready"` のとき、それまでに受信した `textDocument/didChange` はすべて織り込み済みでなければならない
+2. **鮮度**（`freshness` 宣言時）: `readiness` が `"ready"` のとき、それまでに受信した `textDocument/didChange` はすべて織り込み済みでなければならない。この保証の実質はクロスファイルの鮮度（変更したファイル以外を起点とする問い合わせに、インデックスが変更を反映していること）である。単一ファイル内の変更→問い合わせの多くは、LSP の既存の処理順序保証（同一接続では後続リクエストが先行通知の後に処理される）だけで満たされる
 3. **再インデックス**: ワークスペースの再解析（依存ファイル変更、ブランチ切り替え等）が始まったら、`readiness` を `"indexing"` に戻して通知しなければならない
 4. **既存機構との関係**: `$/progress` は人間向けの進捗表示であり本拡張を代替しない。`ServerCancelled` エラーはポーリングを強いるため本拡張を代替しない（LSP issue #1367 の議論を参照）
 
@@ -155,7 +155,9 @@ interface ClientCapabilities {
 
 ### 7.3 freshness 宣言時
 
-1. `textDocument/didChange` 送信後、`readiness` が `"ready"` の状態で発行した問い合わせの応答が、その変更を反映している
+1. ファイル A への `textDocument/didChange`（別ファイル B から参照されるシンボルの追加・削除）送信後、`readiness` が `"ready"` の状態で **B を起点に**発行した横断問い合わせ（`textDocument/references` 等）の応答が、A の変更を反映している
+
+テストは必ずクロスファイル（変更したファイルとは別のファイルを起点とし、インデックス経由でしか到達できない結果）で行わなければならない。単一ファイルの変更→問い合わせは LSP の処理順序保証だけで通ってしまい、freshness を検証しない（6 章 2 項）。
 
 ## 8. 既存実装との対応
 

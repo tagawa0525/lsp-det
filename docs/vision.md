@@ -549,6 +549,9 @@ rust-analyzer は独自拡張として `experimental/serverStatus` 通知を送�
 
 ## 7. 未決事項
 
+- 拡張 B に `health`（`ok | warning | error`、rust-analyzer `serverStatus` 由来）を含めるか。tsserver がクラッシュと正常完了を同じ progress end で通知する実害が確認されており、「まだ答えられない」と「もう答えられない」の区別は readiness と同型の穴
+- 診断（diagnostics）の完了通知。「この編集に対する診断はいつ出揃ったか」を知る手段がない問題。拡張 B の将来候補とするが、通知駆動でモデルが異なるため v0.1 では扱わない
+- 無視ディレクトリの宣言（solidlsp で 56 クラスが上書きしている実測最上位級の補正）。拡張 C 凍結と共に保留中
 - `declarationRange.full` に末尾のコメント（同一行の trailing comment）を含めるか
 - `readiness` を workspace 単位でなくファイル単位で返す必要があるか（大規模モノレポ）
 - マニフェストのレジストリを誰がホストするか。当面は Git リポジトリで十分

@@ -29,14 +29,68 @@ pub struct RawMessage {
 /// ストリームから 1 メッセージを読む。
 /// クリーンな EOF (ヘッダの先頭で切れている) なら `Ok(None)` を返す。
 pub fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<RawMessage>, FramingError> {
-    let _ = reader;
-    todo!("GREEN で実装する")
+    let content_length = match read_header(reader)? {
+        Some(len) => len,
+        None => return Ok(None),
+    };
+
+    let mut body = vec![0u8; content_length];
+    reader.read_exact(&mut body)?;
+    Ok(Some(RawMessage { body }))
+}
+
+/// ヘッダ部を読み、Content-Length を返す。
+/// ヘッダの先頭バイトを読む前に EOF に達した場合は `Ok(None)`
+/// (クリーンな切断)。ヘッダの途中で EOF に達した場合は `Io` エラーになる
+/// (`read_line` が `UnexpectedEof` を返す)。
+fn read_header<R: BufRead>(reader: &mut R) -> Result<Option<usize>, FramingError> {
+    let mut content_length: Option<usize> = None;
+    let mut line = String::new();
+    let mut at_start = true;
+
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line)?;
+        if n == 0 {
+            if at_start {
+                return Ok(None);
+            }
+            return Err(FramingError::MalformedHeaderLine(line));
+        }
+        at_start = false;
+
+        let text = line
+            .strip_suffix("\r\n")
+            .ok_or_else(|| FramingError::MalformedHeaderLine(line.clone()))?;
+
+        if text.is_empty() {
+            // ヘッダとボディを区切る空行。
+            break;
+        }
+
+        let (name, value) = text
+            .split_once(": ")
+            .ok_or_else(|| FramingError::MalformedHeader(text.to_string()))?;
+
+        if name.eq_ignore_ascii_case("content-length") {
+            let len = value
+                .parse::<usize>()
+                .map_err(|_| FramingError::InvalidContentLength(value.to_string()))?;
+            content_length = Some(len);
+        }
+        // content-type やその他の未知ヘッダは寛容に読み捨てる。
+    }
+
+    content_length
+        .ok_or(FramingError::MissingContentLength)
+        .map(Some)
 }
 
 /// ストリームへ 1 メッセージを書く。Content-Length は body.len() から再計算する。
 pub fn write_message<W: Write>(writer: &mut W, msg: &RawMessage) -> io::Result<()> {
-    let _ = (writer, msg);
-    todo!("GREEN で実装する")
+    write!(writer, "Content-Length: {}\r\n\r\n", msg.body.len())?;
+    writer.write_all(&msg.body)?;
+    writer.flush()
 }
 
 #[cfg(test)]

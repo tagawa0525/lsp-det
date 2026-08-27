@@ -18,8 +18,65 @@ pub struct Args {
 }
 
 pub fn parse_args(argv: &[String]) -> Result<Args, String> {
-    let _ = argv;
-    todo!("GREEN で実装する")
+    let mut adapter = None;
+    let mut gate_timeout = None;
+    let mut no_gate = false;
+    let mut gate_mode = None;
+
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--" => {
+                i += 1;
+                break;
+            }
+            "--adapter" => {
+                i += 1;
+                let value = argv.get(i).ok_or("--adapter requires a value")?;
+                adapter = Some(value.clone());
+                i += 1;
+            }
+            "--gate-timeout" => {
+                i += 1;
+                let value = argv.get(i).ok_or("--gate-timeout requires a value")?;
+                gate_timeout = Some(
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| format!("invalid --gate-timeout value: {value:?}"))?,
+                );
+                i += 1;
+            }
+            "--gate-mode" => {
+                i += 1;
+                let value = argv.get(i).ok_or("--gate-mode requires a value")?;
+                gate_mode = Some(value.clone());
+                i += 1;
+            }
+            "--no-gate" => {
+                no_gate = true;
+                i += 1;
+            }
+            other => {
+                return Err(format!("unknown flag: {other:?}"));
+            }
+        }
+    }
+
+    let mut rest = argv[i..].iter();
+    let command = rest
+        .next()
+        .ok_or("missing upstream command after `--`")?
+        .clone();
+    let command_args = rest.cloned().collect();
+
+    Ok(Args {
+        adapter,
+        gate_timeout,
+        no_gate,
+        gate_mode,
+        command,
+        command_args,
+    })
 }
 
 #[cfg(test)]

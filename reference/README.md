@@ -13,6 +13,7 @@ lsp-det の設計・実装で参照する外部リポジトリの置き場。す
 | lspx | https://github.com/thefrontside/lspx | 1b9649f | capability ベースのルーティングと応答マージ |
 | ls_proxy | https://github.com/axelson/ls_proxy | 2435d95 | 観測プロキシ。Content-Length 分割でパースが壊れた実例 (README) |
 | emacs-lsp-booster | https://github.com/blahgeek/emacs-lsp-booster | 004bb50 | stdio ラッパー型プロキシ (Rust)。エンコーディング書き換え型 |
+| lspmux | https://codeberg.org/p2502/lspmux | 18861f9 | ra-multiplex の移転先・現行版。cancel / handshake の修正状況の確認 |
 
 ## 言語サーバー（readiness 挙動の一次ソース）
 
@@ -40,6 +41,7 @@ clangd (llvm/llvm-project) は monorepo が巨大なため clone しない。必
 | cclsp | https://github.com/ktnyt/cclsp | 93414a1 | LSP→MCP 薄ブリッジ。範囲・準備完了の扱いの有無を確認 |
 | mcpls | https://github.com/bug-ops/mcpls | 5a6b7c4 | 同上 |
 | codex-lsp | https://github.com/code-yeongyu/codex-lsp | 5583664 | Codex 向けブリッジ。編集後フックで診断を返す設計 |
+| vscode-languageserver-node | https://github.com/microsoft/vscode-languageserver-node | 3e4039c | vscode-languageclient。リクエストのキューイング・タイムアウト・キャンセルの参照実装 |
 
 ## 仕様・プロトコル
 

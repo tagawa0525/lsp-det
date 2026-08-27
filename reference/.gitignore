@@ -1,0 +1,4 @@
+# clone した参照リポジトリは追跡しない。README.md が一覧と取得時点のコミットを記録する
+*
+!.gitignore
+!README.md

@@ -169,3 +169,5 @@ interface ClientCapabilities {
 | pyright | workDoneProgress の end（残り解析ファイル数 0 と同期） | 同上 | completeness |
 | tsserver 系 | `$/progress`（クラッシュ時も end） | 中継層がログ・接続監視と併用して合成 | completeness のみ（非同期処理のため freshness 不可） |
 | clangd | なし | 中継層でも合成困難 | freshness のみ（全インデックスを持たない） |
+
+`experimental/serverState` という名前は rust-analyzer の `experimental/serverStatus` と近いが、これは後継であることを示す意図的な命名である。両者はクライアントのログや設定で混同しやすいため、実装・運用時は注意する。上流提案時には後継関係を明示する。

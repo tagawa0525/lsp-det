@@ -1,3 +1,4 @@
+mod cli;
 mod framing;
 mod process;
 mod proxy;

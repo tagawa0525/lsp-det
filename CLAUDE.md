@@ -27,10 +27,14 @@ LSP 拡張「Server State（拡張 S）」の参照実装となる透過プロ�
 
 ## 現在地とマイルストーン
 
-- **M1 完了**（feat/m1-passthrough-proxy ブランチ、2026-08-28）: 素通しプロキシ。フレーミング（`src/framing.rs`）・プロセス寿命（`src/process.rs`）・イベントループ（`src/proxy.rs`）・CLI（`src/cli.rs`）を TDD で実装。28 テスト・fmt/clippy 完全通過。pdeathsig 2 経路（上流→プロキシ、プロキシ→クライアント）を手動 smoke テストで検証済み。**未検証**: 実際の rust-analyzer / gopls との統合（この開発環境では rustup シムが循環して起動不能なため、偽 LSP サーバーで代替検証した）。CC プラグイン（`.lsp.json`）としての実地投入は次の課題
-- **M2（次）**: 準拠テストスイート（中心成果物）+ 拡張 S surface + ゲート（rust-analyzer）。実測: CC のリクエストタイムアウト / エラー表示、rust-analyzer のスナップショット方式。実環境で rust-analyzer が起動できるか要確認（PATH/rustup 設定）
+- **M1 完了**（feat/m1-passthrough-proxy ブランチ、2026-08-28）: 素通しプロキシ。フレーミング（`src/framing.rs`）・プロセス寿命（`src/process.rs`）・イベントループ（`src/proxy.rs`）・CLI（`src/cli.rs`）を TDD で実装。28 テスト・fmt/clippy 完全通過。pdeathsig 2 経路（上流→プロキシ、プロキシ→クライアント）を手動 smoke テストで検証済み。**未検証**: 実際の rust-analyzer / gopls との統合（この開発環境では M1 完了時点で rust-analyzer が起動不能だったため、偽 LSP サーバーで代替検証した。原因は 2026-08-28 に解消済み — 下記参照）。CC プラグイン（`.lsp.json`）としての実地投入は次の課題
+- **M2（次）**: 準拠テストスイート（中心成果物）+ 拡張 S surface + ゲート（rust-analyzer）。実測: CC のリクエストタイムアウト / エラー表示、rust-analyzer のスナップショット方式。rust-analyzer の起動確認は解消済み（下記）のため実施可能
 - M3: gopls アダプタ（progress 再送の実測込み）
 - M4（v0.1 後）: Serena 統合・拡張 A 再評価・上流 PR
+
+### この開発環境の rust-analyzer 起動不能問題（2026-08-28 解消）
+
+PATH 上の `rust-analyzer` が 2 箇所とも rustup プロキシ（`rust-analyzer -> rustup` のシンボリックリンク。実体ではない）で、`/run/current-system/sw/bin/rust-analyzer`（NixOS system-wide）と `/home/tagawa/.cargo/bin/rust-analyzer`（rustup 管理）が互いにフォールバックし合い `error: infinite recursion detected` になっていた。原因は lsp-det 側ではなく、アクティブトゥールチェーン（`stable-x86_64-unknown-linux-gnu`）に `rust-analyzer` コンポーネントが未インストールだったこと。`rustup component add rust-analyzer --toolchain stable-x86_64-unknown-linux-gnu` で解消済み。
 
 ## reference/
 

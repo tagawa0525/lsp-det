@@ -25,24 +25,55 @@ pub struct UpstreamHandles {
 
 /// 上流コマンドを起動する。stdin/stdout/stderr はすべて pipe で接続する。
 pub fn spawn(command: &str, args: &[String]) -> io::Result<UpstreamHandles> {
-    let _ = (command, args, Stdio::piped);
-    todo!("GREEN で実装する")
+    let mut cmd = Command::new(command);
+    cmd.args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            set_pdeathsig_on_self();
+            Ok(())
+        });
+    }
+
+    let mut child = cmd.spawn()?;
+    let stdin = child.stdin.take().expect("stdin is piped");
+    let stdout = child.stdout.take().expect("stdout is piped");
+    let stderr = child.stderr.take().expect("stderr is piped");
+
+    Ok(UpstreamHandles {
+        upstream: Upstream { child },
+        stdin,
+        stdout,
+        stderr,
+    })
 }
 
 impl Upstream {
     /// 上流がまだ生きているか確認する。ブロックしない。
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        todo!("GREEN で実装する")
+        self.child.try_wait()
     }
 
     /// 上流の終了を待つ (ブロックする)。
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
-        todo!("GREEN で実装する")
+        self.child.wait()
     }
 
     /// 上流を殺して終了を待つ。既に終了していてもエラーにしない。
     pub fn kill_and_wait(&mut self) -> io::Result<()> {
-        todo!("GREEN で実装する")
+        match self.child.kill() {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::InvalidInput => {
+                // 既に終了しているプロセスへの kill。無視してよい。
+            }
+            Err(err) => return Err(err),
+        }
+        self.child.wait()?;
+        Ok(())
     }
 }
 
@@ -68,6 +99,12 @@ fn set_pdeathsig_on_self() {
 pub fn set_self_pdeathsig() {
     // Linux 以外では未対応 (v0.1-design.md 4.7 は Linux を想定)。
 }
+
+// `PR_SET_PDEATHSIG` の効果 (親プロセスの異常終了時に子が追従して死ぬこと) は
+// `fork()` を要するマルチプロセスのシナリオでしか検証できない。`cargo test`
+// はマルチスレッドで実行されるため、テストバイナリ内での `fork()` は
+// デッドロックの危険があり避けている。この効果は手動の smoke テストで
+// 確認する (M1 の完了条件、v0.1-design.md 8 章)。
 
 #[cfg(test)]
 mod tests {

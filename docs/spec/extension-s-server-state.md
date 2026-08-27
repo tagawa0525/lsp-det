@@ -171,3 +171,5 @@ interface ClientCapabilities {
 | clangd | なし | 中継層でも合成困難 | freshness のみ（全インデックスを持たない） |
 
 `experimental/serverState` という名前は rust-analyzer の `experimental/serverStatus` と近いが、これは後継であることを示す意図的な命名である。両者はクライアントのログや設定で混同しやすいため、実装・運用時は注意する。上流提案時には後継関係を明示する。
+
+同名の再利用（`experimental/serverStatus` の流用）は採らない。ペイロードが非互換であり（`quiescent: bool` → `readiness` 3 値、`health` に `dead` が追加）、既存のパーサが同名の別 schema を受け取ることになる。さらに中継層は上流の本物の `serverStatus` を原文のまま透過するため、同名では同一接続上に schema も送信者も異なる通知が 2 系統流れて判別できない。別名であれば両者は共存できる（却下の詳細は ADR 0006 決定 4）。

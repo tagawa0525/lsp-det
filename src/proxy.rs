@@ -5,18 +5,23 @@
 //! で行い、判断はループ内でのみ行う。
 
 use std::io::{self, BufReader, Read, Write};
-use std::sync::mpsc::{self, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
+use std::time::Duration;
 
 use crate::framing::{self, RawMessage};
 use crate::process;
+
+/// 上流の生死をポーリングする間隔。`Upstream` の所有権 (kill する権利) を
+/// main ループ 1 箇所に保つため、別スレッドで `wait()` させず `recv_timeout`
+/// のたびに `try_wait()` する (v0.1-design.md 4.8: タイマーは `recv_timeout`)。
+const UPSTREAM_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 enum Event {
     FromClient(RawMessage),
     ClientClosed,
     ClientReadError(io::Error),
     FromUpstream(RawMessage),
-    UpstreamExited(i32),
 }
 
 /// クライアントと上流を中継し、プロキシ自身の終了コードを返す。
@@ -25,15 +30,124 @@ where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
-    let _ = (client_in, client_out, command, args);
-    todo!("GREEN で実装する")
+    let mut handles = process::spawn(command, args)?;
+    let mut upstream_stdin = handles.stdin;
+    let mut client_out = client_out;
+
+    let (tx, rx) = mpsc::channel::<Event>();
+
+    spawn_stderr_relay(handles.stderr);
+    spawn_client_reader(client_in, tx.clone());
+    spawn_upstream_reader(handles.stdout, tx);
+
+    let exit_code = loop {
+        match rx.recv_timeout(UPSTREAM_POLL_INTERVAL) {
+            Ok(Event::FromClient(msg)) => {
+                if framing::write_message(&mut upstream_stdin, &msg).is_err() {
+                    // 上流の stdin が既に閉じている。次のポーリングで exit を検出する。
+                }
+            }
+            Ok(Event::FromUpstream(msg)) => {
+                if framing::write_message(&mut client_out, &msg).is_err() {
+                    // クライアントが既に読み取りをやめている。無視して続行する
+                    // (次のポーリングで上流の exit を検出する)。
+                }
+            }
+            Ok(Event::ClientClosed) => {
+                eprintln!("lsp-det: client closed connection, terminating upstream");
+                let _ = handles.upstream.kill_and_wait();
+                break 0;
+            }
+            Ok(Event::ClientReadError(err)) => {
+                eprintln!("lsp-det: error reading from client: {err}");
+                let _ = handles.upstream.kill_and_wait();
+                break 0;
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                if let Ok(Some(status)) = handles.upstream.try_wait() {
+                    let code = status.code().unwrap_or(1);
+                    if code != 0 {
+                        eprintln!("lsp-det: upstream exited with status {code}");
+                    }
+                    break code;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                // client_reader・upstream_reader の両方が終了済み。
+                // 上流の最終状態を確認して終了する。
+                let code = handles
+                    .upstream
+                    .wait()
+                    .ok()
+                    .and_then(|s| s.code())
+                    .unwrap_or(1);
+                break code;
+            }
+        }
+    };
+
+    let _ = client_out.flush();
+    Ok(exit_code)
+}
+
+fn spawn_stderr_relay(stderr: std::process::ChildStderr) {
+    thread::spawn(move || {
+        let mut reader = stderr;
+        let mut stderr_out = io::stderr();
+        let _ = io::copy(&mut reader, &mut stderr_out);
+    });
+}
+
+fn spawn_client_reader<R>(client_in: R, tx: Sender<Event>)
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut reader = BufReader::new(client_in);
+        loop {
+            match framing::read_message(&mut reader) {
+                Ok(Some(msg)) => {
+                    if tx.send(Event::FromClient(msg)).is_err() {
+                        return;
+                    }
+                }
+                Ok(None) => {
+                    let _ = tx.send(Event::ClientClosed);
+                    return;
+                }
+                Err(err) => {
+                    let _ = tx.send(Event::ClientReadError(io::Error::other(err)));
+                    return;
+                }
+            }
+        }
+    });
+}
+
+fn spawn_upstream_reader(stdout: std::process::ChildStdout, tx: Sender<Event>) {
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            match framing::read_message(&mut reader) {
+                Ok(Some(msg)) => {
+                    if tx.send(Event::FromUpstream(msg)).is_err() {
+                        return;
+                    }
+                }
+                Ok(None) | Err(_) => {
+                    // 上流の stdout が閉じた。実際の終了コード検出は
+                    // main ループの try_wait ポーリングに任せる。
+                    return;
+                }
+            }
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::framing::write_message;
-    use std::io::Read as _;
     use std::time::Duration;
 
     #[test]

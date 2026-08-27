@@ -27,9 +27,8 @@ LSP 拡張「Server State（拡張 S）」の参照実装となる透過プロ�
 
 ## 現在地とマイルストーン
 
-- 完了: 設計・仕様・調査（コードは未着手、`src/main.rs` は hello world）
-- **M1（次）**: 素通しプロキシ。フレーミング・プロセス寿命・exit 伝播を単体で潰す（落とし穴チェックリスト = v0.1-design 7 章）
-- M2: 準拠テストスイート（中心成果物）+ 拡張 S surface + ゲート（rust-analyzer）。実測: CC のリクエストタイムアウト / エラー表示、rust-analyzer のスナップショット方式
+- **M1 完了**（feat/m1-passthrough-proxy ブランチ、2026-08-28）: 素通しプロキシ。フレーミング（`src/framing.rs`）・プロセス寿命（`src/process.rs`）・イベントループ（`src/proxy.rs`）・CLI（`src/cli.rs`）を TDD で実装。28 テスト・fmt/clippy 完全通過。pdeathsig 2 経路（上流→プロキシ、プロキシ→クライアント）を手動 smoke テストで検証済み。**未検証**: 実際の rust-analyzer / gopls との統合（この開発環境では rustup シムが循環して起動不能なため、偽 LSP サーバーで代替検証した）。CC プラグイン（`.lsp.json`）としての実地投入は次の課題
+- **M2（次）**: 準拠テストスイート（中心成果物）+ 拡張 S surface + ゲート（rust-analyzer）。実測: CC のリクエストタイムアウト / エラー表示、rust-analyzer のスナップショット方式。実環境で rust-analyzer が起動できるか要確認（PATH/rustup 設定）
 - M3: gopls アダプタ（progress 再送の実測込み）
 - M4（v0.1 後）: Serena 統合・拡張 A 再評価・上流 PR
 

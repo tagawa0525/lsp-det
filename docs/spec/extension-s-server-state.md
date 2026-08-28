@@ -121,7 +121,7 @@ interface ClientCapabilities {
 ## 6. セマンティクス
 
 1. **完全性**（`completeness` 宣言時）: `readiness` が `"ready"` のとき、7.1 のメソッドへの応答は完全な結果でなければならない
-2. **鮮度**（`freshness` 宣言時）: `readiness` が `"ready"` のとき、それまでに受信した `textDocument/didChange` はすべて織り込み済みでなければならない
+2. **鮮度**（`freshness` 宣言時）: `readiness` が `"ready"` のとき、それまでに受信した `textDocument/didChange` はすべて織り込み済みでなければならない。この保証の実質はクロスファイルの鮮度（変更したファイル以外を起点とする問い合わせに、インデックスが変更を反映していること）である。単一ファイル内の変更→問い合わせの多くは、LSP の既存の処理順序保証（同一接続では後続リクエストが先行通知の後に処理される）だけで満たされる
 3. **再インデックス**: ワークスペースの再解析（依存ファイル変更、ブランチ切り替え等）が始まったら、`readiness` を `"indexing"` に戻して通知しなければならない
 4. **既存機構との関係**: `$/progress` は人間向けの進捗表示であり本拡張を代替しない。`ServerCancelled` エラーはポーリングを強いるため本拡張を代替しない（LSP issue #1367 の議論を参照）
 
@@ -155,7 +155,9 @@ interface ClientCapabilities {
 
 ### 7.3 freshness 宣言時
 
-1. `textDocument/didChange` 送信後、`readiness` が `"ready"` の状態で発行した問い合わせの応答が、その変更を反映している
+1. ファイル A への `textDocument/didChange`（別ファイル B から参照されるシンボルの追加・削除）送信後、`readiness` が `"ready"` の状態で **B を起点に**発行した横断問い合わせ（`textDocument/references` 等）の応答が、A の変更を反映している
+
+テストは必ずクロスファイル（変更したファイルとは別のファイルを起点とし、インデックス経由でしか到達できない結果）で行わなければならない。単一ファイルの変更→問い合わせは LSP の処理順序保証だけで通ってしまい、freshness を検証しない（6 章 2 項）。
 
 ## 8. 既存実装との対応
 
@@ -167,3 +169,7 @@ interface ClientCapabilities {
 | pyright | workDoneProgress の end（残り解析ファイル数 0 と同期） | 同上 | completeness |
 | tsserver 系 | `$/progress`（クラッシュ時も end） | 中継層がログ・接続監視と併用して合成 | completeness のみ（非同期処理のため freshness 不可） |
 | clangd | なし | 中継層でも合成困難 | freshness のみ（全インデックスを持たない） |
+
+`experimental/serverState` という名前は rust-analyzer の `experimental/serverStatus` と近いが、これは後継であることを示す意図的な命名である。両者はクライアントのログや設定で混同しやすいため、実装・運用時は注意する。上流提案時には後継関係を明示する。
+
+同名の再利用（`experimental/serverStatus` の流用）は採らない。ペイロードが非互換であり（`quiescent: bool` → `readiness` 3 値、`health` に `dead` が追加）、既存のパーサが同名の別 schema を受け取ることになる。さらに中継層は上流の本物の `serverStatus` を原文のまま透過するため、同名では同一接続上に schema も送信者も異なる通知が 2 系統流れて判別できない。別名であれば両者は共存できる（却下の詳細は ADR 0006 決定 4）。

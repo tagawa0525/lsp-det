@@ -17,7 +17,54 @@ use serde_json::{Map, Value};
 /// `paths` は `capabilities` から見たドット区切りのパス
 /// (例: `experimental.serverStatusNotification`)。
 pub fn inject_client_capabilities(body: &[u8], paths: &[&str]) -> Option<Vec<u8>> {
-    todo!("M2: capabilities にフラグを注入する")
+    if paths.is_empty() {
+        return None;
+    }
+
+    let mut root: Value = serde_json::from_slice(body).ok()?;
+    let params = root.get_mut("params")?.as_object_mut()?;
+    let capabilities = params
+        .entry("capabilities")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()?;
+
+    let mut changed = false;
+    for path in paths {
+        changed |= set_true(capabilities, path);
+    }
+    if !changed {
+        return None;
+    }
+
+    serde_json::to_vec(&root).ok()
+}
+
+/// ドット区切りのパスの葉を `true` にする。値が変わったら `true` を返す。
+/// 経路上に非オブジェクトがあれば何もしない (壊れた宣言を破壊しない)。
+fn set_true(capabilities: &mut Map<String, Value>, path: &str) -> bool {
+    let Some((parents, leaf)) = path.rsplit_once('.') else {
+        return set_leaf_true(capabilities, path);
+    };
+
+    let mut current = capabilities;
+    for segment in parents.split('.') {
+        let entry = current
+            .entry(segment)
+            .or_insert_with(|| Value::Object(Map::new()));
+        match entry.as_object_mut() {
+            Some(object) => current = object,
+            None => return false,
+        }
+    }
+    set_leaf_true(current, leaf)
+}
+
+fn set_leaf_true(object: &mut Map<String, Value>, key: &str) -> bool {
+    if object.get(key) == Some(&Value::Bool(true)) {
+        return false;
+    }
+    object.insert(key.to_string(), Value::Bool(true));
+    true
 }
 
 #[cfg(test)]

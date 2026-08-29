@@ -1,15 +1,11 @@
-mod adapter;
-mod cli;
-mod framing;
-mod initialize;
-mod peek;
-mod process;
-mod proxy;
-mod state;
-
 use std::env;
 use std::io;
 use std::process::ExitCode;
+
+use lsp_det::{adapter, cli, proxy};
+
+#[cfg(unix)]
+use lsp_det::process;
 
 fn main() -> ExitCode {
     let argv: Vec<String> = env::args().skip(1).collect();

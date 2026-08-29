@@ -12,6 +12,13 @@
 //! - `$/fake/report`（リクエスト）: これまでに受信した method の一覧と、
 //!   `initialize` で受け取った params を返す。上流へ何が転送されたかを
 //!   テスト側から検証するために使う
+//!
+//! handshake 前後の境界を再現するための起動フラグ:
+//!
+//! - `--exit-before-initialize-result`: `initialize` を受け取った瞬間に、
+//!   応答せず終了する（起動時クラッシュ）
+//! - `--status-before-initialize-result`: `InitializeResult` より**前**に
+//!   `experimental/serverStatus` を送る
 
 use std::io::{self, BufReader};
 
@@ -19,6 +26,11 @@ use lsp_det::framing::{self, RawMessage};
 use serde_json::{Value, json};
 
 fn main() {
+    let flags: Vec<String> = std::env::args().skip(1).collect();
+    let has = |name: &str| flags.iter().any(|flag| flag == name);
+    let exit_before_initialize_result = has("--exit-before-initialize-result");
+    let status_before_initialize_result = has("--status-before-initialize-result");
+
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     let mut stdout = io::stdout();
@@ -41,6 +53,19 @@ fn main() {
         match method {
             "initialize" => {
                 initialize_params = params;
+                if exit_before_initialize_result {
+                    return;
+                }
+                if status_before_initialize_result {
+                    send(
+                        &mut stdout,
+                        json!({
+                            "jsonrpc": "2.0",
+                            "method": "experimental/serverStatus",
+                            "params": {"health": "ok", "quiescent": true}
+                        }),
+                    );
+                }
                 respond(
                     &mut stdout,
                     id,

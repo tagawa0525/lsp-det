@@ -32,14 +32,21 @@ pub struct ServerUnderTest {
 impl ServerUnderTest {
     /// lsp-det（rust-analyzer アダプタ）+ 偽上流。CI で決定的に動く既定の被験者。
     pub fn lsp_det_with_fake_upstream() -> Self {
+        Self::lsp_det_with_fake_upstream_flags(&[])
+    }
+
+    /// 偽上流に起動フラグを渡す版（handshake 前後の境界を再現する）。
+    pub fn lsp_det_with_fake_upstream_flags(upstream_flags: &[&str]) -> Self {
+        let mut args = vec![
+            "--adapter".to_string(),
+            "rust-analyzer".to_string(),
+            "--".to_string(),
+            fake_upstream_binary().to_string_lossy().into_owned(),
+        ];
+        args.extend(upstream_flags.iter().map(|flag| flag.to_string()));
         ServerUnderTest {
             program: lsp_det_binary(),
-            args: vec![
-                "--adapter".to_string(),
-                "rust-analyzer".to_string(),
-                "--".to_string(),
-                fake_upstream_binary().to_string_lossy().into_owned(),
-            ],
+            args,
             root: repo_root(),
         }
     }
@@ -116,20 +123,26 @@ impl ConformanceClient {
     /// `declare_extension_s` は仕様 5.2 のクライアント宣言
     /// （`experimental.serverState: true`）を送るかどうか。
     pub fn initialize(&mut self, declare_extension_s: bool) -> Value {
+        let result = self.initialize_raw(declare_extension_s);
+        self.notify("initialized", json!({}));
+        result
+    }
+
+    /// `initialized` を送らずに `initialize` の応答だけを受け取る。
+    /// handshake が成立しない場合の検証に使う。
+    pub fn initialize_raw(&mut self, declare_extension_s: bool) -> Value {
         let mut capabilities = json!({"textDocument": {"hover": {}}});
         if declare_extension_s {
             capabilities["experimental"] = json!({"serverState": true});
         }
-        let result = self.request(
+        self.request(
             "initialize",
             json!({
                 "processId": std::process::id(),
                 "rootUri": null,
                 "capabilities": capabilities,
             }),
-        );
-        self.notify("initialized", json!({}));
-        result
+        )
     }
 
     pub fn request(&mut self, method: &str, params: Value) -> Value {
@@ -192,6 +205,10 @@ impl ConformanceClient {
 
     /// 指定した通知が `window` の間に届かないことを確かめる。
     /// 「届かないこと」の検証なので、待ち時間は短く固定する。
+    ///
+    /// 観測窓の途中で被験者が死んだ場合は panic する。沈黙していたのか
+    /// 落ちたのかを区別せずに成功とすると、クラッシュした被験者が
+    /// この検査を通ってしまう。
     pub fn expect_no_notification(&mut self, method: &str, window: Duration) -> bool {
         if self
             .pending_notifications
@@ -213,7 +230,9 @@ impl ConformanceClient {
                     }
                     self.stash(message);
                 }
-                Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => return true,
+                Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => {
+                    panic!("{method} が来ないことを確かめている途中で被験者が沈黙した")
+                }
                 Err(RecvTimeoutError::Timeout) => return true,
             }
         }

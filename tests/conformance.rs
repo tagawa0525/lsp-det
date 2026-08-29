@@ -168,6 +168,44 @@ fn spec_6_1_reports_dead_when_the_upstream_disappears() {
 }
 
 // ---------------------------------------------------------------------------
+// handshake 前後の境界
+//
+// LSP は `InitializeResult` より前のサーバー発通知を許さない。しかし
+// 「送れないから捨てる」と、その遷移は永久に失われる。沈黙は本拡張が
+// 消そうとしているものそのものなので、境界の扱いを明示的に縛る。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_state_change_before_the_handshake_is_delivered_afterwards() {
+    // 偽上流は InitializeResult より前に quiescent:true を送る。
+    let server =
+        ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--status-before-initialize-result"]);
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(true);
+
+    // handshake 前に起きた遷移も、宣言したクライアントには届かねばならない。
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn an_upstream_that_dies_before_answering_initialize_does_not_hang_the_client() {
+    // 起動時クラッシュ。仕様 6.1 の dead が最も効くはずの場面。
+    let server =
+        ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--exit-before-initialize-result"]);
+    let mut client = ConformanceClient::start(&server);
+
+    // handshake 前なので通知は送れない。ならば宙に浮いた initialize を
+    // エラーで閉じるしかない。沈黙して EOF だけ返すのは無言の嘘である。
+    let response = client.initialize_raw(true);
+    assert!(
+        response.get("error").is_some(),
+        "上流が initialize に答えず消えたのに、エラーも返らなかった: {response}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 実サーバー結合（ローカル専用。CI に入れない — v0.1-design.md 6 章）
 // ---------------------------------------------------------------------------
 

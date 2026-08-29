@@ -26,6 +26,10 @@ enum Event {
     ClientClosed,
     ClientReadError(io::Error),
     FromUpstream(RawMessage),
+    /// 上流の stdout が閉じた。生死のポーリング (`try_wait`) は
+    /// `recv_timeout` のタイムアウト時にしか回らないため、クライアントが
+    /// 絶え間なく喋っていると死の検出が遅れる。読み手が明示的に知らせる。
+    UpstreamClosed,
 }
 
 /// クライアントと上流を中継し、プロキシ自身の終了コードを返す。
@@ -86,6 +90,12 @@ where
                     let _ = framing::write_message(&mut client_out, &notification);
                 }
             }
+            Ok(Event::UpstreamClosed) => {
+                // stdout を閉じた上流はもう応答しない。クライアントが
+                // 喋り続けていてもここで死を伝える。
+                announce_death(&mut surface, &mut client_out);
+                break reap(&mut handles.upstream);
+            }
             Ok(Event::ClientClosed) => {
                 eprintln!("lsp-det: client closed connection, terminating upstream");
                 let _ = handles.upstream.kill_and_wait();
@@ -143,6 +153,25 @@ enum ClientKind {
     Other,
 }
 
+/// 終了コードを取り、居座る上流は道連れにする。
+///
+/// stdout を閉じてから実際に exit するまでには僅かな間があるため、
+/// 即断せず短く待つ。待ち切っても終わらない上流は kill する
+/// (プロキシが吊られるとクライアントも吊られる)。
+fn reap(upstream: &mut process::Upstream) -> i32 {
+    const ATTEMPTS: u32 = 50; // 20ms x 50 = 最大 1 秒
+    for _ in 0..ATTEMPTS {
+        match upstream.try_wait() {
+            Ok(Some(status)) => return status.code().unwrap_or(1),
+            Ok(None) => thread::sleep(UPSTREAM_POLL_INTERVAL),
+            Err(_) => break,
+        }
+    }
+    eprintln!("lsp-det: upstream closed stdout but did not exit; killing it");
+    let _ = upstream.kill_and_wait();
+    1
+}
+
 /// 上流の死をクライアントへ知らせる (仕様 6.1)。
 ///
 /// ループを抜ける前に書き切る必要がある。抜けた後では `client_out` が
@@ -169,6 +198,13 @@ struct Surface {
     /// `InitializeResult` を転送済みか。これより前に通知を送ると
     /// handshake を壊す (7 章チェックリスト #1 と同種の事故)。
     handshake_done: bool,
+    /// handshake 前に起きた状態変化。`InitializeResult` の直後に送る。
+    ///
+    /// 送れないからと捨ててはならない。アダプタ側の状態は既に進んでおり、
+    /// 同じ状態は二度と通知されない (仕様 4.2 の重複抑止)。捨てるとその
+    /// 遷移は永久に失われ、通知だけを見ているクライアントは初期状態のまま
+    /// 取り残される。
+    pending_state: Option<ServerState>,
 }
 
 impl Surface {
@@ -184,6 +220,7 @@ impl Surface {
             client_declared: false,
             initialize_id: None,
             handshake_done: false,
+            pending_state: None,
         }
     }
 
@@ -232,45 +269,64 @@ impl Surface {
 
         if is_initialize_response {
             self.handshake_done = true;
-            let declared = initialize::declare_server_state_provider(&msg.body, &self.provider);
-            return (
-                match declared {
+            let forwarded =
+                match initialize::declare_server_state_provider(&msg.body, &self.provider) {
                     Some(body) => RawMessage { body },
-                    None => msg,
-                },
-                None,
-            );
+                    None => {
+                        // 応答の形が想定外 (result が無い / capabilities が
+                        // オブジェクトでない等)。宣言できないまま拡張 S として
+                        // 振る舞うことになるので、黙って進まず理由を残す。
+                        eprintln!(
+                            "lsp-det: cannot declare serverStateProvider; \
+                         the upstream InitializeResult has an unexpected shape"
+                        );
+                        msg
+                    }
+                };
+            // handshake 前に溜まった遷移をここで 1 通だけ流す。
+            let flushed = self
+                .pending_state
+                .take()
+                .filter(|_| self.client_declared)
+                .map(|state| changed_notification(&state));
+            return (forwarded, flushed);
         }
 
         let changed = match peek::peek(&msg.body) {
             Ok(view) => self.tracker.observe(&view, &msg.body),
             Err(_) => None,
         };
-        let notification = changed.and_then(|state| self.notification_for(&state));
+        let notification = changed.and_then(|state| self.notify_or_stash(state));
         (msg, notification)
     }
 
+    /// 上流の死を伝えるメッセージ。handshake の前後で手段が変わる。
     fn mark_dead(&mut self) -> Option<RawMessage> {
         let state = self.tracker.mark_dead()?;
-        self.notification_for(&state)
+        if !self.handshake_done {
+            // 通知は送れない (LSP は InitializeResult より前のサーバー発
+            // 通知を許さない)。宙に浮いた initialize をエラーで閉じる。
+            // これをしないとクライアントは応答を永久に待つ。
+            return self.initialize_id.take().map(|id| initialize_failed(&id));
+        }
+        self.notify_or_stash(state)
     }
 
-    /// 仕様 4.2 の通知。宣言していないクライアントには送らない (仕様 5.2)。
-    fn notification_for(&self, state: &ServerState) -> Option<RawMessage> {
-        if !self.client_declared || !self.handshake_done {
+    /// 仕様 4.2 の通知を作る。宣言していないクライアントには送らない
+    /// (仕様 5.2)。handshake 前なら送らずに溜める。
+    fn notify_or_stash(&mut self, state: ServerState) -> Option<RawMessage> {
+        if !self.client_declared {
             return None;
         }
-        Some(RawMessage {
-            body: serde_json::to_vec(&serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": state::SERVER_STATE_CHANGED_METHOD,
-                "params": state,
-            }))
-            .expect("ServerState は常にシリアライズできる"),
-        })
+        if !self.handshake_done {
+            self.pending_state = Some(state);
+            return None;
+        }
+        Some(changed_notification(&state))
     }
 
     fn state_response(&self, id: &RequestId) -> RawMessage {
+        // 宣言の有無によらず応答する (仕様 5.2)。
         RawMessage {
             body: serde_json::to_vec(&serde_json::json!({
                 "jsonrpc": "2.0",
@@ -279,6 +335,35 @@ impl Surface {
             }))
             .expect("ServerState は常にシリアライズできる"),
         }
+    }
+}
+
+fn changed_notification(state: &ServerState) -> RawMessage {
+    RawMessage {
+        body: serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": state::SERVER_STATE_CHANGED_METHOD,
+            "params": state,
+        }))
+        .expect("ServerState は常にシリアライズできる"),
+    }
+}
+
+/// 上流が `initialize` に答えないまま消えたときの応答。
+///
+/// 沈黙させるとクライアントは応答を永久に待つ。死を隠さないという
+/// 方針 (設計 4.2) は handshake 中にも適用される。
+fn initialize_failed(id: &RequestId) -> RawMessage {
+    RawMessage {
+        body: serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32603, // JSON-RPC InternalError
+                "message": "lsp-det: the upstream language server exited before answering initialize",
+            },
+        }))
+        .expect("固定の構造なので常にシリアライズできる"),
     }
 }
 
@@ -379,8 +464,7 @@ fn spawn_upstream_reader(stdout: std::process::ChildStdout, tx: Sender<Event>) {
                     }
                 }
                 Ok(None) | Err(_) => {
-                    // 上流の stdout が閉じた。実際の終了コード検出は
-                    // main ループの try_wait ポーリングに任せる。
+                    let _ = tx.send(Event::UpstreamClosed);
                     return;
                 }
             }

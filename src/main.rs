@@ -1,5 +1,6 @@
 mod cli;
 mod framing;
+mod peek;
 mod process;
 mod proxy;
 

@@ -138,8 +138,9 @@ fn rewrite_for_upstream(msg: RawMessage) -> RawMessage {
 
 /// 上流の状態追跡と、その遷移の記録。
 ///
-/// 遷移の時刻と直前の状態の滞在時間を stderr に出す。これが通常編集による
-/// quiescent フラップ (頻度と保留時間) の実測手段になる (ADR 0006 決定 3)。
+/// 遷移の時刻と直前の状態の滞在時間を stderr に出す。ゲート導入後は
+/// 「どの状態にどれだけ留まったか」が保留時間そのものになるため、
+/// 待たされたときに原因を追える唯一の記録になる。
 struct StateTracker {
     adapter: RustAnalyzerAdapter,
     started: Instant,

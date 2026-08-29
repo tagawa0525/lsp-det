@@ -3,8 +3,13 @@
 //! rust-analyzer は `experimental/serverStatus` 通知で
 //! `{health, quiescent, message}` を送る (`lsp/ext.rs`)。`quiescent` の実体は
 //! `is_fully_ready()` = ワークスペースロード完了かつキャッシュプライミング
-//! 非実行であり、ディスク上のファイル変更でも `false` に戻る
-//! (v0.1-design.md 4.3 / ADR 0006 決定 3)。
+//! 非実行である。
+//!
+//! `false` に戻るのはワークスペース構成が変わったとき (`Cargo.toml`、
+//! ブランチ切り替え等) だけで、**通常のソース編集では戻らない**。実測と
+//! その構造的な裏付けは ADR 0007 と
+//! docs/research/rust-analyzer-quiescent-measurement.md にある。したがって
+//! フラップ対策 (平滑化・デバウンス) は不要である。
 //!
 //! gopls アダプタは M3。共通の trait はそのとき 2 つ目の実装を見てから
 //! 導入する (現在の要件に対する最小限の実装)。
@@ -50,6 +55,8 @@ impl From<UpstreamHealth> for Health {
 
 pub struct RustAnalyzerAdapter {
     state: ServerState,
+    /// パース不能な status を一度ログしたか (連投を避けるため)。
+    warned_unparseable: bool,
 }
 
 impl RustAnalyzerAdapter {
@@ -61,6 +68,7 @@ impl RustAnalyzerAdapter {
     pub fn new() -> Self {
         RustAnalyzerAdapter {
             state: ServerState::initializing(),
+            warned_unparseable: false,
         }
     }
 
@@ -81,6 +89,18 @@ impl RustAnalyzerAdapter {
         let Some(params) = parse_status_params(body) else {
             // 未知の形の status は状態を動かさない。壊れた 1 通で
             // readiness を誤って進めるより、前の状態を保つ方が安全。
+            //
+            // ただし黙って捨ててはならない。上流が params の形を変えると
+            // 全通が読めなくなり、状態が最後の値で凍りつく。ゲート実装後は
+            // そのまま非常口タイムアウトまでの保留として現れるため、
+            // 理由がログにないと診断できなくなる。連投を避けて 1 度だけ出す。
+            if !self.warned_unparseable {
+                self.warned_unparseable = true;
+                eprintln!(
+                    "lsp-det: cannot parse {SERVER_STATUS_METHOD} params; \
+                     keeping the previous state (further occurrences are not logged)"
+                );
+            }
             return None;
         };
 
@@ -97,6 +117,16 @@ impl RustAnalyzerAdapter {
 
     /// 上流プロセスの消失を観測した。`dead` は中継層だけが出せる終端状態
     /// (仕様 6.1)。
+    ///
+    /// `readiness` は直前の値のまま残す。仕様 3 章が 2 軸を独立と定め、
+    /// 「`health` が `error | dead` のとき `readiness` を判断材料に
+    /// 使うべきではない」を推奨解釈としているため (ADR 0004 決定 1)。
+    /// `dead` に対応する `readiness` の値は仕様に存在せず、`initializing`
+    /// へ倒すのは別の嘘になる。
+    ///
+    /// **消費者への注意**: `{health: "dead", readiness: "ready"}` は正常に
+    /// 出る組み合わせである。`readiness` を先に見る実装は死んだサーバーを
+    /// 応答可能とみなす。ゲート (設計 4.2) は `health` を先に判定すること。
     pub fn mark_dead(&mut self) -> Option<ServerState> {
         self.apply(ServerState {
             health: Health::Dead,
@@ -175,7 +205,7 @@ mod tests {
 
     #[test]
     fn losing_quiescence_returns_to_indexing() {
-        // 再インデックス (v0.1-design 4.3)。通常編集でも起きる。
+        // 再インデックス (v0.1-design 4.3)。ワークスペース構成の変更で起きる。
         let mut adapter = RustAnalyzerAdapter::new();
         observe(&mut adapter, &status("ok", true));
         let changed = observe(&mut adapter, &status("ok", false)).expect("re-index should notify");

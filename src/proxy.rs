@@ -175,10 +175,12 @@ impl Surface {
     fn new(adapter: RustAnalyzerAdapter) -> Self {
         Surface {
             tracker: StateTracker::new(adapter),
-            // rust-analyzer の `quiescent` は「ワークスペースを完全に
-            // ロードし終えた」を意味する (設計 5.1)。freshness の宣言は
-            // 仕様 7.3 のクロスファイル鮮度テストの結果を待つ (ADR 0007)。
-            provider: ServerStateProvider::complete(),
+            // rust-analyzer は両方の保証を満たす。準拠テストスイートの
+            // 仕様 7.2 (完全性) と 7.3 (クロスファイル鮮度) を実 rust-analyzer に
+            // 当てて確認済み (tests/conformance.rs の #[ignore] 付き 2 件)。
+            // 守れない保証を宣言することは仕様 5.1 違反なので、この宣言を
+            // 変えるときは対応するテストの結果を根拠にすること。
+            provider: ServerStateProvider::complete_and_fresh(),
             client_declared: false,
             initialize_id: None,
             handshake_done: false,

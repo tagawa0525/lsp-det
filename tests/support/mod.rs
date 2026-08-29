@@ -15,7 +15,7 @@ use std::thread;
 use std::time::Duration;
 
 use lsp_det::framing::{self, RawMessage};
-use lsp_det::state::ServerState;
+use lsp_det::state::{Health, Readiness, ServerState};
 use serde_json::{Value, json};
 
 /// 応答・通知を待つ既定の上限。超えたらテストは失敗する（黙って通さない）。
@@ -219,6 +219,60 @@ impl ConformanceClient {
         }
     }
 
+    /// `readiness` が `ready` になるまで `serverStateChanged` を待つ。
+    /// 実サーバーは自分のペースで ready になるため、時間ではなく状態で待つ。
+    pub fn wait_until_ready(&mut self) {
+        if self.server_state().readiness == Readiness::Ready {
+            return;
+        }
+        loop {
+            let state = self.await_state_changed();
+            assert_ne!(
+                state.health,
+                Health::Dead,
+                "ready を待つ間に被験者が死んだ: {state:?}"
+            );
+            if state.readiness == Readiness::Ready {
+                return;
+            }
+        }
+    }
+
+    pub fn did_open(&mut self, path: &std::path::Path, language_id: &str) {
+        let text = std::fs::read_to_string(path).expect("開くファイルを読めない");
+        self.notify(
+            "textDocument/didOpen",
+            json!({"textDocument": {
+                "uri": file_uri(path), "languageId": language_id,
+                "version": 1, "text": text,
+            }}),
+        );
+    }
+
+    /// 全文置換の `didChange`。仕様 6.2 の鮮度保証が対象とする通知。
+    pub fn did_change(&mut self, path: &std::path::Path, version: i64, text: &str) {
+        self.notify(
+            "textDocument/didChange",
+            json!({
+                "textDocument": {"uri": file_uri(path), "version": version},
+                "contentChanges": [{"text": text}],
+            }),
+        );
+    }
+
+    /// `textDocument/references`。宣言は含めない（利用箇所だけ数える）。
+    pub fn references(&mut self, path: &std::path::Path, line: u32, character: u32) -> Vec<Value> {
+        let response = self.request(
+            "textDocument/references",
+            json!({
+                "textDocument": {"uri": file_uri(path)},
+                "position": {"line": line, "character": character},
+                "context": {"includeDeclaration": false},
+            }),
+        );
+        response["result"].as_array().cloned().unwrap_or_default()
+    }
+
     /// 偽上流が受信した method の一覧。転送の有無を確かめるのに使う。
     pub fn upstream_methods_seen(&mut self) -> Vec<String> {
         let response = self.request("$/fake/report", json!(null));
@@ -303,6 +357,52 @@ fn spawn_reader(stdout: ChildStdout, tx: Sender<Incoming>) {
         }
     });
 }
+
+/// `file://` URI。テスト用なのでパーセントエンコードは扱わない
+/// (一時ディレクトリ名を ASCII に限る前提)。
+pub fn file_uri(path: &std::path::Path) -> String {
+    format!("file://{}", path.display())
+}
+
+/// 一時的な cargo プロジェクト。クロスファイルの問い合わせには、
+/// 別ファイルから参照されるシンボルを持つ実プロジェクトが要る。
+pub struct TempCargoProject {
+    pub root: PathBuf,
+}
+
+impl TempCargoProject {
+    /// `a::target` を `b::caller` から呼ぶ 2 ファイル構成を作る。
+    pub fn with_cross_file_reference(tag: &str) -> Self {
+        let root =
+            std::env::temp_dir().join(format!("lsp-det-conformance-{tag}-{}", std::process::id()));
+        let src = root.join("src");
+        std::fs::create_dir_all(&src).expect("一時プロジェクトを作れない");
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname = \"conformance-fixture\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\n",
+        )
+        .unwrap();
+        std::fs::write(src.join("lib.rs"), "pub mod a;\npub mod b;\n").unwrap();
+        std::fs::write(src.join("a.rs"), A_RS).unwrap();
+        std::fs::write(src.join("b.rs"), B_WITH_CALL).unwrap();
+        TempCargoProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join("src").join(name)
+    }
+}
+
+impl Drop for TempCargoProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// `target` は 1 行目の 8 文字目 (0 起点で line 0, character 7) にある。
+pub const A_RS: &str = "pub fn target() {}\n";
+pub const B_WITH_CALL: &str = "use crate::a::target;\n\npub fn caller() {\n    target();\n}\n";
+pub const B_WITHOUT_CALL: &str = "pub fn caller() {}\n";
 
 /// `write!` を使うため。
 pub fn flush<W: Write>(writer: &mut W) {

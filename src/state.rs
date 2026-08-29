@@ -71,6 +71,14 @@ impl ServerStateProvider {
             freshness: None,
         })
     }
+
+    /// `completeness` と `freshness` の両方を宣言する。
+    pub fn complete_and_fresh() -> Self {
+        ServerStateProvider::Graded(Guarantees {
+            completeness: Some(true),
+            freshness: Some(true),
+        })
+    }
 }
 
 impl ServerState {

@@ -171,11 +171,12 @@ fn spec_6_1_reports_dead_when_the_upstream_disappears() {
 // 実サーバー結合（ローカル専用。CI に入れない — v0.1-design.md 6 章）
 // ---------------------------------------------------------------------------
 
-/// 本スイートが実サーバーにも当たることの確認。被験者を差し替えるだけで
-/// 同じ準拠要件を検証できることが、この成果物の要件（設計 6 章）。
+/// 負の対照。生の rust-analyzer は拡張 S を実装していないので、スイートは
+/// これを非準拠と判定しなければならない。全部通るスイートは何も測っていない
+/// のと同じなので、「落ちるべきものが落ちる」ことを確かめておく。
 #[test]
 #[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
-fn spec_7_1_against_real_rust_analyzer() {
+fn a_server_without_the_extension_is_detected_as_non_conforming() {
     let server = ServerUnderTest {
         program: "rust-analyzer".into(),
         args: vec![],
@@ -185,9 +186,117 @@ fn spec_7_1_against_real_rust_analyzer() {
     let result = client.initialize(true);
 
     assert!(
-        !result["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null(),
-        "lsp-det を通していない生の rust-analyzer には拡張 S の宣言がない"
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null(),
+        "生の rust-analyzer が拡張 S を宣言している。上流が拡張を実装したか、\
+         被験者の取り違えである: {result}"
     );
+}
+
+/// 7.2 完全性（completeness）。実サーバーに対してのみ意味を持つ要件。
+///
+/// `ready` を名乗った時点で、横断問い合わせが不完全（クロスファイルの
+/// 利用箇所を取りこぼす）であってはならない。インデックス未完了の空応答こそ
+/// 本プロジェクトが消そうとしている「無言の嘘」そのもの。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn spec_7_2_completeness_through_lsp_det_with_real_rust_analyzer() {
+    let project = support::TempCargoProject::with_cross_file_reference("completeness");
+    let a = project.file("a.rs");
+    let b = project.file("b.rs");
+
+    let mut client = ConformanceClient::start(&real_rust_analyzer(&project));
+    client.initialize(true);
+    client.wait_until_ready();
+    client.did_open(&a, "rust");
+    client.did_open(&b, "rust");
+
+    // 事前に分かっている完全な結果: b.rs の 4 行目（0 起点で 3）の呼び出し。
+    let found = references_in(&mut client, &a, &b);
+    assert!(
+        found
+            .iter()
+            .any(|location| location["range"]["start"]["line"] == 3),
+        "ready を名乗りながら b.rs の呼び出しを取りこぼした（完全性違反）: {found:#?}"
+    );
+
+    client.shutdown();
+}
+
+/// 7.3 鮮度（freshness）。実サーバーに対してのみ意味を持つ要件。
+///
+/// 仕様 7.3 が要求するとおり**クロスファイル**で測る。ファイル B を変更し、
+/// 別ファイル A のシンボルを起点にした横断問い合わせが B の変更を反映して
+/// いるかを見る。同一ファイル内で測ると LSP の処理順序保証だけで通ってしまい、
+/// 鮮度を何も検証しない（仕様 6 章 2 項）。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn spec_7_3_cross_file_freshness_through_lsp_det_with_real_rust_analyzer() {
+    let project = support::TempCargoProject::with_cross_file_reference("freshness");
+    let a = project.file("a.rs");
+    let b = project.file("b.rs");
+
+    let mut client = ConformanceClient::start(&real_rust_analyzer(&project));
+    client.initialize(true);
+    client.wait_until_ready();
+
+    client.did_open(&a, "rust");
+    client.did_open(&b, "rust");
+
+    // 前提: b.rs から a.rs の target への参照が見えている。
+    // 件数は数え方（`use` を参照に含めるか）に依存するので、
+    // 「b.rs を指す参照があるか」だけを見る。
+    let before = references_in(&mut client, &a, &b);
+    assert!(
+        !before.is_empty(),
+        "前提が崩れている。b.rs からの参照が見えるはず"
+    );
+
+    // B から呼び出しを消す。これが仕様 6.2 が対象とする didChange。
+    client.did_change(&b, 2, support::B_WITHOUT_CALL);
+
+    // ready のまま問い合わせる。ready なら織り込み済みでなければならない。
+    let state = client.server_state();
+    assert_eq!(
+        state.readiness,
+        Readiness::Ready,
+        "この時点で ready でなくなるなら freshness ではなく readiness の問題"
+    );
+
+    let after = references_in(&mut client, &a, &b);
+    assert!(
+        after.is_empty(),
+        "ready を名乗りながら、消したはずの参照を返した（鮮度違反）: {after:#?}"
+    );
+
+    client.shutdown();
+}
+
+/// lsp-det 経由で実 rust-analyzer を起動する被験者。
+fn real_rust_analyzer(project: &support::TempCargoProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec![
+            "--adapter".to_string(),
+            "rust-analyzer".to_string(),
+            "--".to_string(),
+            "rust-analyzer".to_string(),
+        ],
+        root: project.root.clone(),
+    }
+}
+
+/// `a` 内のシンボル `target` への参照のうち、`file` を指すものだけを返す。
+fn references_in(
+    client: &mut ConformanceClient,
+    a: &std::path::Path,
+    file: &std::path::Path,
+) -> Vec<Value> {
+    let wanted = support::file_uri(file);
+    client
+        .references(a, 0, 7)
+        .into_iter()
+        .filter(|location| location["uri"] == Value::String(wanted.clone()))
+        .collect()
 }
 
 /// lsp-det 経由の実 rust-analyzer。initializing から ready への遷移を見る。

@@ -36,13 +36,17 @@ pub struct ServerState {
 impl ServerState {
     /// `initialize` 直後の状態。まだ何も答えられない (仕様 7.1 の 1)。
     pub fn initializing() -> Self {
-        todo!("M2: 初期状態を返す")
+        ServerState {
+            health: Health::Ok,
+            readiness: Readiness::Initializing,
+            message: None,
+        }
     }
 
     /// 通知を要する変化か。仕様 4.2 は「`health` または `readiness` が
     /// 変わるたびに送る」と定めており、`message` だけの変化は含まない。
     pub fn notifiable_change_from(&self, previous: &ServerState) -> bool {
-        todo!("M2: 2 軸の変化だけを見る")
+        self.health != previous.health || self.readiness != previous.readiness
     }
 }
 

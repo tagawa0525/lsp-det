@@ -3,6 +3,7 @@ mod framing;
 mod peek;
 mod process;
 mod proxy;
+mod state;
 
 use std::env;
 use std::io;

@@ -24,6 +24,15 @@ fn main() -> ExitCode {
         }
     };
 
+    let adapter = match args.adapter.as_deref() {
+        None => None,
+        Some("rust-analyzer") => Some(adapter::RustAnalyzerAdapter::new()),
+        Some(other) => {
+            eprintln!("lsp-det: unknown adapter {other:?} (available: rust-analyzer)");
+            return ExitCode::from(2);
+        }
+    };
+
     // 親 (クライアント) が死んだらこのプロセスも終了する。
     // main の最初、他の処理より先に設定する (v0.1-design.md 4.7)。
     #[cfg(unix)]
@@ -34,7 +43,7 @@ fn main() -> ExitCode {
         io::stdout(),
         &args.command,
         &args.command_args,
-        None,
+        adapter,
     ) {
         Ok(code) => exit_code_from(code),
         Err(err) => {

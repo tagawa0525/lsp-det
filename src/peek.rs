@@ -45,11 +45,6 @@ impl MessageView<'_> {
         self.method.is_some() && self.id.is_none()
     }
 
-    /// リクエストへの応答 (id のみ)。
-    pub fn is_response(&self) -> bool {
-        self.method.is_none() && self.id.is_some()
-    }
-
     pub fn method(&self) -> Option<&str> {
         self.method.as_deref()
     }
@@ -72,7 +67,6 @@ mod tests {
         assert_eq!(view.id, Some(RequestId::Number(1)));
         assert!(view.is_request());
         assert!(!view.is_notification());
-        assert!(!view.is_response());
     }
 
     #[test]
@@ -91,8 +85,8 @@ mod tests {
         let view = peek(body).unwrap();
         assert_eq!(view.method(), None);
         assert_eq!(view.id, Some(RequestId::Number(7)));
-        assert!(view.is_response());
         assert!(!view.is_request());
+        assert!(!view.is_notification());
     }
 
     #[test]

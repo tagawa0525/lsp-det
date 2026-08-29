@@ -1,6 +1,7 @@
 mod adapter;
 mod cli;
 mod framing;
+mod initialize;
 mod peek;
 mod process;
 mod proxy;

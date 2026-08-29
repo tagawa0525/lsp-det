@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 use crate::adapter::RustAnalyzerAdapter;
 use crate::framing::{self, RawMessage};
 use crate::initialize;
-use crate::peek;
+use crate::peek::{self, RequestId};
 use crate::process;
-use crate::state::ServerState;
+use crate::state::{self, ServerState, ServerStateProvider};
 
 /// 上流の生死をポーリングする間隔。`Upstream` の所有権 (kill する権利) を
 /// main ループ 1 箇所に保つため、別スレッドで `wait()` させず `recv_timeout`
@@ -43,7 +43,7 @@ where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
-    let mut tracker = adapter.map(StateTracker::new);
+    let mut surface = adapter.map(Surface::new);
     let mut handles = process::spawn(command, args)?;
     let mut upstream_stdin = handles.stdin;
     let mut client_out = client_out;
@@ -56,23 +56,34 @@ where
 
     let exit_code = loop {
         match rx.recv_timeout(UPSTREAM_POLL_INTERVAL) {
-            Ok(Event::FromClient(msg)) => {
-                let msg = if tracker.is_some() {
-                    rewrite_for_upstream(msg)
-                } else {
-                    msg
-                };
-                if framing::write_message(&mut upstream_stdin, &msg).is_err() {
-                    // 上流の stdin が既に閉じている。次のポーリングで exit を検出する。
+            Ok(Event::FromClient(msg)) => match surface.as_mut() {
+                Some(surface) => match surface.on_client(msg) {
+                    // 拡張 S のリクエストは中継層が自ら答える。上流は
+                    // 拡張 S を知らないので転送してはならない (仕様 2 章)。
+                    ClientAction::AnswerLocally(response) => {
+                        let _ = framing::write_message(&mut client_out, &response);
+                    }
+                    ClientAction::Forward(msg) => {
+                        // 上流の stdin が閉じていても続行する。
+                        // 次のポーリングで exit を検出する。
+                        let _ = framing::write_message(&mut upstream_stdin, &msg);
+                    }
+                },
+                None => {
+                    let _ = framing::write_message(&mut upstream_stdin, &msg);
                 }
-            }
+            },
             Ok(Event::FromUpstream(msg)) => {
-                if let Some(tracker) = tracker.as_mut() {
-                    tracker.observe(&msg);
-                }
+                let (msg, notification) = match surface.as_mut() {
+                    Some(surface) => surface.on_upstream(msg),
+                    None => (msg, None),
+                };
                 if framing::write_message(&mut client_out, &msg).is_err() {
                     // クライアントが既に読み取りをやめている。無視して続行する
                     // (次のポーリングで上流の exit を検出する)。
+                }
+                if let Some(notification) = notification {
+                    let _ = framing::write_message(&mut client_out, &notification);
                 }
             }
             Ok(Event::ClientClosed) => {
@@ -91,9 +102,7 @@ where
                     if code != 0 {
                         eprintln!("lsp-det: upstream exited with status {code}");
                     }
-                    if let Some(tracker) = tracker.as_mut() {
-                        tracker.mark_dead();
-                    }
+                    announce_death(&mut surface, &mut client_out);
                     break code;
                 }
             }
@@ -106,9 +115,7 @@ where
                     .ok()
                     .and_then(|s| s.code())
                     .unwrap_or(1);
-                if let Some(tracker) = tracker.as_mut() {
-                    tracker.mark_dead();
-                }
+                announce_death(&mut surface, &mut client_out);
                 break code;
             }
         }
@@ -118,21 +125,158 @@ where
     Ok(exit_code)
 }
 
-/// クライアント→上流の `initialize` にだけ capability を注入する
-/// (v0.1-design.md 4.5)。それ以外は原文バイトのまま返す。
-fn rewrite_for_upstream(msg: RawMessage) -> RawMessage {
-    let Ok(view) = peek::peek(&msg.body) else {
-        return msg;
+/// クライアントから来たメッセージをどう扱うか。
+enum ClientAction {
+    /// そのまま (あるいは書き換えて) 上流へ流す。
+    Forward(RawMessage),
+    /// 中継層が自ら応答する。上流へは流さない。
+    AnswerLocally(RawMessage),
+}
+
+/// クライアントから見た `initialize` リクエストの種類。
+///
+/// 覗き見の借用を `RawMessage` の所有権から切り離すために、判定結果だけを
+/// 所有データとして取り出す。
+enum ClientKind {
+    ServerStateRequest(RequestId),
+    InitializeRequest(Option<RequestId>),
+    Other,
+}
+
+/// 上流の死をクライアントへ知らせる (仕様 6.1)。
+///
+/// ループを抜ける前に書き切る必要がある。抜けた後では `client_out` が
+/// 閉じ、死を伝えられないまま沈黙することになる。
+fn announce_death<W: Write>(surface: &mut Option<Surface>, client_out: &mut W) {
+    let Some(surface) = surface.as_mut() else {
+        return;
     };
-    if !view.is_request() || view.method() != Some("initialize") {
-        return msg;
+    if let Some(notification) = surface.mark_dead() {
+        let _ = framing::write_message(client_out, &notification);
     }
-    match initialize::inject_client_capabilities(
-        &msg.body,
-        RustAnalyzerAdapter::REQUIRED_CLIENT_CAPABILITIES,
-    ) {
-        Some(body) => RawMessage { body },
-        None => msg,
+}
+
+/// 拡張 S のサーバー側 surface (v0.1-design.md 4.1)。
+///
+/// アダプタがある場合にのみ存在する。アダプタなしでは readiness を知る
+/// 手段がなく、宣言できる状態を持たない。
+struct Surface {
+    tracker: StateTracker,
+    provider: ServerStateProvider,
+    /// クライアントが仕様 5.2 の宣言をしたか。通知を送る条件。
+    client_declared: bool,
+    initialize_id: Option<RequestId>,
+    /// `InitializeResult` を転送済みか。これより前に通知を送ると
+    /// handshake を壊す (7 章チェックリスト #1 と同種の事故)。
+    handshake_done: bool,
+}
+
+impl Surface {
+    fn new(adapter: RustAnalyzerAdapter) -> Self {
+        Surface {
+            tracker: StateTracker::new(adapter),
+            // rust-analyzer の `quiescent` は「ワークスペースを完全に
+            // ロードし終えた」を意味する (設計 5.1)。freshness の宣言は
+            // 仕様 7.3 のクロスファイル鮮度テストの結果を待つ (ADR 0007)。
+            provider: ServerStateProvider::complete(),
+            client_declared: false,
+            initialize_id: None,
+            handshake_done: false,
+        }
+    }
+
+    fn on_client(&mut self, msg: RawMessage) -> ClientAction {
+        let kind = match peek::peek(&msg.body) {
+            Ok(view) if view.is_request() => match (view.method(), view.id.clone()) {
+                (Some(state::SERVER_STATE_METHOD), Some(id)) => ClientKind::ServerStateRequest(id),
+                (Some("initialize"), id) => ClientKind::InitializeRequest(id),
+                _ => ClientKind::Other,
+            },
+            _ => ClientKind::Other,
+        };
+
+        match kind {
+            ClientKind::ServerStateRequest(id) => {
+                // 仕様 5.2: このリクエストは宣言の有無によらず応答する。
+                ClientAction::AnswerLocally(self.state_response(&id))
+            }
+            ClientKind::InitializeRequest(id) => {
+                self.initialize_id = id;
+                self.client_declared = initialize::client_declares_server_state(&msg.body);
+                let injected = initialize::inject_client_capabilities(
+                    &msg.body,
+                    RustAnalyzerAdapter::REQUIRED_CLIENT_CAPABILITIES,
+                );
+                ClientAction::Forward(match injected {
+                    Some(body) => RawMessage { body },
+                    None => msg,
+                })
+            }
+            ClientKind::Other => ClientAction::Forward(msg),
+        }
+    }
+
+    /// 上流のメッセージを観測し、(転送するメッセージ, 付随して送る通知) を返す。
+    fn on_upstream(&mut self, msg: RawMessage) -> (RawMessage, Option<RawMessage>) {
+        let is_initialize_response = match peek::peek(&msg.body) {
+            Ok(view) => {
+                view.method().is_none()
+                    && view.id.is_some()
+                    && view.id == self.initialize_id
+                    && !self.handshake_done
+            }
+            Err(_) => false,
+        };
+
+        if is_initialize_response {
+            self.handshake_done = true;
+            let declared = initialize::declare_server_state_provider(&msg.body, &self.provider);
+            return (
+                match declared {
+                    Some(body) => RawMessage { body },
+                    None => msg,
+                },
+                None,
+            );
+        }
+
+        let changed = match peek::peek(&msg.body) {
+            Ok(view) => self.tracker.observe(&view, &msg.body),
+            Err(_) => None,
+        };
+        let notification = changed.and_then(|state| self.notification_for(&state));
+        (msg, notification)
+    }
+
+    fn mark_dead(&mut self) -> Option<RawMessage> {
+        let state = self.tracker.mark_dead()?;
+        self.notification_for(&state)
+    }
+
+    /// 仕様 4.2 の通知。宣言していないクライアントには送らない (仕様 5.2)。
+    fn notification_for(&self, state: &ServerState) -> Option<RawMessage> {
+        if !self.client_declared || !self.handshake_done {
+            return None;
+        }
+        Some(RawMessage {
+            body: serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": state::SERVER_STATE_CHANGED_METHOD,
+                "params": state,
+            }))
+            .expect("ServerState は常にシリアライズできる"),
+        })
+    }
+
+    fn state_response(&self, id: &RequestId) -> RawMessage {
+        RawMessage {
+            body: serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": self.tracker.adapter.state(),
+            }))
+            .expect("ServerState は常にシリアライズできる"),
+        }
     }
 }
 
@@ -162,19 +306,17 @@ impl StateTracker {
         tracker
     }
 
-    fn observe(&mut self, msg: &RawMessage) {
-        let Ok(view) = peek::peek(&msg.body) else {
-            return;
-        };
-        if let Some(state) = self.adapter.observe_upstream(&view, &msg.body) {
-            self.log(&state);
-        }
+    /// 状態が変わったらログして新しい状態を返す。
+    fn observe(&mut self, view: &peek::MessageView, body: &[u8]) -> Option<ServerState> {
+        let state = self.adapter.observe_upstream(view, body)?;
+        self.log(&state);
+        Some(state)
     }
 
-    fn mark_dead(&mut self) {
-        if let Some(state) = self.adapter.mark_dead() {
-            self.log(&state);
-        }
+    fn mark_dead(&mut self) -> Option<ServerState> {
+        let state = self.adapter.mark_dead()?;
+        self.log(&state);
+        Some(state)
     }
 
     fn log(&mut self, state: &ServerState) {

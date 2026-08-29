@@ -11,6 +11,51 @@
 
 use serde_json::{Map, Value};
 
+use crate::state::ServerStateProvider;
+
+/// クライアントが拡張 S を自分で扱うと宣言したか (仕様 5.2)。
+///
+/// この宣言は「通知が欲しい」と「保護が不要」の両方を意味する。宣言した
+/// クライアントが状態を無視して不完全な結果を得た場合、それはその
+/// クライアントの責任である。
+pub fn client_declares_server_state(body: &[u8]) -> bool {
+    let Ok(root) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    root.get("params")
+        .and_then(|params| params.get("capabilities"))
+        .and_then(|caps| caps.get("experimental"))
+        .and_then(|experimental| experimental.get("serverState"))
+        == Some(&Value::Bool(true))
+}
+
+/// `InitializeResult` に `experimental.serverStateProvider` を足した
+/// 新しいボディを返す。書き換えられなければ `None`。
+///
+/// 上流が返した capability は一切変えない。中継層は宣言を**足す**だけで、
+/// 上流の宣言を置き換えると上流が本当に持つ機能を隠すことになる。
+pub fn declare_server_state_provider(
+    body: &[u8],
+    provider: &ServerStateProvider,
+) -> Option<Vec<u8>> {
+    let mut root: Value = serde_json::from_slice(body).ok()?;
+    let result = root.get_mut("result")?.as_object_mut()?;
+    let capabilities = result
+        .entry("capabilities")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()?;
+    let experimental = capabilities
+        .entry("experimental")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()?;
+
+    experimental.insert(
+        "serverStateProvider".to_string(),
+        serde_json::to_value(provider).ok()?,
+    );
+    serde_json::to_vec(&root).ok()
+}
+
 /// `initialize` の `params.capabilities` に真偽フラグを足した新しいボディを返す。
 /// 変更が不要・不可能なら `None` (呼び出し側は原文をそのまま転送する)。
 ///
@@ -186,5 +231,93 @@ mod tests {
         // アダプタなしのとき。原文をそのまま流す。
         let body = r#"{"id":1,"method":"initialize","params":{"capabilities":{}}}"#;
         assert!(inject_client_capabilities(body.as_bytes(), &[]).is_none());
+    }
+
+    #[test]
+    fn detects_the_client_declaration() {
+        let declared = r#"{"id":1,"method":"initialize","params":{"capabilities":{"experimental":{"serverState":true}}}}"#;
+        assert!(client_declares_server_state(declared.as_bytes()));
+    }
+
+    #[test]
+    fn treats_a_missing_or_false_declaration_as_absent() {
+        for body in [
+            r#"{"id":1,"method":"initialize","params":{"capabilities":{}}}"#,
+            r#"{"id":1,"method":"initialize","params":{"capabilities":{"experimental":{}}}}"#,
+            r#"{"id":1,"method":"initialize","params":{"capabilities":{"experimental":{"serverState":false}}}}"#,
+            // truthy な別の値を宣言とみなさない。
+            r#"{"id":1,"method":"initialize","params":{"capabilities":{"experimental":{"serverState":{}}}}}"#,
+            r#"{"id":1,"method":"initialize"}"#,
+            "{not json",
+        ] {
+            assert!(
+                !client_declares_server_state(body.as_bytes()),
+                "宣言とみなしてはならない: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn adds_the_provider_to_an_initialize_result() {
+        let body = r#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"hoverProvider":true}}}"#;
+        let out: Value = serde_json::from_slice(
+            &declare_server_state_provider(body.as_bytes(), &ServerStateProvider::complete())
+                .expect("result should be rewritten"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            out["result"]["capabilities"]["experimental"]["serverStateProvider"],
+            serde_json::json!({"completeness": true})
+        );
+        // 上流の宣言はそのまま残る。
+        assert_eq!(
+            out["result"]["capabilities"]["hoverProvider"],
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn keeps_the_upstream_experimental_capabilities() {
+        let body =
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"upstreamThing":{"a":1}}}}}"#;
+        let out: Value = serde_json::from_slice(
+            &declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true))
+                .expect("result should be rewritten"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            out["result"]["capabilities"]["experimental"]["upstreamThing"]["a"],
+            Value::from(1)
+        );
+        assert_eq!(
+            out["result"]["capabilities"]["experimental"]["serverStateProvider"],
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn creates_the_capabilities_object_in_a_bare_result() {
+        let body = r#"{"id":1,"result":{}}"#;
+        let out: Value = serde_json::from_slice(
+            &declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true))
+                .expect("result should be rewritten"),
+        )
+        .unwrap();
+        assert_eq!(
+            out["result"]["capabilities"]["experimental"]["serverStateProvider"],
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn leaves_an_error_response_alone() {
+        // 上流が initialize に失敗した応答へ capability を足しても意味がない。
+        let body = r#"{"id":1,"error":{"code":-32603,"message":"boom"}}"#;
+        assert!(
+            declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true))
+                .is_none()
+        );
     }
 }

@@ -66,14 +66,60 @@ impl RustAnalyzerAdapter {
     /// 上流→クライアント方向のメッセージを観測して状態を更新する。
     /// 通知を要する変化 (仕様 4.2) があった場合のみ新しい状態を返す。
     pub fn observe_upstream(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
-        todo!("M2: serverStatus を観測して状態を更新する")
+        if self.state.health == Health::Dead {
+            return None;
+        }
+        if !view.is_notification() || view.method() != Some(SERVER_STATUS_METHOD) {
+            return None;
+        }
+
+        let Some(params) = parse_status_params(body) else {
+            // 未知の形の status は状態を動かさない。壊れた 1 通で
+            // readiness を誤って進めるより、前の状態を保つ方が安全。
+            return None;
+        };
+
+        self.apply(ServerState {
+            health: params.health.into(),
+            readiness: if params.quiescent {
+                Readiness::Ready
+            } else {
+                Readiness::Indexing
+            },
+            message: params.message,
+        })
     }
 
     /// 上流プロセスの消失を観測した。`dead` は中継層だけが出せる終端状態
     /// (仕様 6.1)。
     pub fn mark_dead(&mut self) -> Option<ServerState> {
-        todo!("M2: dead へ遷移する")
+        self.apply(ServerState {
+            health: Health::Dead,
+            readiness: self.state.readiness,
+            message: self.state.message.clone(),
+        })
     }
+
+    /// 新しい状態を取り込み、通知を要する変化なら新しい状態を返す。
+    /// `message` だけの変化は通知しないが、状態としては更新する。
+    fn apply(&mut self, next: ServerState) -> Option<ServerState> {
+        let notifiable = next.notifiable_change_from(&self.state);
+        self.state = next;
+        notifiable.then(|| self.state.clone())
+    }
+}
+
+/// `params` を取り出して `ServerStatusParams` として読む。
+/// `params` の欠落・型違い・未知の `health` 値はすべて `None`。
+fn parse_status_params(body: &[u8]) -> Option<ServerStatusParams> {
+    #[derive(Deserialize)]
+    struct Envelope {
+        params: ServerStatusParams,
+    }
+
+    serde_json::from_slice::<Envelope>(body)
+        .ok()
+        .map(|envelope| envelope.params)
 }
 
 #[cfg(test)]

@@ -44,4 +44,6 @@ M2 で実測した（[docs/research/rust-analyzer-quiescent-measurement.md](../r
   M1 の未検証項目だった実サーバーとの結合が成立すること
 - rust-analyzer の freshness 宣言（仕様 8 章「要実測確認」）の根拠が一つ増えた。ただしこれは
   `workspace/symbol` 1 メソッドでの確認であり、宣言の最終判断は準拠テストスイート（仕様 7.3 の
-  クロスファイル鮮度テスト）の結果を待つ
+  クロスファイル鮮度テスト）の結果を待つ。→ **決着済み（2026-08-29）**: 準拠テストスイートの
+  7.2 / 7.3 を実 rust-analyzer に当てて両方とも通ったため、`{completeness: true, freshness: true}`
+  を宣言する（`tests/conformance.rs` の `#[ignore]` 付きテスト。仕様 8 章も更新済み）

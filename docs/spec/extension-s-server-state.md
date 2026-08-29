@@ -163,7 +163,7 @@ interface ClientCapabilities {
 
 | 実装 | 既存の語彙 | 拡張 S への写像 | 宣言できるグレード（見込み） |
 | --- | --- | --- | --- |
-| rust-analyzer | `experimental/serverStatus` の `health` / `quiescent` | `health` はそのまま、`quiescent: true` → `readiness: "ready"`。本拡張は事実上その後継 | completeness + freshness（スナップショット方式。要実測確認） |
+| rust-analyzer | `experimental/serverStatus` の `health` / `quiescent` | `health` はそのまま、`quiescent: true` → `readiness: "ready"`。本拡張は事実上その後継 | completeness + freshness（準拠テスト 7.2 / 7.3 で確認済み） |
 | jdtls | `language/status` の `ServiceReady` / `ProjectStatus` | `ServiceReady` → `readiness: "ready"`、`ProjectStatus: WARNING` → `health: "warning"` | completeness |
 | gopls | `$/progress`（title "Setting up workspace"）の end | end → `readiness: "ready"`（中継層による合成） | completeness（freshness は要実測） |
 | pyright | workDoneProgress の end（残り解析ファイル数 0 と同期） | 同上 | completeness |

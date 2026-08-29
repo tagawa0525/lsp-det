@@ -12,9 +12,9 @@ use std::time::{Duration, Instant};
 use crate::adapter::RustAnalyzerAdapter;
 use crate::framing::{self, RawMessage};
 use crate::initialize;
-use crate::peek;
+use crate::peek::{self, RequestId};
 use crate::process;
-use crate::state::ServerState;
+use crate::state::{self, ServerState, ServerStateProvider};
 
 /// 上流の生死をポーリングする間隔。`Upstream` の所有権 (kill する権利) を
 /// main ループ 1 箇所に保つため、別スレッドで `wait()` させず `recv_timeout`
@@ -26,6 +26,10 @@ enum Event {
     ClientClosed,
     ClientReadError(io::Error),
     FromUpstream(RawMessage),
+    /// 上流の stdout が閉じた。生死のポーリング (`try_wait`) は
+    /// `recv_timeout` のタイムアウト時にしか回らないため、クライアントが
+    /// 絶え間なく喋っていると死の検出が遅れる。読み手が明示的に知らせる。
+    UpstreamClosed,
 }
 
 /// クライアントと上流を中継し、プロキシ自身の終了コードを返す。
@@ -43,7 +47,7 @@ where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
-    let mut tracker = adapter.map(StateTracker::new);
+    let mut surface = adapter.map(Surface::new);
     let mut handles = process::spawn(command, args)?;
     let mut upstream_stdin = handles.stdin;
     let mut client_out = client_out;
@@ -56,24 +60,41 @@ where
 
     let exit_code = loop {
         match rx.recv_timeout(UPSTREAM_POLL_INTERVAL) {
-            Ok(Event::FromClient(msg)) => {
-                let msg = if tracker.is_some() {
-                    rewrite_for_upstream(msg)
-                } else {
-                    msg
-                };
-                if framing::write_message(&mut upstream_stdin, &msg).is_err() {
-                    // 上流の stdin が既に閉じている。次のポーリングで exit を検出する。
+            Ok(Event::FromClient(msg)) => match surface.as_mut() {
+                Some(surface) => match surface.on_client(msg) {
+                    // 拡張 S のリクエストは中継層が自ら答える。上流は
+                    // 拡張 S を知らないので転送してはならない (仕様 2 章)。
+                    ClientAction::AnswerLocally(response) => {
+                        let _ = framing::write_message(&mut client_out, &response);
+                    }
+                    ClientAction::Forward(msg) => {
+                        // 上流の stdin が閉じていても続行する。
+                        // 次のポーリングで exit を検出する。
+                        let _ = framing::write_message(&mut upstream_stdin, &msg);
+                    }
+                },
+                None => {
+                    let _ = framing::write_message(&mut upstream_stdin, &msg);
                 }
-            }
+            },
             Ok(Event::FromUpstream(msg)) => {
-                if let Some(tracker) = tracker.as_mut() {
-                    tracker.observe(&msg);
-                }
+                let (msg, notification) = match surface.as_mut() {
+                    Some(surface) => surface.on_upstream(msg),
+                    None => (msg, None),
+                };
                 if framing::write_message(&mut client_out, &msg).is_err() {
                     // クライアントが既に読み取りをやめている。無視して続行する
                     // (次のポーリングで上流の exit を検出する)。
                 }
+                if let Some(notification) = notification {
+                    let _ = framing::write_message(&mut client_out, &notification);
+                }
+            }
+            Ok(Event::UpstreamClosed) => {
+                // stdout を閉じた上流はもう応答しない。クライアントが
+                // 喋り続けていてもここで死を伝える。
+                announce_death(&mut surface, &mut client_out);
+                break reap(&mut handles.upstream);
             }
             Ok(Event::ClientClosed) => {
                 eprintln!("lsp-det: client closed connection, terminating upstream");
@@ -91,9 +112,7 @@ where
                     if code != 0 {
                         eprintln!("lsp-det: upstream exited with status {code}");
                     }
-                    if let Some(tracker) = tracker.as_mut() {
-                        tracker.mark_dead();
-                    }
+                    announce_death(&mut surface, &mut client_out);
                     break code;
                 }
             }
@@ -106,9 +125,7 @@ where
                     .ok()
                     .and_then(|s| s.code())
                     .unwrap_or(1);
-                if let Some(tracker) = tracker.as_mut() {
-                    tracker.mark_dead();
-                }
+                announce_death(&mut surface, &mut client_out);
                 break code;
             }
         }
@@ -118,21 +135,235 @@ where
     Ok(exit_code)
 }
 
-/// クライアント→上流の `initialize` にだけ capability を注入する
-/// (v0.1-design.md 4.5)。それ以外は原文バイトのまま返す。
-fn rewrite_for_upstream(msg: RawMessage) -> RawMessage {
-    let Ok(view) = peek::peek(&msg.body) else {
-        return msg;
-    };
-    if !view.is_request() || view.method() != Some("initialize") {
-        return msg;
+/// クライアントから来たメッセージをどう扱うか。
+enum ClientAction {
+    /// そのまま (あるいは書き換えて) 上流へ流す。
+    Forward(RawMessage),
+    /// 中継層が自ら応答する。上流へは流さない。
+    AnswerLocally(RawMessage),
+}
+
+/// クライアントから見た `initialize` リクエストの種類。
+///
+/// 覗き見の借用を `RawMessage` の所有権から切り離すために、判定結果だけを
+/// 所有データとして取り出す。
+enum ClientKind {
+    ServerStateRequest(RequestId),
+    InitializeRequest(Option<RequestId>),
+    Other,
+}
+
+/// 終了コードを取り、居座る上流は道連れにする。
+///
+/// stdout を閉じてから実際に exit するまでには僅かな間があるため、
+/// 即断せず短く待つ。待ち切っても終わらない上流は kill する
+/// (プロキシが吊られるとクライアントも吊られる)。
+fn reap(upstream: &mut process::Upstream) -> i32 {
+    const ATTEMPTS: u32 = 50; // 20ms x 50 = 最大 1 秒
+    for _ in 0..ATTEMPTS {
+        match upstream.try_wait() {
+            Ok(Some(status)) => return status.code().unwrap_or(1),
+            Ok(None) => thread::sleep(UPSTREAM_POLL_INTERVAL),
+            Err(_) => break,
+        }
     }
-    match initialize::inject_client_capabilities(
-        &msg.body,
-        RustAnalyzerAdapter::REQUIRED_CLIENT_CAPABILITIES,
-    ) {
-        Some(body) => RawMessage { body },
-        None => msg,
+    eprintln!("lsp-det: upstream closed stdout but did not exit; killing it");
+    let _ = upstream.kill_and_wait();
+    1
+}
+
+/// 上流の死をクライアントへ知らせる (仕様 6.1)。
+///
+/// ループを抜ける前に書き切る必要がある。抜けた後では `client_out` が
+/// 閉じ、死を伝えられないまま沈黙することになる。
+fn announce_death<W: Write>(surface: &mut Option<Surface>, client_out: &mut W) {
+    let Some(surface) = surface.as_mut() else {
+        return;
+    };
+    if let Some(notification) = surface.mark_dead() {
+        let _ = framing::write_message(client_out, &notification);
+    }
+}
+
+/// 拡張 S のサーバー側 surface (v0.1-design.md 4.1)。
+///
+/// アダプタがある場合にのみ存在する。アダプタなしでは readiness を知る
+/// 手段がなく、宣言できる状態を持たない。
+struct Surface {
+    tracker: StateTracker,
+    provider: ServerStateProvider,
+    /// クライアントが仕様 5.2 の宣言をしたか。通知を送る条件。
+    client_declared: bool,
+    initialize_id: Option<RequestId>,
+    /// `InitializeResult` を転送済みか。これより前に通知を送ると
+    /// handshake を壊す (7 章チェックリスト #1 と同種の事故)。
+    handshake_done: bool,
+    /// handshake 前に起きた状態変化。`InitializeResult` の直後に送る。
+    ///
+    /// 送れないからと捨ててはならない。アダプタ側の状態は既に進んでおり、
+    /// 同じ状態は二度と通知されない (仕様 4.2 の重複抑止)。捨てるとその
+    /// 遷移は永久に失われ、通知だけを見ているクライアントは初期状態のまま
+    /// 取り残される。
+    pending_state: Option<ServerState>,
+}
+
+impl Surface {
+    fn new(adapter: RustAnalyzerAdapter) -> Self {
+        Surface {
+            tracker: StateTracker::new(adapter),
+            // rust-analyzer は両方の保証を満たす。準拠テストスイートの
+            // 仕様 7.2 (完全性) と 7.3 (クロスファイル鮮度) を実 rust-analyzer に
+            // 当てて確認済み (tests/conformance.rs の #[ignore] 付き 2 件)。
+            // 守れない保証を宣言することは仕様 5.1 違反なので、この宣言を
+            // 変えるときは対応するテストの結果を根拠にすること。
+            provider: ServerStateProvider::complete_and_fresh(),
+            client_declared: false,
+            initialize_id: None,
+            handshake_done: false,
+            pending_state: None,
+        }
+    }
+
+    fn on_client(&mut self, msg: RawMessage) -> ClientAction {
+        let kind = match peek::peek(&msg.body) {
+            Ok(view) if view.is_request() => match (view.method(), view.id.clone()) {
+                (Some(state::SERVER_STATE_METHOD), Some(id)) => ClientKind::ServerStateRequest(id),
+                (Some("initialize"), id) => ClientKind::InitializeRequest(id),
+                _ => ClientKind::Other,
+            },
+            _ => ClientKind::Other,
+        };
+
+        match kind {
+            ClientKind::ServerStateRequest(id) => {
+                // 仕様 5.2: このリクエストは宣言の有無によらず応答する。
+                ClientAction::AnswerLocally(self.state_response(&id))
+            }
+            ClientKind::InitializeRequest(id) => {
+                self.initialize_id = id;
+                self.client_declared = initialize::client_declares_server_state(&msg.body);
+                let injected = initialize::inject_client_capabilities(
+                    &msg.body,
+                    RustAnalyzerAdapter::REQUIRED_CLIENT_CAPABILITIES,
+                );
+                ClientAction::Forward(match injected {
+                    Some(body) => RawMessage { body },
+                    None => msg,
+                })
+            }
+            ClientKind::Other => ClientAction::Forward(msg),
+        }
+    }
+
+    /// 上流のメッセージを観測し、(転送するメッセージ, 付随して送る通知) を返す。
+    fn on_upstream(&mut self, msg: RawMessage) -> (RawMessage, Option<RawMessage>) {
+        let is_initialize_response = match peek::peek(&msg.body) {
+            Ok(view) => {
+                view.method().is_none()
+                    && view.id.is_some()
+                    && view.id == self.initialize_id
+                    && !self.handshake_done
+            }
+            Err(_) => false,
+        };
+
+        if is_initialize_response {
+            self.handshake_done = true;
+            let forwarded =
+                match initialize::declare_server_state_provider(&msg.body, &self.provider) {
+                    Some(body) => RawMessage { body },
+                    None => {
+                        // 応答の形が想定外 (result が無い / capabilities が
+                        // オブジェクトでない等)。宣言できないまま拡張 S として
+                        // 振る舞うことになるので、黙って進まず理由を残す。
+                        eprintln!(
+                            "lsp-det: cannot declare serverStateProvider; \
+                         the upstream InitializeResult has an unexpected shape"
+                        );
+                        msg
+                    }
+                };
+            // handshake 前に溜まった遷移をここで 1 通だけ流す。
+            let flushed = self
+                .pending_state
+                .take()
+                .filter(|_| self.client_declared)
+                .map(|state| changed_notification(&state));
+            return (forwarded, flushed);
+        }
+
+        let changed = match peek::peek(&msg.body) {
+            Ok(view) => self.tracker.observe(&view, &msg.body),
+            Err(_) => None,
+        };
+        let notification = changed.and_then(|state| self.notify_or_stash(state));
+        (msg, notification)
+    }
+
+    /// 上流の死を伝えるメッセージ。handshake の前後で手段が変わる。
+    fn mark_dead(&mut self) -> Option<RawMessage> {
+        let state = self.tracker.mark_dead()?;
+        if !self.handshake_done {
+            // 通知は送れない (LSP は InitializeResult より前のサーバー発
+            // 通知を許さない)。宙に浮いた initialize をエラーで閉じる。
+            // これをしないとクライアントは応答を永久に待つ。
+            return self.initialize_id.take().map(|id| initialize_failed(&id));
+        }
+        self.notify_or_stash(state)
+    }
+
+    /// 仕様 4.2 の通知を作る。宣言していないクライアントには送らない
+    /// (仕様 5.2)。handshake 前なら送らずに溜める。
+    fn notify_or_stash(&mut self, state: ServerState) -> Option<RawMessage> {
+        if !self.client_declared {
+            return None;
+        }
+        if !self.handshake_done {
+            self.pending_state = Some(state);
+            return None;
+        }
+        Some(changed_notification(&state))
+    }
+
+    fn state_response(&self, id: &RequestId) -> RawMessage {
+        // 宣言の有無によらず応答する (仕様 5.2)。
+        RawMessage {
+            body: serde_json::to_vec(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": self.tracker.adapter.state(),
+            }))
+            .expect("ServerState は常にシリアライズできる"),
+        }
+    }
+}
+
+fn changed_notification(state: &ServerState) -> RawMessage {
+    RawMessage {
+        body: serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": state::SERVER_STATE_CHANGED_METHOD,
+            "params": state,
+        }))
+        .expect("ServerState は常にシリアライズできる"),
+    }
+}
+
+/// 上流が `initialize` に答えないまま消えたときの応答。
+///
+/// 沈黙させるとクライアントは応答を永久に待つ。死を隠さないという
+/// 方針 (設計 4.2) は handshake 中にも適用される。
+fn initialize_failed(id: &RequestId) -> RawMessage {
+    RawMessage {
+        body: serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {
+                "code": -32603, // JSON-RPC InternalError
+                "message": "lsp-det: the upstream language server exited before answering initialize",
+            },
+        }))
+        .expect("固定の構造なので常にシリアライズできる"),
     }
 }
 
@@ -162,19 +393,17 @@ impl StateTracker {
         tracker
     }
 
-    fn observe(&mut self, msg: &RawMessage) {
-        let Ok(view) = peek::peek(&msg.body) else {
-            return;
-        };
-        if let Some(state) = self.adapter.observe_upstream(&view, &msg.body) {
-            self.log(&state);
-        }
+    /// 状態が変わったらログして新しい状態を返す。
+    fn observe(&mut self, view: &peek::MessageView, body: &[u8]) -> Option<ServerState> {
+        let state = self.adapter.observe_upstream(view, body)?;
+        self.log(&state);
+        Some(state)
     }
 
-    fn mark_dead(&mut self) {
-        if let Some(state) = self.adapter.mark_dead() {
-            self.log(&state);
-        }
+    fn mark_dead(&mut self) -> Option<ServerState> {
+        let state = self.adapter.mark_dead()?;
+        self.log(&state);
+        Some(state)
     }
 
     fn log(&mut self, state: &ServerState) {
@@ -235,8 +464,7 @@ fn spawn_upstream_reader(stdout: std::process::ChildStdout, tx: Sender<Event>) {
                     }
                 }
                 Ok(None) | Err(_) => {
-                    // 上流の stdout が閉じた。実際の終了コード検出は
-                    // main ループの try_wait ポーリングに任せる。
+                    let _ = tx.send(Event::UpstreamClosed);
                     return;
                 }
             }

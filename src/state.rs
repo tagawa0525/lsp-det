@@ -6,6 +6,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// 状態を問い合わせるリクエスト (仕様 4.1)。
+///
+/// LSP 本体に取り込まれるまで `experimental/` プレフィックスを使う
+/// (仕様 4.3)。取り込み時に `workspace/` へ改名する。
+pub const SERVER_STATE_METHOD: &str = "experimental/serverState";
+
+/// 状態変化の通知 (仕様 4.2)。
+pub const SERVER_STATE_CHANGED_METHOD: &str = "experimental/serverStateChanged";
+
 /// サーバーが機能しているか。`dead` は中継層だけが送出できる (仕様 6.1)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -31,6 +40,45 @@ pub struct ServerState {
     pub readiness: Readiness,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+/// `ServerCapabilities.experimental.serverStateProvider` の値 (仕様 5 章)。
+///
+/// `boolean | { completeness?, freshness? }`。`completeness` と `freshness` は
+/// 独立で順序関係を持たない (ADR 0004 決定 3)。実装は自分が守れる保証だけを
+/// 宣言する。守れない保証の宣言は仕様違反である (仕様 5.1)。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ServerStateProvider {
+    /// 基本グレード。状態の通知そのものだけを保証する。
+    Basic(bool),
+    Graded(Guarantees),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Guarantees {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completeness: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub freshness: Option<bool>,
+}
+
+impl ServerStateProvider {
+    /// `completeness` のみを宣言する。
+    pub fn complete() -> Self {
+        ServerStateProvider::Graded(Guarantees {
+            completeness: Some(true),
+            freshness: None,
+        })
+    }
+
+    /// `completeness` と `freshness` の両方を宣言する。
+    pub fn complete_and_fresh() -> Self {
+        ServerStateProvider::Graded(Guarantees {
+            completeness: Some(true),
+            freshness: Some(true),
+        })
+    }
 }
 
 impl ServerState {
@@ -163,5 +211,35 @@ mod tests {
     fn an_identical_state_is_not_notifiable() {
         let base = ServerState::initializing();
         assert!(!base.notifiable_change_from(&base));
+    }
+
+    #[test]
+    fn the_basic_grade_serializes_as_a_bare_true() {
+        // 仕様 5 章の `boolean | {...}` の boolean 側。
+        assert_eq!(
+            serde_json::to_string(&ServerStateProvider::Basic(true)).unwrap(),
+            "true"
+        );
+    }
+
+    #[test]
+    fn a_grade_omits_the_guarantees_it_does_not_claim() {
+        // 守れない保証を宣言しないことが仕様 5.1 の要求。
+        assert_eq!(
+            serde_json::to_string(&ServerStateProvider::complete()).unwrap(),
+            r#"{"completeness":true}"#
+        );
+    }
+
+    #[test]
+    fn a_grade_serializes_both_guarantees_when_claimed() {
+        let both = ServerStateProvider::Graded(Guarantees {
+            completeness: Some(true),
+            freshness: Some(true),
+        });
+        assert_eq!(
+            serde_json::to_string(&both).unwrap(),
+            r#"{"completeness":true,"freshness":true}"#
+        );
     }
 }

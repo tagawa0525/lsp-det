@@ -59,6 +59,12 @@ pub struct RustAnalyzerAdapter {
     warned_unparseable: bool,
 }
 
+impl Default for RustAnalyzerAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RustAnalyzerAdapter {
     /// 上流への `initialize` に注入する client capability (v0.1-design.md 4.5)。
     /// 未宣言だと rust-analyzer は `experimental/serverStatus` を一切送らない。

@@ -29,7 +29,13 @@ fn main() -> ExitCode {
     #[cfg(unix)]
     process::set_self_pdeathsig();
 
-    match proxy::run(io::stdin(), io::stdout(), &args.command, &args.command_args) {
+    match proxy::run(
+        io::stdin(),
+        io::stdout(),
+        &args.command,
+        &args.command_args,
+        None,
+    ) {
         Ok(code) => exit_code_from(code),
         Err(err) => {
             eprintln!("lsp-det: failed to run upstream {:?}: {err}", args.command);

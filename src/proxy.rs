@@ -9,6 +9,7 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::Duration;
 
+use crate::adapter::RustAnalyzerAdapter;
 use crate::framing::{self, RawMessage};
 use crate::process;
 
@@ -25,11 +26,21 @@ enum Event {
 }
 
 /// クライアントと上流を中継し、プロキシ自身の終了コードを返す。
-pub fn run<R, W>(client_in: R, client_out: W, command: &str, args: &[String]) -> io::Result<i32>
+///
+/// `adapter` を渡すと上流の状態を追跡する (v0.1-design.md 5 章)。
+/// `None` は純透過 (アダプタなし)。
+pub fn run<R, W>(
+    client_in: R,
+    client_out: W,
+    command: &str,
+    args: &[String],
+    adapter: Option<RustAnalyzerAdapter>,
+) -> io::Result<i32>
 where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
+    let _ = adapter;
     let mut handles = process::spawn(command, args)?;
     let mut upstream_stdin = handles.stdin;
     let mut client_out = client_out;
@@ -150,6 +161,103 @@ mod tests {
     use crate::framing::write_message;
     use std::time::Duration;
 
+    /// `cat` を上流にすると client -> proxy -> cat -> proxy -> client と
+    /// 往復するため、「プロキシが上流へ書いたバイト列」をそのまま観測できる。
+    fn spawn_with_cat(
+        adapter: Option<RustAnalyzerAdapter>,
+    ) -> (
+        io::PipeWriter,
+        BufReader<io::PipeReader>,
+        thread::JoinHandle<i32>,
+    ) {
+        let (client_out_reader, client_out_writer) = io::pipe().unwrap();
+        let (client_in_reader, client_in_writer) = io::pipe().unwrap();
+        let handle = thread::spawn(move || {
+            run(client_in_reader, client_out_writer, "cat", &[], adapter).unwrap()
+        });
+        (client_in_writer, BufReader::new(client_out_reader), handle)
+    }
+
+    fn send(writer: &mut io::PipeWriter, body: &str) {
+        write_message(
+            writer,
+            &RawMessage {
+                body: body.as_bytes().to_vec(),
+            },
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn injects_the_status_capability_into_the_initialize_it_forwards() {
+        // 設計 4.5: rust-analyzer は宣言がないと serverStatus を送らない。
+        let (mut client_in, mut client_out, handle) =
+            spawn_with_cat(Some(RustAnalyzerAdapter::new()));
+
+        send(
+            &mut client_in,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#,
+        );
+
+        let forwarded = framing::read_message(&mut client_out).unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&forwarded.body).unwrap();
+        assert_eq!(
+            value["params"]["capabilities"]["experimental"]["serverStatusNotification"],
+            serde_json::Value::Bool(true)
+        );
+
+        drop(client_in);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn leaves_the_initialize_alone_when_no_adapter_is_selected() {
+        let (mut client_in, mut client_out, handle) = spawn_with_cat(None);
+
+        let original =
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#;
+        send(&mut client_in, original);
+
+        let forwarded = framing::read_message(&mut client_out).unwrap().unwrap();
+        assert_eq!(forwarded.body, original.as_bytes());
+
+        drop(client_in);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn forwards_observed_upstream_messages_byte_for_byte() {
+        // 状態を追跡しても、クライアントへ届くのは原文のまま (設計 4.6)。
+        let (mut client_in, mut client_out, handle) =
+            spawn_with_cat(Some(RustAnalyzerAdapter::new()));
+
+        let status = r#"{"jsonrpc":"2.0","method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"message":null}}"#;
+        send(&mut client_in, status);
+
+        let forwarded = framing::read_message(&mut client_out).unwrap().unwrap();
+        assert_eq!(forwarded.body, status.as_bytes());
+
+        drop(client_in);
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn only_rewrites_the_initialize_request() {
+        // 同じ method でも通知なら書き換えない。
+        let (mut client_in, mut client_out, handle) =
+            spawn_with_cat(Some(RustAnalyzerAdapter::new()));
+
+        let notification =
+            r#"{"jsonrpc":"2.0","method":"initialize","params":{"capabilities":{}}}"#;
+        send(&mut client_in, notification);
+
+        let forwarded = framing::read_message(&mut client_out).unwrap().unwrap();
+        assert_eq!(forwarded.body, notification.as_bytes());
+
+        drop(client_in);
+        handle.join().unwrap();
+    }
+
     #[test]
     fn round_trips_a_message_through_a_real_upstream_process() {
         // upstream に `cat` を使う: client -> proxy -> cat(echo) -> proxy -> client
@@ -157,8 +265,9 @@ mod tests {
         let (client_out_reader, client_out_writer) = io::pipe().unwrap();
         let (client_in_reader, mut client_in_writer) = io::pipe().unwrap();
 
-        let handle =
-            thread::spawn(move || run(client_in_reader, client_out_writer, "cat", &[]).unwrap());
+        let handle = thread::spawn(move || {
+            run(client_in_reader, client_out_writer, "cat", &[], None).unwrap()
+        });
 
         let sent = RawMessage {
             body: br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.to_vec(),
@@ -185,6 +294,7 @@ mod tests {
                 client_out_writer,
                 "sh",
                 &["-c".to_string(), "exit 7".to_string()],
+                None,
             )
             .unwrap()
         });
@@ -213,6 +323,7 @@ mod tests {
                 client_out_writer,
                 "sleep",
                 &["30".to_string()],
+                None,
             )
             .unwrap()
         });

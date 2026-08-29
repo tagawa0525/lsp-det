@@ -57,7 +57,7 @@ impl MessageView<'_> {
 
 /// メッセージボディから `method` と `id` を覗き見る。
 pub fn peek(body: &[u8]) -> Result<MessageView<'_>, PeekError> {
-    todo!("M2: JSON から method / id を覗き見る")
+    Ok(serde_json::from_slice(body)?)
 }
 
 #[cfg(test)]

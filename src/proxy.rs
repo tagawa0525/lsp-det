@@ -15,6 +15,7 @@ use crate::initialize;
 use crate::peek::{self, RequestId};
 use crate::process;
 use crate::state::{self, ServerState, ServerStateProvider};
+use crate::tracker::Tracker;
 
 /// 上流の生死をポーリングする間隔。`Upstream` の所有権 (kill する権利) を
 /// main ループ 1 箇所に保つため、別スレッドで `wait()` させず `recv_timeout`
@@ -47,7 +48,7 @@ where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
-    let mut surface = adapter.map(Surface::new);
+    let mut surface = Surface::new(adapter);
     let mut handles = process::spawn(command, args)?;
     let mut upstream_stdin = handles.stdin;
     let mut client_out = client_out;
@@ -60,28 +61,20 @@ where
 
     let exit_code = loop {
         match rx.recv_timeout(UPSTREAM_POLL_INTERVAL) {
-            Ok(Event::FromClient(msg)) => match surface.as_mut() {
-                Some(surface) => match surface.on_client(msg) {
-                    // 拡張 S のリクエストは中継層が自ら答える。上流は
-                    // 拡張 S を知らないので転送してはならない (仕様 2 章)。
-                    ClientAction::AnswerLocally(response) => {
-                        let _ = framing::write_message(&mut client_out, &response);
-                    }
-                    ClientAction::Forward(msg) => {
-                        // 上流の stdin が閉じていても続行する。
-                        // 次のポーリングで exit を検出する。
-                        let _ = framing::write_message(&mut upstream_stdin, &msg);
-                    }
-                },
-                None => {
+            Ok(Event::FromClient(msg)) => match surface.on_client(msg) {
+                // 拡張 S のリクエストは中継層が自ら答える。上流は
+                // 拡張 S を知らないので転送してはならない (仕様 2 章)。
+                ClientAction::AnswerLocally(response) => {
+                    let _ = framing::write_message(&mut client_out, &response);
+                }
+                ClientAction::Forward(msg) => {
+                    // 上流の stdin が閉じていても続行する。
+                    // 次のポーリングで exit を検出する。
                     let _ = framing::write_message(&mut upstream_stdin, &msg);
                 }
             },
             Ok(Event::FromUpstream(msg)) => {
-                let (msg, notification) = match surface.as_mut() {
-                    Some(surface) => surface.on_upstream(msg),
-                    None => (msg, None),
-                };
+                let (msg, notification) = surface.on_upstream(msg);
                 if framing::write_message(&mut client_out, &msg).is_err() {
                     // クライアントが既に読み取りをやめている。無視して続行する
                     // (次のポーリングで上流の exit を検出する)。
@@ -176,10 +169,7 @@ fn reap(upstream: &mut process::Upstream) -> i32 {
 ///
 /// ループを抜ける前に書き切る必要がある。抜けた後では `client_out` が
 /// 閉じ、死を伝えられないまま沈黙することになる。
-fn announce_death<W: Write>(surface: &mut Option<Surface>, client_out: &mut W) {
-    let Some(surface) = surface.as_mut() else {
-        return;
-    };
+fn announce_death<W: Write>(surface: &mut Surface, client_out: &mut W) {
     if let Some(notification) = surface.mark_dead() {
         let _ = framing::write_message(client_out, &notification);
     }
@@ -187,8 +177,8 @@ fn announce_death<W: Write>(surface: &mut Option<Surface>, client_out: &mut W) {
 
 /// 拡張 S のサーバー側 surface (v0.1-design.md 4.1)。
 ///
-/// アダプタがある場合にのみ存在する。アダプタなしでは readiness を知る
-/// 手段がなく、宣言できる状態を持たない。
+/// アダプタの有無によらず存在する。アダプタなしでは両軸 `unknown` と
+/// 消失時の `dead` だけを出す (ADR 0008)。
 struct Surface {
     tracker: StateTracker,
     provider: ServerStateProvider,
@@ -208,15 +198,12 @@ struct Surface {
 }
 
 impl Surface {
-    fn new(adapter: RustAnalyzerAdapter) -> Self {
+    fn new(adapter: Option<RustAnalyzerAdapter>) -> Self {
+        let tracker = StateTracker::new(adapter);
+        let provider = tracker.provider();
         Surface {
-            tracker: StateTracker::new(adapter),
-            // rust-analyzer は両方の保証を満たす。準拠テストスイートの
-            // 仕様 7.2 (完全性) と 7.3 (クロスファイル鮮度) を実 rust-analyzer に
-            // 当てて確認済み (tests/conformance.rs の #[ignore] 付き 2 件)。
-            // 守れない保証を宣言することは仕様 5.1 違反なので、この宣言を
-            // 変えるときは対応するテストの結果を根拠にすること。
-            provider: ServerStateProvider::complete_and_fresh(),
+            tracker,
+            provider,
             client_declared: false,
             initialize_id: None,
             handshake_done: false,
@@ -244,7 +231,7 @@ impl Surface {
                 self.client_declared = initialize::client_declares_server_state(&msg.body);
                 let injected = initialize::inject_client_capabilities(
                     &msg.body,
-                    RustAnalyzerAdapter::REQUIRED_CLIENT_CAPABILITIES,
+                    self.tracker.required_client_capabilities(),
                 );
                 ClientAction::Forward(match injected {
                     Some(body) => RawMessage { body },
@@ -331,7 +318,7 @@ impl Surface {
             body: serde_json::to_vec(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "result": self.tracker.adapter.state(),
+                "result": self.tracker.state(),
             }))
             .expect("ServerState は常にシリアライズできる"),
         }
@@ -373,35 +360,47 @@ fn initialize_failed(id: &RequestId) -> RawMessage {
 /// 「どの状態にどれだけ留まったか」が保留時間そのものになるため、
 /// 待たされたときに原因を追える唯一の記録になる。
 struct StateTracker {
-    adapter: RustAnalyzerAdapter,
+    tracker: Tracker,
     started: Instant,
     entered_state: Instant,
 }
 
 impl StateTracker {
-    fn new(adapter: RustAnalyzerAdapter) -> Self {
+    fn new(adapter: Option<RustAnalyzerAdapter>) -> Self {
         let now = Instant::now();
         let mut tracker = StateTracker {
-            adapter,
+            tracker: Tracker::new(adapter),
             started: now,
             entered_state: now,
         };
         // 開始状態を最初の 1 行に出す。これがないと滞在時間の系列が
         // 起点を失い、フラップの実測に使えない。
-        let initial = tracker.adapter.state().clone();
+        let initial = tracker.tracker.state().clone();
         tracker.log(&initial);
         tracker
     }
 
+    fn state(&self) -> &ServerState {
+        self.tracker.state()
+    }
+
+    fn provider(&self) -> ServerStateProvider {
+        self.tracker.provider()
+    }
+
+    fn required_client_capabilities(&self) -> &'static [&'static str] {
+        self.tracker.required_client_capabilities()
+    }
+
     /// 状態が変わったらログして新しい状態を返す。
     fn observe(&mut self, view: &peek::MessageView, body: &[u8]) -> Option<ServerState> {
-        let state = self.adapter.observe_upstream(view, body)?;
+        let state = self.tracker.observe_upstream(view, body)?;
         self.log(&state);
         Some(state)
     }
 
     fn mark_dead(&mut self) -> Option<ServerState> {
-        let state = self.adapter.mark_dead()?;
+        let state = self.tracker.mark_dead()?;
         self.log(&state);
         Some(state)
     }

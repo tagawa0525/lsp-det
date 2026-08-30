@@ -8,7 +8,7 @@
 
 use crate::adapter::RustAnalyzerAdapter;
 use crate::peek::MessageView;
-use crate::state::{ServerState, ServerStateProvider};
+use crate::state::{Health, ServerState, ServerStateProvider};
 
 pub struct Tracker {
     state: ServerState,
@@ -18,8 +18,12 @@ pub struct Tracker {
 impl Tracker {
     /// アダプタがあれば `initializing`、なければ両軸 `unknown` から始める。
     pub fn new(adapter: Option<RustAnalyzerAdapter>) -> Self {
-        let _ = adapter;
-        todo!("ADR 0008: アダプタの有無で開始状態を変える")
+        let state = if adapter.is_some() {
+            ServerState::initializing()
+        } else {
+            ServerState::unobserved()
+        };
+        Tracker { state, adapter }
     }
 
     pub fn state(&self) -> &ServerState {
@@ -29,20 +33,33 @@ impl Tracker {
     /// 上流への `initialize` に注入する client capability (v0.1-design.md 4.5)。
     /// アダプタがなければ何も注入しない。
     pub fn required_client_capabilities(&self) -> &'static [&'static str] {
-        todo!("ADR 0008: アダプタに委譲する")
+        match self.adapter {
+            Some(_) => RustAnalyzerAdapter::REQUIRED_CLIENT_CAPABILITIES,
+            None => &[],
+        }
     }
 
     /// `InitializeResult` に宣言する保証グレード (仕様 5 章)。
     /// アダプタがなければ基本グレード。
     pub fn provider(&self) -> ServerStateProvider {
-        todo!("ADR 0008: アダプタなしは基本グレード")
+        match self.adapter {
+            Some(_) => RustAnalyzerAdapter::guarantees(),
+            None => ServerStateProvider::Basic(true),
+        }
     }
 
     /// 上流→クライアント方向のメッセージを観測して状態を更新する。
     /// 通知を要する変化 (仕様 4.2) があった場合のみ新しい状態を返す。
+    ///
+    /// アダプタがなければ何も読まない。rust-analyzer の語彙を知っているのは
+    /// アダプタだけで、なしのときに勝手に読むと他のサーバーの同名通知を
+    /// 誤読する。
     pub fn observe_upstream(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
-        let _ = (view, body);
-        todo!("ADR 0008: アダプタで解釈し、2 軸の変化だけを通知する")
+        if self.state.health == Health::Dead {
+            return None;
+        }
+        let next = self.adapter.as_mut()?.interpret(view, body)?;
+        self.apply(next)
     }
 
     /// 上流プロセスの消失を観測した。`dead` は中継層だけが出せる終端状態
@@ -58,7 +75,19 @@ impl Tracker {
     /// 出る組み合わせである。ゲート (設計 4.2 の表) は `health` の行を先に
     /// 見ること。
     pub fn mark_dead(&mut self) -> Option<ServerState> {
-        todo!("ADR 0008: health だけを dead にする")
+        self.apply(ServerState {
+            health: Health::Dead,
+            readiness: self.state.readiness,
+            message: self.state.message.clone(),
+        })
+    }
+
+    /// 新しい状態を取り込み、通知を要する変化なら新しい状態を返す。
+    /// `message` だけの変化は通知しないが、状態としては更新する。
+    fn apply(&mut self, next: ServerState) -> Option<ServerState> {
+        let notifiable = next.notifiable_change_from(&self.state);
+        self.state = next;
+        notifiable.then(|| self.state.clone())
     }
 }
 
@@ -66,7 +95,7 @@ impl Tracker {
 mod tests {
     use super::*;
     use crate::peek::peek;
-    use crate::state::{Health, Readiness};
+    use crate::state::Readiness;
 
     fn observe(tracker: &mut Tracker, body: &str) -> Option<ServerState> {
         let view = peek(body.as_bytes()).expect("test bodies are valid JSON");

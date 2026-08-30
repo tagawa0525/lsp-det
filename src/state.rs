@@ -100,7 +100,11 @@ impl ServerState {
     /// `initializing` や `ok` から始めないのは、追跡していないものを
     /// 追跡しているように見せないため。
     pub fn unobserved() -> Self {
-        todo!("ADR 0008: 両軸 unknown")
+        ServerState {
+            health: Health::Unknown,
+            readiness: Readiness::Unknown,
+            message: None,
+        }
     }
 
     /// 通知を要する変化か。仕様 4.2 は「`health` または `readiness` が

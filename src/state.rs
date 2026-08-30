@@ -23,6 +23,8 @@ pub enum Health {
     Warning,
     Error,
     Dead,
+    /// health を観測する手段がない。中継層のみが送出する (仕様 6.1、ADR 0008)。
+    Unknown,
 }
 
 /// 要求に完全に答えられるか。
@@ -32,6 +34,8 @@ pub enum Readiness {
     Initializing,
     Indexing,
     Ready,
+    /// readiness を観測する手段がない。中継層のみが送出する (仕様 6.1、ADR 0008)。
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +95,14 @@ impl ServerState {
         }
     }
 
+    /// どちらの軸も観測できない状態。アダプタなしの中継層はここから始まり、
+    /// プロセス消失で `health` だけが `dead` になる (v0.1-design.md 4.1)。
+    /// `initializing` や `ok` から始めないのは、追跡していないものを
+    /// 追跡しているように見せないため。
+    pub fn unobserved() -> Self {
+        todo!("ADR 0008: 両軸 unknown")
+    }
+
     /// 通知を要する変化か。仕様 4.2 は「`health` または `readiness` が
     /// 変わるたびに送る」と定めており、`message` だけの変化は含まない。
     pub fn notifiable_change_from(&self, previous: &ServerState) -> bool {
@@ -136,6 +148,7 @@ mod tests {
             (Health::Warning, "warning"),
             (Health::Error, "error"),
             (Health::Dead, "dead"),
+            (Health::Unknown, "unknown"),
         ] {
             assert_eq!(
                 serde_json::to_string(&health).unwrap(),
@@ -150,6 +163,7 @@ mod tests {
             (Readiness::Initializing, "initializing"),
             (Readiness::Indexing, "indexing"),
             (Readiness::Ready, "ready"),
+            (Readiness::Unknown, "unknown"),
         ] {
             assert_eq!(
                 serde_json::to_string(&readiness).unwrap(),
@@ -211,6 +225,16 @@ mod tests {
     fn an_identical_state_is_not_notifiable() {
         let base = ServerState::initializing();
         assert!(!base.notifiable_change_from(&base));
+    }
+
+    #[test]
+    fn the_unobserved_state_is_unknown_on_both_axes() {
+        let state = ServerState::unobserved();
+        assert_eq!(state.health, Health::Unknown);
+        assert_eq!(state.readiness, Readiness::Unknown);
+        assert_eq!(state.message, None);
+        // 仕様 7.1 の 1 を unknown でも満たす。
+        assert_ne!(state.readiness, Readiness::Ready);
     }
 
     #[test]

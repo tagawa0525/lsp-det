@@ -167,6 +167,79 @@ fn spec_6_1_reports_dead_when_the_upstream_disappears() {
     assert_eq!(state.health, Health::Dead);
 }
 
+#[test]
+fn spec_7_1_4_reports_an_index_failure_as_health_error() {
+    // 失敗は readiness ではなく health で表す (仕様 6 章 5 項)。rust-analyzer は
+    // ワークスペースのロード失敗を {health: error, quiescent: true} で送る。
+    let (mut client, _) = client(true);
+    client.make_upstream_emit_status("error", true);
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Error);
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// アダプタなし (v0.1-design.md 4.1、ADR 0008)
+//
+// readiness を観測する手段がないので両軸 unknown。それでもプロセスの消失は
+// 観測できるため dead は出す。これが中継層の固有価値をアダプタのない
+// サーバーに届ける経路。
+// ---------------------------------------------------------------------------
+
+fn client_without_adapter(declare_extension_s: bool) -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_without_adapter();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(declare_extension_s);
+    (client, result)
+}
+
+#[test]
+fn spec_5_declares_the_basic_grade_without_an_adapter() {
+    let (mut client, result) = client_without_adapter(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!(true),
+        "アダプタなしは基本グレード (true) を宣言する: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn spec_7_1_1_reports_unknown_on_both_axes_without_an_adapter() {
+    let (mut client, _) = client_without_adapter(true);
+    let state = client.server_state();
+    assert_eq!(state.readiness, Readiness::Unknown);
+    assert_eq!(state.health, Health::Unknown);
+    client.shutdown();
+}
+
+#[test]
+fn does_not_interpret_the_upstream_status_without_an_adapter() {
+    // 上流が rust-analyzer 風の serverStatus を送っても、アダプタなしでは
+    // 読まない。他のサーバーの同名通知を誤読しないため。
+    let (mut client, _) = client_without_adapter(true);
+    client.make_upstream_emit_status("ok", true);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "アダプタなしで readiness が動いてはならない"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Unknown);
+    client.shutdown();
+}
+
+#[test]
+fn spec_6_1_reports_dead_without_an_adapter() {
+    let (mut client, _) = client_without_adapter(true);
+    client.notify("exit", json!(null));
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Dead);
+    assert_eq!(
+        state.readiness,
+        Readiness::Unknown,
+        "dead になっても readiness は観測していないまま"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // handshake 前後の境界
 //

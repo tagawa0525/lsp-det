@@ -34,15 +34,18 @@ interface ServerState {
    * "initializing": initialize 直後。まだ何も答えられない
    * "indexing":     一部の要求に答えられるが、結果が不完全になりうる
    * "ready":        インデックスが完了している
+   * "unknown":      readiness を観測する手段がない。中継層のみが送出する（6.1）
    */
-  readiness: "initializing" | "indexing" | "ready";
+  readiness: "initializing" | "indexing" | "ready" | "unknown";
 
   /** 人間向けの補足。機械判定に使ってはならない */
   message?: string;
 }
 ```
 
-`health` と `readiness` は独立の 2 軸である。推奨解釈（非規範）: `health` が `error` または `dead` のとき、`readiness` を判断材料に使うべきではない。
+`health` と `readiness` は独立の 2 軸である。推奨解釈（非規範）: `health` が `error` または `dead` のとき、`readiness` を判断材料に使うべきではない。待機の終了については 6 章 5 項が規範である。
+
+`readiness` が `unknown` のとき、クライアントは基本グレード（5.1）と同じく、応答が不完全でありうることを承知で進むか、自前で待つかを判断する。`readiness` に失敗を表す値はない。インデックスの失敗は `health` で表す（6 章 5 項）。
 
 前方互換のため、`ServerState` に未知のフィールドが含まれてもクライアントはエラーにせず無視しなければならない。予約済みの拡張候補: `phases`（診断等のフェーズ別完了状態）、鮮度トークン（織り込み済み変更の識別子）。
 
@@ -124,6 +127,7 @@ interface ClientCapabilities {
 2. **鮮度**（`freshness` 宣言時）: `readiness` が `"ready"` のとき、それまでに受信した `textDocument/didChange` はすべて織り込み済みでなければならない。この保証の実質はクロスファイルの鮮度（変更したファイル以外を起点とする問い合わせに、インデックスが変更を反映していること）である。単一ファイル内の変更→問い合わせの多くは、LSP の既存の処理順序保証（同一接続では後続リクエストが先行通知の後に処理される）だけで満たされる
 3. **再インデックス**: ワークスペースの再解析（依存ファイル変更、ブランチ切り替え等）が始まったら、`readiness` を `"indexing"` に戻して通知しなければならない
 4. **既存機構との関係**: `$/progress` は人間向けの進捗表示であり本拡張を代替しない。`ServerCancelled` エラーはポーリングを強いるため本拡張を代替しない（LSP issue #1367 の議論を参照）
+5. **待機の終了**: `health` が `error` または `dead` のとき、クライアントは `readiness` が `"ready"` になるのを待ってはならない。サーバーはインデックスの失敗を `readiness` ではなく `health` で表す。`readiness` は `"indexing"` に留めても `"ready"` にしてもよく、待つ側は `health` だけを見て抜ける
 
 ### 6.1 値ごとの送出主体
 
@@ -131,9 +135,10 @@ interface ClientCapabilities {
 | --- | --- | --- |
 | `health: ok / warning / error` | 送出可 | 送出可（上流の状態の転写または推定） |
 | `health: dead` | **送出してはならない**（死んだプロセスは通知を送れない） | 送出可（プロセス消失の観測に基づく） |
-| `readiness` 各値 | 送出可 | 送出可 |
+| `readiness: initializing / indexing / ready` | 送出可 | 送出可 |
+| `readiness: unknown` | **送出してはならない**（サーバーは自分の readiness を必ず知っている） | 送出可（観測手段がないとき） |
 
-`dead` は終端状態である。主な送出者は中継層であり、本拡張が LSP 本体へ提案される際には位置づけ（クライアントライブラリが接続断から合成する値とする等）を再検討する。
+`dead` は終端状態である。`dead` と `unknown` はいずれも観測者だけが出せる値であり、主な送出者は中継層である。本拡張が LSP 本体へ提案される際には両者の位置づけ（クライアントライブラリが接続断や観測手段の欠如から合成する値とする等）を再検討する。
 
 ## 7. 準拠要件（グレード別・テスト可能な形）
 
@@ -147,7 +152,7 @@ interface ClientCapabilities {
 
 1. `initialize` 完了直後の `experimental/serverState` に応答し、その時点で `readiness` は `"ready"` ではない
 2. クライアントが capability を宣言した場合のみ `experimental/serverStateChanged` が届く
-3. 依存変更の後に `"ready"` → `"indexing"` → `"ready"` の遷移が観測できる
+3. `readiness` を `"unknown"` 以外で報告する実装では、依存変更の後に `"ready"` → `"indexing"` → `"ready"` の遷移が観測できる
 
 ### 7.2 completeness 宣言時
 
@@ -168,7 +173,7 @@ interface ClientCapabilities {
 | gopls | `$/progress`（title "Setting up workspace"）の end | end → `readiness: "ready"`（中継層による合成） | completeness（freshness は要実測） |
 | pyright | workDoneProgress の end（残り解析ファイル数 0 と同期） | 同上 | completeness |
 | tsserver 系 | `$/progress`（クラッシュ時も end） | 中継層がログ・接続監視と併用して合成 | completeness のみ（非同期処理のため freshness 不可） |
-| clangd | なし | 中継層でも合成困難 | freshness のみ（全インデックスを持たない） |
+| clangd | なし | 中継層は `readiness: "unknown"` と `health`（プロセス観測による `ok` / `dead`）のみ提供 | 中継層経由: 基本グレード。サーバー自身が実装する場合: freshness のみ（全インデックスを持たない） |
 
 `experimental/serverState` という名前は rust-analyzer の `experimental/serverStatus` と近いが、これは後継であることを示す意図的な命名である。両者はクライアントのログや設定で混同しやすいため、実装・運用時は注意する。上流提案時には後継関係を明示する。
 

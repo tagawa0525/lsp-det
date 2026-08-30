@@ -38,12 +38,18 @@ impl ServerUnderTest {
     /// アダプタなしの lsp-det + 偽上流。両軸 `unknown` と `dead` だけを出す
     /// 被験者（v0.1-design.md 4.1、ADR 0008）。
     pub fn lsp_det_without_adapter() -> Self {
+        Self::lsp_det_without_adapter_flags(&[])
+    }
+
+    pub fn lsp_det_without_adapter_flags(upstream_flags: &[&str]) -> Self {
+        let mut args = vec![
+            "--".to_string(),
+            fake_upstream_binary().to_string_lossy().into_owned(),
+        ];
+        args.extend(upstream_flags.iter().map(|flag| flag.to_string()));
         ServerUnderTest {
             program: lsp_det_binary(),
-            args: vec![
-                "--".to_string(),
-                fake_upstream_binary().to_string_lossy().into_owned(),
-            ],
+            args,
             root: repo_root(),
         }
     }
@@ -260,11 +266,8 @@ impl ConformanceClient {
     pub fn wait_until_ready(&mut self) {
         let mut state = self.server_state();
         loop {
-            assert_ne!(
-                state.readiness,
-                Readiness::Unknown,
-                "readiness を観測しない被験者に ready を待たせている"
-            );
+            // health を先に見る。{dead, unknown} は正常に出る組み合わせで、
+            // それを「unknown の被験者を待たせた」と誤診してはならない。
             assert!(
                 !matches!(state.health, Health::Error | Health::Dead),
                 "ready を待つ間に被験者が壊れた: {state:?}"
@@ -272,7 +275,39 @@ impl ConformanceClient {
             if state.readiness == Readiness::Ready {
                 return;
             }
+            assert_ne!(
+                state.readiness,
+                Readiness::Unknown,
+                "readiness を観測しない被験者に ready を待たせている"
+            );
             state = self.await_state_changed();
+        }
+    }
+
+    /// 被験者が接続を閉じるまで読み、その間に `method` が届かなかったことを
+    /// 確かめる。死んでいく被験者に対する「沈黙の検証」に使う
+    /// (`expect_no_notification` は閉じると panic するため使えない)。
+    pub fn expect_silence_until_closed(&mut self, method: &str) -> bool {
+        if self
+            .pending_notifications
+            .iter()
+            .any(|n| n["method"] == method)
+        {
+            return false;
+        }
+        loop {
+            match self.incoming.recv_timeout(DEFAULT_TIMEOUT) {
+                Ok(Incoming::Message(message)) => {
+                    if message["method"] == method {
+                        return false;
+                    }
+                    self.stash(message);
+                }
+                Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => return true,
+                Err(RecvTimeoutError::Timeout) => {
+                    panic!("{method} の沈黙を確かめている間、被験者が閉じなかった")
+                }
+            }
         }
     }
 

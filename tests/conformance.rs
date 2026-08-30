@@ -228,6 +228,30 @@ fn does_not_interpret_the_upstream_status_without_an_adapter() {
 }
 
 #[test]
+fn spec_7_1_2_dead_stays_silent_without_an_adapter_when_the_client_did_not_declare() {
+    // 仕様 5.2: 宣言していないクライアントには dead も通知しない。
+    let (mut client, _) = client_without_adapter(false);
+    client.notify("exit", json!(null));
+    assert!(
+        client.expect_silence_until_closed("experimental/serverStateChanged"),
+        "宣言していないクライアントへ dead を通知した"
+    );
+}
+
+#[test]
+fn an_upstream_that_dies_before_answering_initialize_does_not_hang_the_client_without_an_adapter() {
+    // アダプタなしでも handshake 中の死は隠さない。
+    let server =
+        ServerUnderTest::lsp_det_without_adapter_flags(&["--exit-before-initialize-result"]);
+    let mut client = ConformanceClient::start(&server);
+    let response = client.initialize_raw(true);
+    assert!(
+        response.get("error").is_some(),
+        "上流が initialize に答えず消えたのに、エラーも返らなかった: {response}"
+    );
+}
+
+#[test]
 fn spec_6_1_reports_dead_without_an_adapter() {
     let (mut client, _) = client_without_adapter(true);
     client.notify("exit", json!(null));

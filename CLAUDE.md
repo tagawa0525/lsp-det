@@ -28,12 +28,12 @@ LSP 拡張「Server State（拡張 S）」の参照実装となる透過プロ�
 ## 現在地とマイルストーン
 
 - **M1 完了**（feat/m1-passthrough-proxy ブランチ、2026-08-28）: 素通しプロキシ。フレーミング（`src/framing.rs`）・プロセス寿命（`src/process.rs`）・イベントループ（`src/proxy.rs`）・CLI（`src/cli.rs`）を TDD で実装。28 テスト・fmt/clippy 完全通過。pdeathsig 2 経路（上流→プロキシ、プロキシ→クライアント）を手動 smoke テストで検証済み。**未検証**: 実際の rust-analyzer / gopls との統合（この開発環境では M1 完了時点で rust-analyzer が起動不能だったため、偽 LSP サーバーで代替検証した。原因は 2026-08-28 に解消済み — 下記参照）。CC プラグイン（`.lsp.json`）としての実地投入は次の課題
-- **M2（進行中）**: 準拠テストスイート（中心成果物）+ 拡張 S surface + ゲート（rust-analyzer）。3 PR に分割。
+- **M2（進行中）**: 準拠テストスイート（中心成果物）+ 拡張 S surface + ゲート（rust-analyzer）。4 PR に分割。
   - PR 1（状態追跡）: 覗き見（`src/peek.rs`）・ServerState（`src/state.rs`）・rust-analyzer アダプタ（`src/adapter.rs`）・capability 注入（`src/initialize.rs`）・プロキシ配線と状態遷移の stderr ログ。**実 rust-analyzer との結合を検証済み**（M1 の未検証項目を解消）
   - PR 2（surface + 準拠テスト）: 拡張 S surface（`experimental/serverState` / `serverStateChanged` / グレード宣言）と、仕様 7 章を実行可能にした**準拠テストスイート**（`tests/conformance.rs`、偽上流は `examples/fake_lsp_server.rs`）。被験者を差し替えるだけで実サーバーにも当たる。lib + bin に分割済み。rust-analyzer の保証グレードは 7.2 / 7.3 を実サーバーに当てて `{completeness, freshness}` に確定
-  - PR 3（予定）: ゲート（保留キュー・キャンセル・非常口タイムアウト・dead 時の即時エラー）。あわせて 7.2 / 7.3 を lsp-det + 偽上流でも回せるようにする
+  - PR 2.5（予定、PR 3 の前）: ADR 0008 の実装。`Readiness::Unknown` / `Health::Unknown` の追加と、アダプタの有無によらない health 追跡（アダプタなしは両軸 `unknown`、消失で `dead`）。準拠テストにアダプタなしの被験者を追加
+  - PR 3（予定）: ゲート（保留キュー・キャンセル・非常口タイムアウト・`health` が `error` / `dead` のときの即時エラー）。保留・転送・エラーの判定表は v0.1-design 4.2 が正。あわせて 7.2 / 7.3 を lsp-det + 偽上流でも回せるようにする
   - 残る実測: CC のリクエストタイムアウト / エラー表示。quiescent フラップは実測完了（ADR 0007：通常編集では往復しないため対策不要）、rust-analyzer のスナップショット方式も準拠テスト 7.2 / 7.3 で確認済み
-  - **未決**: アダプタなしのときに `serverStateProvider` として何を宣言するか（v0.1-design 4.1 の「未決」節）。ユーザーの判断と ADR が必要
 - M3: gopls アダプタ（progress 再送の実測込み）
 - M4（v0.1 後）: Serena 統合・拡張 A 再評価・上流 PR
 

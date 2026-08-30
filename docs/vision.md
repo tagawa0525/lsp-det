@@ -162,8 +162,8 @@ interface ServerCapabilities {
 規範は [spec/extension-s-server-state.md](spec/extension-s-server-state.md) を正とする。要点:
 
 - `workspace/serverState` リクエストと `workspace/serverStateChanged` 通知で `ServerState` を返す
-- `ServerState` は `health`（`ok | warning | error | dead`）と `readiness`（`initializing | indexing | ready`）の 2 軸
-- `ready` は完全性（結果が後から増えない）と鮮度（受信済み didChange を織り込み済み）の両方を保証する
+- `ServerState` は `health`（`ok | warning | error | dead | unknown`）と `readiness`（`initializing | indexing | ready | unknown`）の 2 軸。`dead` と `unknown` は観測者（中継層）だけが出せる値
+- `ready` は、`health` が `error | dead` でない限り、宣言したグレードに応じて完全性（結果が後から増えない）と鮮度（受信済み didChange を織り込み済み）を保証する
 - 診断フェーズ・鮮度トークンは前方互換な将来拡張として予約
 
 旧称「拡張 B (Readiness)」は readiness のみを扱っていたが、health・鮮度と統合して拡張 S に再定義した（[adr/0003](adr/0003-extension-s-zero-based.md)）。初期草案にあった `$partial` 注釈・`completeMethods` は、配列応答に付けられず無改造クライアントに効果がないため廃止した。

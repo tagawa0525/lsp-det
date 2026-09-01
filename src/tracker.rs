@@ -173,6 +173,16 @@ mod tests {
     }
 
     #[test]
+    fn losing_quiescence_returns_to_indexing() {
+        // 再インデックス (v0.1-design 4.3、仕様 6 章 3 項)。readiness の後退も
+        // 2 軸の変化なので通知する。
+        let mut tracker = with_adapter();
+        observe(&mut tracker, &status("ok", true));
+        let changed = observe(&mut tracker, &status("ok", false)).expect("re-index should notify");
+        assert_eq!(changed.readiness, Readiness::Indexing);
+    }
+
+    #[test]
     fn a_message_only_change_updates_state_without_notifying() {
         // 仕様 4.2: 通知するのは 2 軸が変わったときだけ。ただし message は
         // 次の serverState 応答に載るよう更新しておく。

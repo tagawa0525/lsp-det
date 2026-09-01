@@ -29,11 +29,20 @@ pub fn client_declares_server_state(body: &[u8]) -> bool {
         == Some(&Value::Bool(true))
 }
 
+/// 上流の `InitializeResult` が既に `experimental.serverStateProvider` を
+/// 宣言しているか。宣言していれば上流自身が拡張 S に準拠しており、中継層は
+/// 拡張 S について透過する (ADR 0008 追補 D)。
+pub fn upstream_declares_server_state_provider(body: &[u8]) -> bool {
+    let _ = body;
+    todo!("ADR 0008 追補 D: 上流の宣言を検出する")
+}
+
 /// `InitializeResult` に `experimental.serverStateProvider` を足した
 /// 新しいボディを返す。書き換えられなければ `None`。
 ///
 /// 上流が返した capability は一切変えない。中継層は宣言を**足す**だけで、
 /// 上流の宣言を置き換えると上流が本当に持つ機能を隠すことになる。
+/// 上流が既に `serverStateProvider` を宣言していれば何もしない (`None`)。
 pub fn declare_server_state_provider(
     body: &[u8],
     provider: &ServerStateProvider,
@@ -309,6 +318,36 @@ mod tests {
             out["result"]["capabilities"]["experimental"]["serverStateProvider"],
             Value::Bool(true)
         );
+    }
+
+    #[test]
+    fn never_overwrites_an_upstream_declaration() {
+        // 上流が本当に持つ保証 (freshness) を基本グレードで隠してはならない。
+        let body = r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":{"freshness":true}}}}}"#;
+        assert!(
+            declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn detects_an_upstream_declaration() {
+        let declared =
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":true}}}}"#;
+        assert!(upstream_declares_server_state_provider(declared.as_bytes()));
+
+        for body in [
+            r#"{"id":1,"result":{"capabilities":{"experimental":{}}}}"#,
+            r#"{"id":1,"result":{"capabilities":{}}}"#,
+            r#"{"id":1,"result":{}}"#,
+            r#"{"id":1,"error":{"code":-32603,"message":"boom"}}"#,
+            "{not json",
+        ] {
+            assert!(
+                !upstream_declares_server_state_provider(body.as_bytes()),
+                "宣言とみなしてはならない: {body}"
+            );
+        }
     }
 
     #[test]

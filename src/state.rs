@@ -193,7 +193,8 @@ mod tests {
         // 仕様 7.1 の 1: initialize 直後の readiness は ready ではない。
         let state = ServerState::initializing();
         assert_eq!(state.readiness, Readiness::Initializing);
-        assert_eq!(state.health, Health::Ok);
+        // health はまだ観測していない (ADR 0008 追補 E)。
+        assert_eq!(state.health, Health::Unknown);
         assert_eq!(state.message, None);
     }
 

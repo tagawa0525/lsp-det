@@ -122,9 +122,19 @@ mod tests {
 
     #[test]
     fn starts_in_initializing_with_an_adapter() {
+        // readiness は「initialize 直後」という既知の局面なので initializing。
+        // health は最初の serverStatus が届くまで何も観測していないので
+        // unknown (ADR 0008 追補 E)。ok を名乗るのは観測なしの主張になる。
         let tracker = with_adapter();
         assert_eq!(tracker.state().readiness, Readiness::Initializing);
-        assert_eq!(tracker.state().health, Health::Ok);
+        assert_eq!(tracker.state().health, Health::Unknown);
+    }
+
+    #[test]
+    fn the_first_status_replaces_the_unknown_health() {
+        let mut tracker = with_adapter();
+        let changed = observe(&mut tracker, &status("ok", false)).expect("state should change");
+        assert_eq!(changed.health, Health::Ok);
     }
 
     #[test]

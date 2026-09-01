@@ -19,6 +19,9 @@
 //!   応答せず終了する（起動時クラッシュ）
 //! - `--status-before-initialize-result`: `InitializeResult` より**前**に
 //!   `experimental/serverStatus` を送る
+//! - `--declare-server-state-provider`: 上流自身が拡張 S に準拠している
+//!   ふりをする。`InitializeResult` に `serverStateProvider: {freshness: true}`
+//!   を宣言し、`experimental/serverState` に自分で答える
 
 use std::io::{self, BufReader};
 
@@ -30,6 +33,7 @@ fn main() {
     let has = |name: &str| flags.iter().any(|flag| flag == name);
     let exit_before_initialize_result = has("--exit-before-initialize-result");
     let status_before_initialize_result = has("--status-before-initialize-result");
+    let declare_server_state_provider = has("--declare-server-state-provider");
 
     let stdin = io::stdin();
     let mut reader = BufReader::new(stdin.lock());
@@ -66,6 +70,10 @@ fn main() {
                         }),
                     );
                 }
+                let mut experimental = json!({"fakeUpstreamMarker": true});
+                if declare_server_state_provider {
+                    experimental["serverStateProvider"] = json!({"freshness": true});
+                }
                 respond(
                     &mut stdout,
                     id,
@@ -73,10 +81,17 @@ fn main() {
                         "capabilities": {
                             "hoverProvider": true,
                             "referencesProvider": true,
-                            "experimental": {"fakeUpstreamMarker": true}
+                            "experimental": experimental
                         },
                         "serverInfo": {"name": "fake-lsp-server", "version": "0"}
                     }),
+                );
+            }
+            "experimental/serverState" if declare_server_state_provider => {
+                respond(
+                    &mut stdout,
+                    id,
+                    json!({"health": "ok", "readiness": "ready", "message": "answered by upstream"}),
                 );
             }
             "$/fake/emitServerStatus" => {

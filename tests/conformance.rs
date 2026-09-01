@@ -265,6 +265,65 @@ fn spec_6_1_reports_dead_without_an_adapter() {
 }
 
 // ---------------------------------------------------------------------------
+// 上流自身が拡張 S に準拠している場合 (ADR 0008 追補 D)
+//
+// 中継層は拡張 S について透過する。宣言を足さず、リクエストを転送し、
+// 自前の通知を出さない。同一接続に送信者の異なる 2 系統が流れるのを避ける。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn defers_to_a_conformant_upstream_without_an_adapter() {
+    let server =
+        ServerUnderTest::lsp_det_without_adapter_flags(&["--declare-server-state-provider"]);
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+
+    // 上流の宣言をそのまま通す (基本グレードで上書きしない)。
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"freshness": true}),
+        "上流の宣言を書き換えた: {result}"
+    );
+
+    // リクエストは上流へ届き、上流の答えが返る。
+    let state = client.server_state();
+    assert_eq!(state.message.as_deref(), Some("answered by upstream"));
+    assert!(
+        client
+            .upstream_methods_seen()
+            .iter()
+            .any(|m| m == "experimental/serverState"),
+        "experimental/serverState を上流へ転送していない"
+    );
+
+    // 中継層は自前の dead を出さない (上流が拡張 S の送信者)。
+    client.notify("exit", json!(null));
+    assert!(
+        client.expect_silence_until_closed("experimental/serverStateChanged"),
+        "透過しているのに中継層が通知を出した"
+    );
+}
+
+#[test]
+fn defers_to_a_conformant_upstream_even_with_an_adapter() {
+    // アダプタは上流の語彙を補うためのもの。上流が拡張 S を話すなら不要で、
+    // 中継層の宣言で上流の宣言を隠してはならない。
+    let server =
+        ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--declare-server-state-provider"]);
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"freshness": true})
+    );
+    assert_eq!(
+        client.server_state().message.as_deref(),
+        Some("answered by upstream")
+    );
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
 // handshake 前後の境界
 //
 // LSP は `InitializeResult` より前のサーバー発通知を許さない。しかし

@@ -17,12 +17,14 @@ pub struct Tracker {
 
 impl Tracker {
     /// アダプタがあれば `initializing`、なければ両軸 `unknown` から始める。
+    ///
+    /// 開始状態・注入する capability・保証グレードはアダプタの値に聞く。
+    /// 「アダプタがある」ことを rust-analyzer と同一視すると、M3 で gopls を
+    /// 足したときに 3 箇所の match を書き直すことになる。
     pub fn new(adapter: Option<RustAnalyzerAdapter>) -> Self {
-        let state = if adapter.is_some() {
-            ServerState::initializing()
-        } else {
-            ServerState::unobserved()
-        };
+        let state = adapter
+            .as_ref()
+            .map_or_else(ServerState::unobserved, |adapter| adapter.initial_state());
         Tracker { state, adapter }
     }
 
@@ -33,19 +35,19 @@ impl Tracker {
     /// 上流への `initialize` に注入する client capability (v0.1-design.md 4.5)。
     /// アダプタがなければ何も注入しない。
     pub fn required_client_capabilities(&self) -> &'static [&'static str] {
-        match self.adapter {
-            Some(_) => RustAnalyzerAdapter::REQUIRED_CLIENT_CAPABILITIES,
-            None => &[],
-        }
+        self.adapter
+            .as_ref()
+            .map_or(&[], |adapter| adapter.required_client_capabilities())
     }
 
     /// `InitializeResult` に宣言する保証グレード (仕様 5 章)。
     /// アダプタがなければ基本グレード。
     pub fn provider(&self) -> ServerStateProvider {
-        match self.adapter {
-            Some(_) => RustAnalyzerAdapter::guarantees(),
-            None => ServerStateProvider::Basic(true),
-        }
+        self.adapter
+            .as_ref()
+            .map_or(ServerStateProvider::Basic(true), |adapter| {
+                adapter.guarantees()
+            })
     }
 
     /// 上流→クライアント方向のメッセージを観測して状態を更新する。

@@ -35,8 +35,9 @@ enum Event {
 
 /// クライアントと上流を中継し、プロキシ自身の終了コードを返す。
 ///
-/// `adapter` を渡すと上流の状態を追跡する (v0.1-design.md 5 章)。
-/// `None` は純透過 (アダプタなし)。
+/// `adapter` を渡すと上流の readiness を追跡する (v0.1-design.md 5 章)。
+/// `None` でも拡張 S の surface は提供する。両軸 `unknown` と消失時の
+/// `dead` だけを出す (v0.1-design.md 4.1、ADR 0008)。
 pub fn run<R, W>(
     client_in: R,
     client_out: W,
@@ -181,7 +182,6 @@ fn announce_death<W: Write>(surface: &mut Surface, client_out: &mut W) {
 /// 消失時の `dead` だけを出す (ADR 0008)。
 struct Surface {
     tracker: StateTracker,
-    provider: ServerStateProvider,
     /// クライアントが仕様 5.2 の宣言をしたか。通知を送る条件。
     client_declared: bool,
     initialize_id: Option<RequestId>,
@@ -199,11 +199,8 @@ struct Surface {
 
 impl Surface {
     fn new(adapter: Option<RustAnalyzerAdapter>) -> Self {
-        let tracker = StateTracker::new(adapter);
-        let provider = tracker.provider();
         Surface {
-            tracker,
-            provider,
+            tracker: StateTracker::new(adapter),
             client_declared: false,
             initialize_id: None,
             handshake_done: false,
@@ -244,32 +241,32 @@ impl Surface {
 
     /// 上流のメッセージを観測し、(転送するメッセージ, 付随して送る通知) を返す。
     fn on_upstream(&mut self, msg: RawMessage) -> (RawMessage, Option<RawMessage>) {
-        let is_initialize_response = match peek::peek(&msg.body) {
-            Ok(view) => {
-                view.method().is_none()
-                    && view.id.is_some()
-                    && view.id == self.initialize_id
-                    && !self.handshake_done
-            }
-            Err(_) => false,
+        // 覗き見は 1 回だけ。上流のメッセージは大きくなりうる (diagnostics
+        // 等) ので、判定ごとにパースし直すと透過経路の負荷が倍になる。
+        let Ok(view) = peek::peek(&msg.body) else {
+            return (msg, None);
         };
+        let is_initialize_response = !self.handshake_done
+            && view.method().is_none()
+            && view.id.is_some()
+            && view.id == self.initialize_id;
 
         if is_initialize_response {
             self.handshake_done = true;
-            let forwarded =
-                match initialize::declare_server_state_provider(&msg.body, &self.provider) {
-                    Some(body) => RawMessage { body },
-                    None => {
-                        // 応答の形が想定外 (result が無い / capabilities が
-                        // オブジェクトでない等)。宣言できないまま拡張 S として
-                        // 振る舞うことになるので、黙って進まず理由を残す。
-                        eprintln!(
-                            "lsp-det: cannot declare serverStateProvider; \
+            let provider = self.tracker.provider();
+            let forwarded = match initialize::declare_server_state_provider(&msg.body, &provider) {
+                Some(body) => RawMessage { body },
+                None => {
+                    // 応答の形が想定外 (result が無い / capabilities が
+                    // オブジェクトでない等)。宣言できないまま拡張 S として
+                    // 振る舞うことになるので、黙って進まず理由を残す。
+                    eprintln!(
+                        "lsp-det: cannot declare serverStateProvider; \
                          the upstream InitializeResult has an unexpected shape"
-                        );
-                        msg
-                    }
-                };
+                    );
+                    msg
+                }
+            };
             // handshake 前に溜まった遷移をここで 1 通だけ流す。
             let flushed = self
                 .pending_state
@@ -279,10 +276,7 @@ impl Surface {
             return (forwarded, flushed);
         }
 
-        let changed = match peek::peek(&msg.body) {
-            Ok(view) => self.tracker.observe(&view, &msg.body),
-            Err(_) => None,
-        };
+        let changed = self.tracker.observe(&view, &msg.body);
         let notification = changed.and_then(|state| self.notify_or_stash(state));
         (msg, notification)
     }

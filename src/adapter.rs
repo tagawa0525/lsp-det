@@ -77,6 +77,17 @@ impl RustAnalyzerAdapter {
         Self::default()
     }
 
+    /// 上流に接続した直後の状態。rust-analyzer は `initialize` 応答後に
+    /// 最初の `serverStatus` を送るまで何も報告しない。
+    pub fn initial_state(&self) -> ServerState {
+        ServerState::initializing()
+    }
+
+    /// 上流への `initialize` に注入する client capability (v0.1-design.md 4.5)。
+    pub fn required_client_capabilities(&self) -> &'static [&'static str] {
+        Self::REQUIRED_CLIENT_CAPABILITIES
+    }
+
     /// `InitializeResult` に宣言する保証グレード (仕様 5 章)。
     ///
     /// rust-analyzer は両方の保証を満たす。準拠テストスイートの仕様 7.2
@@ -84,7 +95,7 @@ impl RustAnalyzerAdapter {
     /// 確認済み (tests/conformance.rs の #[ignore] 付き 2 件)。守れない
     /// 保証を宣言することは仕様 5.1 違反なので、この宣言を変えるときは
     /// 対応するテストの結果を根拠にすること。
-    pub fn guarantees() -> ServerStateProvider {
+    pub fn guarantees(&self) -> ServerStateProvider {
         ServerStateProvider::complete_and_fresh()
     }
 

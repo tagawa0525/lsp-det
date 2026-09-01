@@ -7,7 +7,7 @@
 //!
 //! ここはボディを完全パースして再シリアライズする数少ない例外である
 //! (4.6 が `initialize` と readiness 追跡用の通知にだけ認めている)。
-//! 書き換えが不要なら原文バイトをそのまま使うよう `None` を返す。
+//! 書き換えが不要なら原文バイトをそのまま使うよう伝える。
 
 use serde_json::{Map, Value};
 
@@ -29,31 +29,76 @@ pub fn client_declares_server_state(body: &[u8]) -> bool {
         == Some(&Value::Bool(true))
 }
 
-/// `InitializeResult` に `experimental.serverStateProvider` を足した
-/// 新しいボディを返す。書き換えられなければ `None`。
+/// 上流の `initialize` 応答をどう扱うか。1 回のパースで判定する。
+#[derive(Debug, PartialEq, Eq)]
+pub enum InitializeResultAction {
+    /// 上流自身が `serverStateProvider` を宣言している。中継層は拡張 S に
+    /// ついて透過する (ADR 0008 追補 D)。ボディは原文のまま流す。
+    UpstreamDeclares,
+    /// 中継層の宣言を足した新しいボディ。
+    Declared(Vec<u8>),
+    /// `result` はあるが `capabilities` / `experimental` がオブジェクトでなく
+    /// 書き換えられない。原文のまま流す。
+    Unrewritable,
+    /// 成功応答ではない (エラー応答、または `result` がない)。handshake は
+    /// 完了していないので、クライアントは `initialize` を再試行しうる。
+    NotASuccess,
+}
+
+/// `InitializeResult` に `experimental.serverStateProvider` を足す。
 ///
 /// 上流が返した capability は一切変えない。中継層は宣言を**足す**だけで、
 /// 上流の宣言を置き換えると上流が本当に持つ機能を隠すことになる。
+/// 上流が既に宣言していれば [`InitializeResultAction::UpstreamDeclares`]。
+///
+/// 宣言とみなすのは `true` かオブジェクトだけ (クライアント側の
+/// [`client_declares_server_state`] と対称)。`false` は「提供しない」の
+/// 意味 (`hoverProvider: false` と同じ書き方) なので上書きする。
 pub fn declare_server_state_provider(
     body: &[u8],
     provider: &ServerStateProvider,
-) -> Option<Vec<u8>> {
-    let mut root: Value = serde_json::from_slice(body).ok()?;
-    let result = root.get_mut("result")?.as_object_mut()?;
-    let capabilities = result
+) -> InitializeResultAction {
+    use InitializeResultAction::*;
+
+    let Ok(mut root) = serde_json::from_slice::<Value>(body) else {
+        return NotASuccess;
+    };
+    let Some(result) = root.get_mut("result").and_then(Value::as_object_mut) else {
+        return NotASuccess;
+    };
+    let Some(capabilities) = result
         .entry("capabilities")
         .or_insert_with(|| Value::Object(Map::new()))
-        .as_object_mut()?;
-    let experimental = capabilities
+        .as_object_mut()
+    else {
+        return Unrewritable;
+    };
+    let Some(experimental) = capabilities
         .entry("experimental")
         .or_insert_with(|| Value::Object(Map::new()))
-        .as_object_mut()?;
+        .as_object_mut()
+    else {
+        return Unrewritable;
+    };
 
-    experimental.insert(
-        "serverStateProvider".to_string(),
-        serde_json::to_value(provider).ok()?,
-    );
-    serde_json::to_vec(&root).ok()
+    if experimental
+        .get("serverStateProvider")
+        .is_some_and(is_declaration)
+    {
+        return UpstreamDeclares;
+    }
+    let Ok(declared) = serde_json::to_value(provider) else {
+        return Unrewritable;
+    };
+    experimental.insert("serverStateProvider".to_string(), declared);
+    match serde_json::to_vec(&root) {
+        Ok(bytes) => Declared(bytes),
+        Err(_) => Unrewritable,
+    }
+}
+
+fn is_declaration(value: &Value) -> bool {
+    matches!(value, Value::Bool(true) | Value::Object(_))
 }
 
 /// `initialize` の `params.capabilities` に真偽フラグを足した新しいボディを返す。
@@ -114,6 +159,7 @@ fn set_leaf_true(object: &mut Map<String, Value>, key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::InitializeResultAction::*;
     use super::*;
 
     const RA: &[&str] = &["experimental.serverStatusNotification"];
@@ -122,6 +168,16 @@ mod tests {
         inject_client_capabilities(body.as_bytes(), paths)
             .map(|bytes| serde_json::from_slice(&bytes).expect("rewritten body must be JSON"))
     }
+
+    /// `Declared` の中身を JSON として返す。それ以外なら panic。
+    fn declared(body: &str, provider: &ServerStateProvider) -> Value {
+        match declare_server_state_provider(body.as_bytes(), provider) {
+            Declared(bytes) => serde_json::from_slice(&bytes).expect("declared body must be JSON"),
+            other => panic!("宣言を足せるはず: {other:?}"),
+        }
+    }
+
+    // --- クライアント → 上流 ------------------------------------------------
 
     #[test]
     fn adds_the_flag_when_the_experimental_section_is_absent() {
@@ -257,15 +313,12 @@ mod tests {
         }
     }
 
+    // --- 上流 → クライアント ------------------------------------------------
+
     #[test]
     fn adds_the_provider_to_an_initialize_result() {
         let body = r#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"hoverProvider":true}}}"#;
-        let out: Value = serde_json::from_slice(
-            &declare_server_state_provider(body.as_bytes(), &ServerStateProvider::complete())
-                .expect("result should be rewritten"),
-        )
-        .unwrap();
-
+        let out = declared(body, &ServerStateProvider::complete());
         assert_eq!(
             out["result"]["capabilities"]["experimental"]["serverStateProvider"],
             serde_json::json!({"completeness": true})
@@ -281,12 +334,7 @@ mod tests {
     fn keeps_the_upstream_experimental_capabilities() {
         let body =
             r#"{"id":1,"result":{"capabilities":{"experimental":{"upstreamThing":{"a":1}}}}}"#;
-        let out: Value = serde_json::from_slice(
-            &declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true))
-                .expect("result should be rewritten"),
-        )
-        .unwrap();
-
+        let out = declared(body, &ServerStateProvider::Basic(true));
         assert_eq!(
             out["result"]["capabilities"]["experimental"]["upstreamThing"]["a"],
             Value::from(1)
@@ -299,12 +347,7 @@ mod tests {
 
     #[test]
     fn creates_the_capabilities_object_in_a_bare_result() {
-        let body = r#"{"id":1,"result":{}}"#;
-        let out: Value = serde_json::from_slice(
-            &declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true))
-                .expect("result should be rewritten"),
-        )
-        .unwrap();
+        let out = declared(r#"{"id":1,"result":{}}"#, &ServerStateProvider::Basic(true));
         assert_eq!(
             out["result"]["capabilities"]["experimental"]["serverStateProvider"],
             Value::Bool(true)
@@ -312,12 +355,65 @@ mod tests {
     }
 
     #[test]
-    fn leaves_an_error_response_alone() {
-        // 上流が initialize に失敗した応答へ capability を足しても意味がない。
-        let body = r#"{"id":1,"error":{"code":-32603,"message":"boom"}}"#;
-        assert!(
-            declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true))
-                .is_none()
-        );
+    fn never_overwrites_an_upstream_declaration() {
+        // 上流が本当に持つ保証 (freshness) を基本グレードで隠してはならない。
+        for body in [
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":{"freshness":true}}}}}"#,
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":{}}}}}"#,
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":true}}}}"#,
+        ] {
+            assert_eq!(
+                declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true)),
+                UpstreamDeclares,
+                "上流の宣言として透過すべき: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn overwrites_a_false_or_null_upstream_declaration() {
+        // `serverStateProvider: false` は「提供しない」の意味 (仕様 5 章の
+        // boolean)。宣言ではないので上書きして自分の宣言を置く。
+        for body in [
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":false}}}}"#,
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":null}}}}"#,
+        ] {
+            let out = declared(body, &ServerStateProvider::Basic(true));
+            assert_eq!(
+                out["result"]["capabilities"]["experimental"]["serverStateProvider"],
+                Value::Bool(true),
+                "false / null は宣言ではない: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_error_response_is_not_a_success() {
+        // handshake は完了していない。クライアントは initialize を再試行しうる。
+        for body in [
+            r#"{"id":1,"error":{"code":-32603,"message":"boom"}}"#,
+            r#"{"id":1,"result":"not an object"}"#,
+            "{not json",
+        ] {
+            assert_eq!(
+                declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true)),
+                NotASuccess,
+                "成功応答とみなしてはならない: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_non_object_capabilities_is_unrewritable() {
+        for body in [
+            r#"{"id":1,"result":{"capabilities":"nonsense"}}"#,
+            r#"{"id":1,"result":{"capabilities":{"experimental":null}}}"#,
+        ] {
+            assert_eq!(
+                declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true)),
+                Unrewritable,
+                "書き換え不能とみなすべき: {body}"
+            );
+        }
     }
 }

@@ -27,7 +27,7 @@ interface ServerState {
    * "warning": 部分的に機能している（依存欠落等。結果が不完全になりうる）
    * "error":   機能していない（結果は信頼できない）
    * "dead":    サーバープロセスが存在しない。以後の要求には応答できない
-   * "unknown": health を観測する手段がない。中継層のみが送出する（6.1）
+   * "unknown": health を観測する手段がない、またはまだ観測していない。中継層のみが送出する（6.1）
    */
   health: "ok" | "warning" | "error" | "dead" | "unknown";
 
@@ -110,10 +110,10 @@ interface ClientCapabilities {
 
 `completeness` と `freshness` は**独立**であり、順序関係はない。現実のサーバーは 4 象限すべてに存在する:
 
-| | freshness | freshness なし |
-| --- | --- | --- |
-| **completeness** | スナップショット方式 + 全インデックス（rust-analyzer） | 全インデックスだが非同期処理（tsserver 系） |
-| **completeness なし** | リクエスト毎スナップショットだが全インデックスなし（clangd） | 基本グレード |
+|                       | freshness                                                    | freshness なし                              |
+| --------------------- | ------------------------------------------------------------ | ------------------------------------------- |
+| **completeness**      | スナップショット方式 + 全インデックス（rust-analyzer）       | 全インデックスだが非同期処理（tsserver 系） |
+| **completeness なし** | リクエスト毎スナップショットだが全インデックスなし（clangd） | 基本グレード                                |
 
 実装は自分が守れる保証だけを宣言する。守れない保証の宣言は本仕様への違反である。
 
@@ -133,13 +133,15 @@ interface ClientCapabilities {
 
 ### 6.1 値ごとの送出主体
 
-| 値 | サーバー | 中継層 |
-| --- | --- | --- |
-| `health: ok / warning / error` | 送出可 | 送出可（上流の状態の転写または推定） |
-| `health: dead` | **送出してはならない**（死んだプロセスは通知を送れない） | 送出可（プロセス消失の観測に基づく） |
-| `health: unknown` | **送出してはならない**（サーバーは自分の状態を必ず知っている） | 送出可（観測手段がないとき） |
-| `readiness: initializing / indexing / ready` | 送出可 | 送出可 |
-| `readiness: unknown` | **送出してはならない**（サーバーは自分の readiness を必ず知っている） | 送出可（観測手段がないとき） |
+| 値                                           | サーバー                                                              | 中継層                                                 |
+| -------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------ |
+| `health: ok / warning / error`               | 送出可                                                                | 送出可（上流の状態の転写または推定）                   |
+| `health: dead`                               | **送出してはならない**（死んだプロセスは通知を送れない）              | 送出可（プロセス消失の観測に基づく）                   |
+| `health: unknown`                            | **送出してはならない**（サーバーは自分の状態を必ず知っている）        | 送出可（観測手段がないとき、または最初の信号が届く前） |
+| `readiness: initializing / indexing / ready` | 送出可                                                                | 送出可                                                 |
+| `readiness: unknown`                         | **送出してはならない**（サーバーは自分の readiness を必ず知っている） | 送出可（観測手段がないとき）                           |
+
+中継層は、上流が自ら `serverStateProvider` を宣言している（拡張 S に準拠している）場合、本拡張について透過しなければならない。宣言を足さず、`experimental/serverState` を転送し、自前の通知を送らない。同一接続に送信者の異なる 2 系統の状態が流れることを避けるためであり、その場合 `dead` も送出しない。
 
 `dead` は終端状態である。`dead` と両軸の `unknown` はいずれも観測者だけが出せる値であり、主な送出者は中継層である。本拡張が LSP 本体へ提案される際には両者の位置づけ（クライアントライブラリが接続断や観測手段の欠如から合成する値とする等）を再検討する。
 
@@ -170,14 +172,14 @@ interface ClientCapabilities {
 
 ## 8. 既存実装との対応
 
-| 実装 | 既存の語彙 | 拡張 S への写像 | 宣言できるグレード（見込み） |
-| --- | --- | --- | --- |
-| rust-analyzer | `experimental/serverStatus` の `health` / `quiescent` | `health` はそのまま、`quiescent: true` → `readiness: "ready"`。本拡張は事実上その後継 | completeness + freshness（準拠テスト 7.2 / 7.3 で確認済み） |
-| jdtls | `language/status` の `ServiceReady` / `ProjectStatus` | `ServiceReady` → `readiness: "ready"`、`ProjectStatus: WARNING` → `health: "warning"` | completeness |
-| gopls | `$/progress`（title "Setting up workspace"）の end | end → `readiness: "ready"`（中継層による合成） | completeness（freshness は要実測） |
-| pyright | workDoneProgress の end（残り解析ファイル数 0 と同期） | 同上 | completeness |
-| tsserver 系 | `$/progress`（クラッシュ時も end） | 中継層がログ・接続監視と併用して合成 | completeness のみ（非同期処理のため freshness 不可） |
-| clangd | なし | 中継層は両軸 `"unknown"` を報告し、プロセス消失時に `health: "dead"` を出すのみ | 中継層経由: 基本グレード。サーバー自身が実装する場合: freshness のみ（全インデックスを持たない） |
+| 実装          | 既存の語彙                                             | 拡張 S への写像                                                                       | 宣言できるグレード（見込み）                                                                     |
+| ------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| rust-analyzer | `experimental/serverStatus` の `health` / `quiescent`  | `health` はそのまま、`quiescent: true` → `readiness: "ready"`。本拡張は事実上その後継 | completeness + freshness（準拠テスト 7.2 / 7.3 で確認済み）                                      |
+| jdtls         | `language/status` の `ServiceReady` / `ProjectStatus`  | `ServiceReady` → `readiness: "ready"`、`ProjectStatus: WARNING` → `health: "warning"` | completeness                                                                                     |
+| gopls         | `$/progress`（title "Setting up workspace"）の end     | end → `readiness: "ready"`（中継層による合成）                                        | completeness（freshness は要実測）                                                               |
+| pyright       | workDoneProgress の end（残り解析ファイル数 0 と同期） | 同上                                                                                  | completeness                                                                                     |
+| tsserver 系   | `$/progress`（クラッシュ時も end）                     | 中継層がログ・接続監視と併用して合成                                                  | completeness のみ（非同期処理のため freshness 不可）                                             |
+| clangd        | なし                                                   | 中継層は両軸 `"unknown"` を報告し、プロセス消失時に `health: "dead"` を出すのみ       | 中継層経由: 基本グレード。サーバー自身が実装する場合: freshness のみ（全インデックスを持たない） |
 
 `experimental/serverState` という名前は rust-analyzer の `experimental/serverStatus` と近いが、これは後継であることを示す意図的な命名である。両者はクライアントのログや設定で混同しやすいため、実装・運用時は注意する。上流提案時には後継関係を明示する。
 

@@ -35,6 +35,25 @@ impl ServerUnderTest {
         Self::lsp_det_with_fake_upstream_flags(&[])
     }
 
+    /// アダプタなしの lsp-det + 偽上流。両軸 `unknown` と `dead` だけを出す
+    /// 被験者（v0.1-design.md 4.1、ADR 0008）。
+    pub fn lsp_det_without_adapter() -> Self {
+        Self::lsp_det_without_adapter_flags(&[])
+    }
+
+    pub fn lsp_det_without_adapter_flags(upstream_flags: &[&str]) -> Self {
+        let mut args = vec![
+            "--".to_string(),
+            fake_upstream_binary().to_string_lossy().into_owned(),
+        ];
+        args.extend(upstream_flags.iter().map(|flag| flag.to_string()));
+        ServerUnderTest {
+            program: lsp_det_binary(),
+            args,
+            root: repo_root(),
+        }
+    }
+
     /// 偽上流に起動フラグを渡す版（handshake 前後の境界を再現する）。
     pub fn lsp_det_with_fake_upstream_flags(upstream_flags: &[&str]) -> Self {
         let mut args = vec![
@@ -240,21 +259,67 @@ impl ConformanceClient {
 
     /// `readiness` が `ready` になるまで `serverStateChanged` を待つ。
     /// 実サーバーは自分のペースで ready になるため、時間ではなく状態で待つ。
+    ///
+    /// `health` が `error` / `dead` になったら待つのをやめて失敗する（仕様
+    /// 6 章 5 項。待ち続けるのは本 ADR 0008 が警告する永久待ちそのもの）。
+    /// `readiness` が `unknown` の被験者には使えない（永遠に来ない）。
     pub fn wait_until_ready(&mut self) {
-        if self.server_state().readiness == Readiness::Ready {
-            return;
-        }
+        let mut state = self.server_state();
         loop {
-            let state = self.await_state_changed();
-            assert_ne!(
-                state.health,
-                Health::Dead,
-                "ready を待つ間に被験者が死んだ: {state:?}"
+            // health を先に見る。{dead, unknown} は正常に出る組み合わせで、
+            // それを「unknown の被験者を待たせた」と誤診してはならない。
+            assert!(
+                !matches!(state.health, Health::Error | Health::Dead),
+                "ready を待つ間に被験者が壊れた: {state:?}"
             );
             if state.readiness == Readiness::Ready {
                 return;
             }
+            assert_ne!(
+                state.readiness,
+                Readiness::Unknown,
+                "readiness を観測しない被験者に ready を待たせている"
+            );
+            state = self.await_state_changed();
         }
+    }
+
+    /// 被験者が接続を閉じるまで読み、その間に `method` が届かなかったことを
+    /// 確かめる。死んでいく被験者に対する「沈黙の検証」に使う
+    /// (`expect_no_notification` は閉じると panic するため使えない)。
+    ///
+    /// 閉じた後は終了コードが 0 であることも確かめる。panic や異常終了で
+    /// stdout が閉じただけの被験者を「意図して沈黙した」と誤認しないため。
+    pub fn expect_silence_until_closed(&mut self, method: &str) -> bool {
+        if self
+            .pending_notifications
+            .iter()
+            .any(|n| n["method"] == method)
+        {
+            return false;
+        }
+        let deadline = std::time::Instant::now() + DEFAULT_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.incoming.recv_timeout(remaining) {
+                Ok(Incoming::Message(message)) => {
+                    if message["method"] == method {
+                        return false;
+                    }
+                    self.stash(message);
+                }
+                Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Timeout) => {
+                    panic!("{method} の沈黙を確かめている間、被験者が閉じなかった")
+                }
+            }
+        }
+        let status = self.child.wait().expect("被験者の終了を待てない");
+        assert!(
+            status.success(),
+            "被験者が異常終了した ({status})。沈黙ではなく墜落である"
+        );
+        true
     }
 
     pub fn did_open(&mut self, path: &std::path::Path, language_id: &str) {

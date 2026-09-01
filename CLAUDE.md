@@ -31,8 +31,9 @@ LSP 拡張「Server State（拡張 S）」の参照実装となる透過プロ�
 - **M2（進行中）**: 準拠テストスイート（中心成果物）+ 拡張 S surface + ゲート（rust-analyzer）。4 PR に分割。
   - PR 1（状態追跡）: 覗き見（`src/peek.rs`）・ServerState（`src/state.rs`）・rust-analyzer アダプタ（`src/adapter.rs`）・capability 注入（`src/initialize.rs`）・プロキシ配線と状態遷移の stderr ログ。**実 rust-analyzer との結合を検証済み**（M1 の未検証項目を解消）
   - PR 2（surface + 準拠テスト）: 拡張 S surface（`experimental/serverState` / `serverStateChanged` / グレード宣言）と、仕様 7 章を実行可能にした**準拠テストスイート**（`tests/conformance.rs`、偽上流は `examples/fake_lsp_server.rs`）。被験者を差し替えるだけで実サーバーにも当たる。lib + bin に分割済み。rust-analyzer の保証グレードは 7.2 / 7.3 を実サーバーに当てて `{completeness, freshness}` に確定
-  - PR 2.5（予定、PR 3 の前）: ADR 0008 の実装。`Readiness::Unknown` / `Health::Unknown` の追加と、アダプタの有無によらない health 追跡（アダプタなしは両軸 `unknown`、消失で `dead`）。準拠テストにアダプタなしの被験者を追加
+  - PR 2.5（ADR 0008 の実装）: `Readiness::Unknown` / `Health::Unknown`、状態の保持を `src/tracker.rs` に分離（アダプタは `src/adapter.rs` で解釈だけを担う）。アダプタなしは両軸 `unknown` から始まり消失で `dead`。アダプタありも `health` は最初の信号まで `unknown`（追補 E）。上流自身が `serverStateProvider` を宣言していれば拡張 S について透過（追補 D）。準拠テストにアダプタなし・準拠上流の被験者を追加
   - PR 3（予定）: ゲート（保留キュー・キャンセル・非常口タイムアウト・`health` が `error` / `dead` のときの即時エラー）。保留・転送・エラーの判定表は v0.1-design 4.2 が正。あわせて 7.2 / 7.3 を lsp-det + 偽上流でも回せるようにする
+  - **未決（PR 3 の前に判断）**: 上流自身が拡張 S を宣言して中継層が透過している間、ゲートは何を追跡するか。アダプタは上流の `serverStatus` しか読まず、拡張 S をネイティブに話す上流（`serverStatus` を送らなくなる将来の rust-analyzer 等）では tracker が `{unknown, initializing}` に留まり、ゲートが非常口タイムアウトまで保留する。候補: (a) 透過中はゲートを無効にする、(b) 透過時は上流の `serverStateChanged` を読むアダプタに切り替える。ADR 0008 追補 D-3 の「内部の追跡は続ける（ゲートが使う）」はこの点を定めていない
   - 残る実測: CC のリクエストタイムアウト / エラー表示。quiescent フラップは実測完了（ADR 0007：通常編集では往復しないため対策不要）、rust-analyzer のスナップショット方式も準拠テスト 7.2 / 7.3 で確認済み
 - M3: gopls アダプタ（progress 再送の実測込み）
 - M4（v0.1 後）: Serena 統合・拡張 A 再評価・上流 PR

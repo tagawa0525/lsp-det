@@ -195,6 +195,12 @@ struct Surface {
     /// 遷移は永久に失われ、通知だけを見ているクライアントは初期状態のまま
     /// 取り残される。
     pending_state: Option<ServerState>,
+    /// 上流自身が拡張 S に準拠している (`InitializeResult` に
+    /// `serverStateProvider` を宣言した)。以後、中継層は拡張 S について
+    /// 透過する: 宣言を足さず、リクエストを転送し、自前の通知も `dead` も
+    /// 出さない。同一接続に送信者の異なる 2 系統を流さないため
+    /// (ADR 0008 追補 D)。内部の追跡は続ける (ゲートが使う)。
+    defer_to_upstream: bool,
 }
 
 impl Surface {
@@ -205,6 +211,7 @@ impl Surface {
             initialize_id: None,
             handshake_done: false,
             pending_state: None,
+            defer_to_upstream: false,
         }
     }
 
@@ -219,6 +226,10 @@ impl Surface {
         };
 
         match kind {
+            ClientKind::ServerStateRequest(_) if self.defer_to_upstream => {
+                // 上流が拡張 S を話すなら、答えるのは上流。
+                ClientAction::Forward(msg)
+            }
             ClientKind::ServerStateRequest(id) => {
                 // 仕様 5.2: このリクエストは宣言の有無によらず応答する。
                 ClientAction::AnswerLocally(self.state_response(&id))
@@ -253,6 +264,15 @@ impl Surface {
 
         if is_initialize_response {
             self.handshake_done = true;
+            if initialize::upstream_declares_server_state_provider(&msg.body) {
+                self.defer_to_upstream = true;
+                self.pending_state = None;
+                eprintln!(
+                    "lsp-det: the upstream declares serverStateProvider itself; \
+                     deferring the extension S surface to it"
+                );
+                return (msg, None);
+            }
             let provider = self.tracker.provider();
             let forwarded = match initialize::declare_server_state_provider(&msg.body, &provider) {
                 Some(body) => RawMessage { body },
@@ -296,7 +316,7 @@ impl Surface {
     /// 仕様 4.2 の通知を作る。宣言していないクライアントには送らない
     /// (仕様 5.2)。handshake 前なら送らずに溜める。
     fn notify_or_stash(&mut self, state: ServerState) -> Option<RawMessage> {
-        if !self.client_declared {
+        if !self.client_declared || self.defer_to_upstream {
             return None;
         }
         if !self.handshake_done {

@@ -87,9 +87,13 @@ impl ServerStateProvider {
 
 impl ServerState {
     /// `initialize` 直後の状態。まだ何も答えられない (仕様 7.1 の 1)。
+    ///
+    /// `health` は `unknown`。readiness と違い「initialize 直後」に対応する
+    /// 既知の値がなく、最初の信号が届くまで `ok` を名乗るのは観測なしの
+    /// 主張になる (ADR 0008 追補 E)。
     pub fn initializing() -> Self {
         ServerState {
-            health: Health::Ok,
+            health: Health::Unknown,
             readiness: Readiness::Initializing,
             message: None,
         }

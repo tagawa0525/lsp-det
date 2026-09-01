@@ -33,8 +33,14 @@ pub fn client_declares_server_state(body: &[u8]) -> bool {
 /// 宣言しているか。宣言していれば上流自身が拡張 S に準拠しており、中継層は
 /// 拡張 S について透過する (ADR 0008 追補 D)。
 pub fn upstream_declares_server_state_provider(body: &[u8]) -> bool {
-    let _ = body;
-    todo!("ADR 0008 追補 D: 上流の宣言を検出する")
+    let Ok(root) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    root.get("result")
+        .and_then(|result| result.get("capabilities"))
+        .and_then(|caps| caps.get("experimental"))
+        .and_then(|experimental| experimental.get("serverStateProvider"))
+        .is_some()
 }
 
 /// `InitializeResult` に `experimental.serverStateProvider` を足した
@@ -58,6 +64,10 @@ pub fn declare_server_state_provider(
         .or_insert_with(|| Value::Object(Map::new()))
         .as_object_mut()?;
 
+    if experimental.contains_key("serverStateProvider") {
+        // 上流自身の宣言を基本グレードで隠してはならない。
+        return None;
+    }
     experimental.insert(
         "serverStateProvider".to_string(),
         serde_json::to_value(provider).ok()?,

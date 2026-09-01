@@ -23,7 +23,8 @@ pub enum Health {
     Warning,
     Error,
     Dead,
-    /// health を観測する手段がない。中継層のみが送出する (仕様 6.1、ADR 0008)。
+    /// health を観測する手段がない、またはまだ観測していない (最初の信号が
+    /// 届く前)。中継層のみが送出する (仕様 6.1、ADR 0008 追補 C-1・E)。
     Unknown,
 }
 

@@ -32,6 +32,12 @@ impl Tracker {
         &self.state
     }
 
+    /// 上流のメッセージから読み取るものがあるか (アダプタがあるか)。
+    /// なければ透過経路は覗き見を省ける。
+    pub fn observes_upstream(&self) -> bool {
+        self.adapter.is_some()
+    }
+
     /// 上流への `initialize` に注入する client capability (v0.1-design.md 4.5)。
     /// アダプタがなければ何も注入しない。
     pub fn required_client_capabilities(&self) -> &'static [&'static str] {

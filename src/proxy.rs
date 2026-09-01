@@ -63,8 +63,8 @@ where
     let exit_code = loop {
         match rx.recv_timeout(UPSTREAM_POLL_INTERVAL) {
             Ok(Event::FromClient(msg)) => match surface.on_client(msg) {
-                // 拡張 S のリクエストは中継層が自ら答える。上流は
-                // 拡張 S を知らないので転送してはならない (仕様 2 章)。
+                // 拡張 S のリクエストは原則として中継層が自ら答える。上流が
+                // 拡張 S を話す場合だけ転送する (仕様 6.1、ADR 0008 追補 D)。
                 ClientAction::AnswerLocally(response) => {
                     let _ = framing::write_message(&mut client_out, &response);
                 }
@@ -216,6 +216,10 @@ impl Surface {
     }
 
     fn on_client(&mut self, msg: RawMessage) -> ClientAction {
+        if self.defer_to_upstream {
+            // 上流が拡張 S を話す。すべて上流の仕事なので覗き見もしない。
+            return ClientAction::Forward(msg);
+        }
         let kind = match peek::peek(&msg.body) {
             Ok(view) if view.is_request() => match (view.method(), view.id.clone()) {
                 (Some(state::SERVER_STATE_METHOD), Some(id)) => ClientKind::ServerStateRequest(id),
@@ -226,10 +230,6 @@ impl Surface {
         };
 
         match kind {
-            ClientKind::ServerStateRequest(_) if self.defer_to_upstream => {
-                // 上流が拡張 S を話すなら、答えるのは上流。
-                ClientAction::Forward(msg)
-            }
             ClientKind::ServerStateRequest(id) => {
                 // 仕様 5.2: このリクエストは宣言の有無によらず応答する。
                 ClientAction::AnswerLocally(self.state_response(&id))
@@ -252,6 +252,13 @@ impl Surface {
 
     /// 上流のメッセージを観測し、(転送するメッセージ, 付随して送る通知) を返す。
     fn on_upstream(&mut self, msg: RawMessage) -> (RawMessage, Option<RawMessage>) {
+        // handshake 後、アダプタがなければ上流メッセージから読むものはない。
+        // 覗き見 (serde_json はボディ全体を字句解析する) を省き、透過経路の
+        // 負荷を main と同じに保つ。
+        if self.handshake_done && !self.tracker.observes_upstream() {
+            return (msg, None);
+        }
+
         // 覗き見は 1 回だけ。上流のメッセージは大きくなりうる (diagnostics
         // 等) ので、判定ごとにパースし直すと透過経路の負荷が倍になる。
         let Ok(view) = peek::peek(&msg.body) else {
@@ -263,28 +270,38 @@ impl Surface {
             && view.id == self.initialize_id;
 
         if is_initialize_response {
-            self.handshake_done = true;
-            if initialize::upstream_declares_server_state_provider(&msg.body) {
-                self.defer_to_upstream = true;
-                self.pending_state = None;
-                eprintln!(
-                    "lsp-det: the upstream declares serverStateProvider itself; \
-                     deferring the extension S surface to it"
-                );
-                return (msg, None);
-            }
+            use initialize::InitializeResultAction::*;
             let provider = self.tracker.provider();
             let forwarded = match initialize::declare_server_state_provider(&msg.body, &provider) {
-                Some(body) => RawMessage { body },
-                None => {
-                    // 応答の形が想定外 (result が無い / capabilities が
-                    // オブジェクトでない等)。宣言できないまま拡張 S として
-                    // 振る舞うことになるので、黙って進まず理由を残す。
+                NotASuccess => {
+                    // エラー応答。handshake は完了しておらず、クライアントは
+                    // initialize を再試行しうる。溜めた遷移もまだ流さない。
+                    return (msg, None);
+                }
+                UpstreamDeclares => {
+                    self.handshake_done = true;
+                    self.defer_to_upstream = true;
+                    self.pending_state = None;
+                    eprintln!(
+                        "lsp-det: the upstream declares serverStateProvider itself; \
+                         deferring the extension S surface to it"
+                    );
+                    return (msg, None);
+                }
+                Unrewritable => {
+                    // capabilities / experimental がオブジェクトでない。宣言
+                    // できないまま拡張 S として振る舞うことになるので、黙って
+                    // 進まず理由を残す。
+                    self.handshake_done = true;
                     eprintln!(
                         "lsp-det: cannot declare serverStateProvider; \
                          the upstream InitializeResult has an unexpected shape"
                     );
                     msg
+                }
+                Declared(body) => {
+                    self.handshake_done = true;
+                    RawMessage { body }
                 }
             };
             // handshake 前に溜まった遷移をここで 1 通だけ流す。
@@ -400,6 +417,10 @@ impl StateTracker {
 
     fn provider(&self) -> ServerStateProvider {
         self.tracker.provider()
+    }
+
+    fn observes_upstream(&self) -> bool {
+        self.tracker.observes_upstream()
     }
 
     fn required_client_capabilities(&self) -> &'static [&'static str] {

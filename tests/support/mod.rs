@@ -287,6 +287,9 @@ impl ConformanceClient {
     /// 被験者が接続を閉じるまで読み、その間に `method` が届かなかったことを
     /// 確かめる。死んでいく被験者に対する「沈黙の検証」に使う
     /// (`expect_no_notification` は閉じると panic するため使えない)。
+    ///
+    /// 閉じた後は終了コードが 0 であることも確かめる。panic や異常終了で
+    /// stdout が閉じただけの被験者を「意図して沈黙した」と誤認しないため。
     pub fn expect_silence_until_closed(&mut self, method: &str) -> bool {
         if self
             .pending_notifications
@@ -295,20 +298,28 @@ impl ConformanceClient {
         {
             return false;
         }
+        let deadline = std::time::Instant::now() + DEFAULT_TIMEOUT;
         loop {
-            match self.incoming.recv_timeout(DEFAULT_TIMEOUT) {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.incoming.recv_timeout(remaining) {
                 Ok(Incoming::Message(message)) => {
                     if message["method"] == method {
                         return false;
                     }
                     self.stash(message);
                 }
-                Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => return true,
+                Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => {
                     panic!("{method} の沈黙を確かめている間、被験者が閉じなかった")
                 }
             }
         }
+        let status = self.child.wait().expect("被験者の終了を待てない");
+        assert!(
+            status.success(),
+            "被験者が異常終了した ({status})。沈黙ではなく墜落である"
+        );
+        true
     }
 
     pub fn did_open(&mut self, path: &std::path::Path, language_id: &str) {

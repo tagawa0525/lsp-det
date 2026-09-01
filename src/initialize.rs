@@ -341,12 +341,40 @@ mod tests {
     }
 
     #[test]
+    fn overwrites_a_false_upstream_declaration() {
+        // `serverStateProvider: false` は「提供しない」の意味 (仕様 5 章の
+        // boolean)。上書きして自分の宣言を置く。
+        let body =
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":false}}}}"#;
+        let out: Value = serde_json::from_slice(
+            &declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true))
+                .expect("false は宣言ではないので書き換える"),
+        )
+        .unwrap();
+        assert_eq!(
+            out["result"]["capabilities"]["experimental"]["serverStateProvider"],
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
     fn detects_an_upstream_declaration() {
-        let declared =
-            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":true}}}}"#;
-        assert!(upstream_declares_server_state_provider(declared.as_bytes()));
+        for declared in [
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":true}}}}"#,
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":{"freshness":true}}}}}"#,
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":{}}}}}"#,
+        ] {
+            assert!(
+                upstream_declares_server_state_provider(declared.as_bytes()),
+                "宣言とみなすべき: {declared}"
+            );
+        }
 
         for body in [
+            // クライアント側の判定 (client_declares_server_state) と対称に、
+            // true かオブジェクトだけを宣言とみなす。
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":false}}}}"#,
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":null}}}}"#,
             r#"{"id":1,"result":{"capabilities":{"experimental":{}}}}"#,
             r#"{"id":1,"result":{"capabilities":{}}}"#,
             r#"{"id":1,"result":{}}"#,

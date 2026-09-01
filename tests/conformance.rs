@@ -305,6 +305,55 @@ fn defers_to_a_conformant_upstream_without_an_adapter() {
 }
 
 #[test]
+fn a_false_upstream_declaration_is_not_a_declaration() {
+    // `serverStateProvider: false` は「提供しない」。透過に切り替えては
+    // ならず、中継層は自分の宣言を置いて自分で答える。
+    let server =
+        ServerUnderTest::lsp_det_without_adapter_flags(&["--declare-server-state-provider-false"]);
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!(true),
+        "false を宣言とみなして透過に切り替えた: {result}"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Unknown);
+    client.shutdown();
+}
+
+#[test]
+fn does_not_emit_its_own_notifications_under_deferral_with_an_adapter() {
+    // 透過中に自前の serverStateChanged を出すと、上流の通知と 2 系統に
+    // なる (ADR 0008 追補 D-1)。アダプタが生きた遷移を読んでも出さない。
+    let server =
+        ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--declare-server-state-provider"]);
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(true);
+    client.make_upstream_emit_status("ok", true);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "透過中に中継層が自前の通知を出した"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn drops_a_pre_handshake_transition_under_deferral() {
+    // handshake 前に溜めた遷移も、透過に切り替わったら流さない。
+    let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
+        "--status-before-initialize-result",
+        "--declare-server-state-provider",
+    ]);
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(true);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "透過に切り替わった後に、溜めていた遷移を流した"
+    );
+    client.shutdown();
+}
+
+#[test]
 fn defers_to_a_conformant_upstream_even_with_an_adapter() {
     // アダプタは上流の語彙を補うためのもの。上流が拡張 S を話すなら不要で、
     // 中継層の宣言で上流の宣言を隠してはならない。
@@ -343,6 +392,46 @@ fn a_state_change_before_the_handshake_is_delivered_afterwards() {
     let state = client.await_state_changed();
     assert_eq!(state.readiness, Readiness::Ready);
     client.shutdown();
+}
+
+#[test]
+fn an_initialize_error_does_not_end_the_handshake() {
+    // initialize へのエラー応答は handshake の完了ではない。クライアントは
+    // 再試行でき、2 回目の InitializeResult が本当の handshake になる。
+    let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--fail-first-initialize"]);
+    let mut client = ConformanceClient::start(&server);
+
+    let first = client.initialize_raw(true);
+    assert!(
+        first.get("error").is_some(),
+        "偽上流は 1 回目を失敗させるはず"
+    );
+
+    let second = client.initialize(true);
+    assert!(
+        !second["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null(),
+        "再試行した initialize に serverStateProvider がない: {second}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn death_during_a_retried_initialize_is_still_closed_with_an_error() {
+    // 1 回目はエラー、2 回目に答えず消える。2 回目も宙に浮かせない
+    // (ADR 0008 追補 D-4)。
+    let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
+        "--fail-first-initialize",
+        "--exit-before-initialize-result",
+    ]);
+    let mut client = ConformanceClient::start(&server);
+    let first = client.initialize_raw(true);
+    assert!(first.get("error").is_some());
+
+    let second = client.initialize_raw(true);
+    assert!(
+        second.get("error").is_some(),
+        "再試行中に上流が消えたのに、エラーも返らなかった: {second}"
+    );
 }
 
 #[test]
@@ -514,12 +603,7 @@ fn spec_7_1_through_lsp_det_with_real_rust_analyzer() {
     // 7.1 の 1: initialize 直後は ready ではない。
     assert_ne!(client.server_state().readiness, Readiness::Ready);
 
-    // 実サーバーは自分のペースで ready になる。
-    loop {
-        let state = client.await_state_changed();
-        if state.readiness == Readiness::Ready {
-            break;
-        }
-    }
+    // 実サーバーは自分のペースで ready になる。health が壊れたら抜ける。
+    client.wait_until_ready();
     client.shutdown();
 }

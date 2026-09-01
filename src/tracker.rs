@@ -83,6 +83,12 @@ impl Tracker {
     /// 出る組み合わせである。ゲート (設計 4.2 の表) は `health` の行を先に
     /// 見ること。
     pub fn mark_dead(&mut self) -> Option<ServerState> {
+        if self.state.health == Health::Dead {
+            // 終了検出の経路は複数あり (stdout の EOF、try_wait、切断)、
+            // 同じ死を二度観測しうる。通知は apply が抑止するが、
+            // clone と代入まで繰り返す必要はない。
+            return None;
+        }
         self.apply(ServerState {
             health: Health::Dead,
             readiness: self.state.readiness,

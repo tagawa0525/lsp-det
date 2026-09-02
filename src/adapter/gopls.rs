@@ -23,7 +23,7 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{Mapping, Version, parse_version};
+use super::Mapping;
 use crate::peek::MessageView;
 use crate::state::{Health, Readiness, ServerState, ServerStateProvider};
 
@@ -35,25 +35,37 @@ const WORKSPACE_LOAD_FAILURE_TITLE: &str = "Error loading workspace";
 /// フォルダのロード失敗時の end メッセージの先頭 (`general.go`)。
 const FAILED_LOAD_PREFIX: &str = "Error loading packages";
 
-/// 準拠テスト 7.2 / 7.3 を実 gopls に当てて通した版の範囲 (両端含む)。
+/// 準拠テスト 7.2 / 7.3 を実 gopls に当てて通した版。[`gopls_version`] で
+/// 正規化した名乗り (`v` を除いた `X.Y.Z`) と完全一致で突き合わせる。
 ///
-/// 範囲を広げるときは、その版で `cargo test --test conformance -- --ignored gopls_`
-/// を通してから端を動かすこと (守れない保証の宣言は仕様 5.1 違反)。
+/// 一覧にない版には保証を宣言しない。足すときは、その版で
+/// `cargo test --test conformance -- --ignored gopls_` を通してから
+/// (守れない保証の宣言は仕様 5.1 違反)。
 ///
-/// 通した記録: v0.23.0 (nix ビルド、go1.26.7)、2026-09-03、5 回連続。
-pub const TESTED_VERSIONS: std::ops::RangeInclusive<Version> = (0, 23, 0)..=(0, 23, 0);
+/// 通した記録: v0.23.0 (nixpkgs、go1.26.7)、2026-09-03、5 回連続。
+pub const TESTED_VERSIONS: &[&str] = &["0.23.0"];
 
-/// gopls の `serverInfo.version` から `X.Y.Z` を読む。
+/// gopls の `serverInfo.version` から版 (`X.Y.Z`) を取り出す。
 ///
 /// gopls はビルド情報 (`debug.BuildInfo`) を JSON にした文字列を名乗る。
 /// 版はその最上位の `"Version"` (`v0.23.0`)。`Main.Version` は nix ビルド
 /// では `(devel)` なので使えない。JSON でなければ文字列そのものを版とみなす。
-pub fn parse_gopls_version(version: &str) -> Option<Version> {
+/// 前後の空白と先頭の `v` を落とし、`X.Y.Z` の形だけを受理する
+/// (`(devel)` 等は `None`)。
+pub fn gopls_version(version: &str) -> Option<String> {
     let raw = match serde_json::from_str::<Value>(version) {
         Ok(Value::Object(info)) => info.get("Version")?.as_str()?.to_string(),
         _ => version.to_string(),
     };
-    parse_version(raw.strip_prefix('v').unwrap_or(&raw))
+    let trimmed = raw.trim();
+    let stripped = trimmed.strip_prefix('v').unwrap_or(trimmed);
+    let mut parts = stripped.split('.');
+    let is_semver = parts
+        .by_ref()
+        .take(3)
+        .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && stripped.matches('.').count() == 2;
+    is_semver.then(|| stripped.to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,8 +111,8 @@ impl GoplsAdapter {
     /// `serverInfo.version` を見て、テスト済みの版なら保証を宣言する。
     pub fn for_version(version: Option<&str>) -> Self {
         let version_is_tested = version
-            .and_then(parse_gopls_version)
-            .is_some_and(|v| TESTED_VERSIONS.contains(&v));
+            .and_then(gopls_version)
+            .is_some_and(|v| TESTED_VERSIONS.contains(&v.as_str()));
         GoplsAdapter {
             version_is_tested,
             state: ServerState::initializing(),
@@ -388,14 +400,16 @@ mod tests {
     const GOPLS_VERSION_JSON: &str = r#"{"GoVersion":"go1.27.0","Path":"golang.org/x/tools/gopls","Main":{"Path":"golang.org/x/tools/gopls","Version":"(devel)"},"Deps":[{"Path":"golang.org/x/tools","Version":"v0.47.1-0.20260707181000-a299dadba899"}],"Settings":[{"Key":"GOOS","Value":"linux"}],"Version":"v0.23.0"}"#;
 
     #[test]
-    fn gopls_parses_the_version_out_of_the_build_info_json() {
+    fn gopls_reads_the_version_out_of_the_build_info_json() {
         // serverInfo.version はビルド情報の JSON。最上位の "Version" が版で、
         // Main.Version は nix ビルドでは "(devel)"。
-        assert_eq!(parse_gopls_version(GOPLS_VERSION_JSON), Some((0, 23, 0)));
-        assert_eq!(parse_gopls_version("v0.23.0"), Some((0, 23, 0)));
-        assert_eq!(parse_gopls_version("0.23.0"), Some((0, 23, 0)));
-        assert_eq!(parse_gopls_version("(devel)"), None);
-        assert_eq!(parse_gopls_version(""), None);
+        assert_eq!(gopls_version(GOPLS_VERSION_JSON).as_deref(), Some("0.23.0"));
+        assert_eq!(gopls_version("v0.23.0").as_deref(), Some("0.23.0"));
+        assert_eq!(gopls_version("0.23.0").as_deref(), Some("0.23.0"));
+        assert_eq!(gopls_version(" v0.23.0 ").as_deref(), Some("0.23.0"));
+        assert_eq!(gopls_version("(devel)"), None, "X.Y.Z 以外は受理しない");
+        assert_eq!(gopls_version("0.23"), None);
+        assert_eq!(gopls_version(""), None);
     }
 
     #[test]

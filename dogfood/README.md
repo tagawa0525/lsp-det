@@ -4,12 +4,15 @@ Claude Code に、rust-analyzer と gopls を lsp-det 経由で起動させる�
 
 ## 手順
 
-1. `lsp-det` を PATH に置く（`.lsp.json` の `command` は PATH 上のバイナリを前提とする）
+1. 作業ツリーの `lsp-det` を PATH に置く（`.lsp.json` の `command` は PATH 上のバイナリを前提とする）。グローバルにはインストールしない。リポジトリ直下の `.envrc`（direnv）が開発環境（`flake.nix`）を読み込み、`target/release` を PATH に足す
 
    ```bash
-   cargo install --path . --locked   # ~/.cargo/bin/lsp-det
-   which lsp-det
+   direnv allow
+   cargo build --release
+   which lsp-det   # → target/release/lsp-det
    ```
+
+   Claude Code はこのディレクトリで起動すると PATH を継承するので、最新のビルドが使われる。ソースを変えたら `cargo build --release` し直す
 
 2. このプラグインを読み込んで Claude Code を起動する
 

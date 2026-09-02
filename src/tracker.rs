@@ -37,7 +37,8 @@ impl Tracker {
     /// 開始状態・保証は写像の値に聞く。「写像がある」ことを rust-analyzer と
     /// 同一視すると、M4 で gopls を足したときに match を書き直すことになる。
     pub fn select_mapping(&mut self, server_info: Option<&ServerInfo>) -> Option<ServerState> {
-        let adapter = adapter::select(&server_info?.name)?;
+        let server_info = server_info?;
+        let adapter = adapter::select(&server_info.name, server_info.version.as_deref())?;
         self.state = adapter.initial_state();
         self.adapter = Some(adapter);
         Some(self.state.clone())

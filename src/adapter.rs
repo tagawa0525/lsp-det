@@ -47,11 +47,17 @@ pub const CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS: &[&str] = &[
 
 /// 上流が名乗った名前に対応する写像。既知でなければ `None`
 /// (上流側は両軸 `unknown` を報告する。仕様 8.2 の 3)。
-pub fn select(server_name: &str) -> Option<RustAnalyzerAdapter> {
+pub fn select(server_name: &str, _version: Option<&str>) -> Option<RustAnalyzerAdapter> {
     match server_name {
         "rust-analyzer" => Some(RustAnalyzerAdapter::new()),
         _ => None,
     }
+}
+
+/// rust-analyzer の版文字列 (`1.98.0 (88d9e12 2026-08-18)` 等) の先頭の
+/// `X.Y.Z` を読む。
+pub fn parse_version(_version: &str) -> Option<(u32, u32, u32)> {
+    None
 }
 
 /// `experimental/serverStatus` の params。
@@ -181,10 +187,82 @@ mod tests {
     }
 
     #[test]
+    fn declares_guarantees_only_for_versions_the_conformance_suite_passed_on() {
+        // 仕様 8.2 の 5 (ADR 0009 決定 D-5): 観測者が宣言できる保証は、
+        // 準拠テスト 7.2 / 7.3 を当てて通った版の範囲に限る。lsp-det は
+        // rust-analyzer の内部を保証できず、テストに通ったという観測しか持たない。
+        let tested = select("rust-analyzer", Some("1.98.0 (88d9e12 2026-08-18)")).unwrap();
+        assert_eq!(
+            tested.guarantees(),
+            ServerStateProvider::complete_and_fresh()
+        );
+
+        for untested in [
+            Some("1.97.0 (abcdef1 2026-07-01)"),
+            Some("0.3.2600-standalone"),
+            Some("garbage"),
+            None,
+        ] {
+            let adapter = select("rust-analyzer", untested).unwrap();
+            assert_eq!(
+                adapter.guarantees(),
+                ServerStateProvider::Basic(true),
+                "テストを当てていない版 {untested:?} に保証を宣言した"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_the_leading_semver_of_a_rust_analyzer_version_string() {
+        assert_eq!(
+            parse_version("1.98.0 (88d9e12 2026-08-18)"),
+            Some((1, 98, 0))
+        );
+        assert_eq!(parse_version("1.98.0"), Some((1, 98, 0)));
+        assert_eq!(parse_version("0.3.2600-standalone"), Some((0, 3, 2600)));
+        assert_eq!(parse_version("nightly"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
+    fn maps_a_missing_workspace_warning_to_error() {
+        // 設計 5.1: プロジェクトが 1 つも見つからないとき rust-analyzer は
+        // warning と "Failed to discover workspace." を出す (reload.rs の
+        // current_status())。横断問い合わせは機能しないので error に写す。
+        // 判別材料は message 文字列しかない。
+        let mut adapter = RustAnalyzerAdapter::new();
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"warning","quiescent":true,"message":"Failed to discover workspace.\nConsider adding the `Cargo.toml` of the workspace to the [`linkedProjects`](https://rust-analyzer.github.io/book/configuration.html#linkedProjects) setting.\n\n"}}"#;
+        let state = interpret(&mut adapter, body).unwrap();
+        assert_eq!(state.health, Health::Error);
+        assert_eq!(state.readiness, Readiness::Ready);
+    }
+
+    #[test]
+    fn maps_the_missing_workspace_warning_to_error_even_after_other_warnings() {
+        // current_status() は警告文を連結する。先頭でなくても見つける。
+        let mut adapter = RustAnalyzerAdapter::new();
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"warning","quiescent":true,"message":"Auto-reloading is disabled and the workspace has changed, a manual workspace reload is required.\n\nFailed to discover workspace.\n"}}"#;
+        assert_eq!(interpret(&mut adapter, body).unwrap().health, Health::Error);
+    }
+
+    #[test]
+    fn keeps_other_warnings_as_warning() {
+        let mut adapter = RustAnalyzerAdapter::new();
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"warning","quiescent":true,"message":"Failed to run build scripts of some packages.\n\n"}}"#;
+        assert_eq!(
+            interpret(&mut adapter, body).unwrap().health,
+            Health::Warning
+        );
+    }
+
+    #[test]
     fn selects_rust_analyzer_by_its_server_info_name() {
-        assert!(select("rust-analyzer").is_some());
+        assert!(select("rust-analyzer", None).is_some());
         for unknown in ["gopls", "fake-lsp-server", "", "Rust-Analyzer"] {
-            assert!(select(unknown).is_none(), "既知でない名前: {unknown:?}");
+            assert!(
+                select(unknown, None).is_none(),
+                "既知でない名前: {unknown:?}"
+            );
         }
     }
 

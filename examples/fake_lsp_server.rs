@@ -19,7 +19,7 @@
 //!   応答せず終了する（起動時クラッシュ）
 //! - `--status-before-initialize-result`: `InitializeResult` より**前**に
 //!   `experimental/serverStatus` を送る
-//! - `--declare-server-state-provider`: 上流自身が拡張 S に準拠している
+//! - `--declare-server-state-provider`: 上流自身が本プロトコルに準拠している
 //!   ふりをする。`InitializeResult` に `serverStateProvider: {freshness: true}`
 //!   を宣言し、`experimental/serverState` に自分で答える
 //! - `--declare-server-state-provider-false`: `serverStateProvider: false` を

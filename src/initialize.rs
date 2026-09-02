@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 
 use crate::state::ServerStateProvider;
 
-/// クライアントが拡張 S を自分で扱うと宣言したか (仕様 5.2)。
+/// クライアントが状態を自分で解釈すると宣言したか (仕様 5.2)。
 ///
 /// この宣言は「通知が欲しい」と「保護が不要」の両方を意味する。宣言した
 /// クライアントが状態を無視して不完全な結果を得た場合、それはその
@@ -32,8 +32,8 @@ pub fn client_declares_server_state(body: &[u8]) -> bool {
 /// 上流の `initialize` 応答をどう扱うか。1 回のパースで判定する。
 #[derive(Debug, PartialEq, Eq)]
 pub enum InitializeResultAction {
-    /// 上流自身が `serverStateProvider` を宣言している。中継層は拡張 S に
-    /// ついて透過する (ADR 0008 追補 D)。ボディは原文のまま流す。
+    /// 上流自身が `serverStateProvider` を宣言している。上流側は恒等写像に
+    /// なる (仕様 8.2 の 6)。ボディは原文のまま流す。
     UpstreamDeclares,
     /// 中継層の宣言を足した新しいボディ。
     Declared(Vec<u8>),
@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn never_overwrites_an_upstream_declaration() {
-        // 上流が本当に持つ保証 (freshness) を基本グレードで隠してはならない。
+        // 上流が本当に持つ保証 (freshness) を保証なしの宣言で隠してはならない。
         for body in [
             r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":{"freshness":true}}}}}"#,
             r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":{}}}}}"#,

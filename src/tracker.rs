@@ -15,8 +15,8 @@ pub struct Tracker {
 impl Tracker {
     /// アダプタがあれば `initializing`、なければ両軸 `unknown` から始める。
     ///
-    /// 開始状態・注入する capability・保証グレードはアダプタの値に聞く。
-    /// 「アダプタがある」ことを rust-analyzer と同一視すると、M3 で gopls を
+    /// 開始状態・注入する capability・保証はアダプタの値に聞く。
+    /// 「アダプタがある」ことを rust-analyzer と同一視すると、M4 で gopls を
     /// 足したときに 3 箇所の match を書き直すことになる。
     pub fn new(adapter: Option<RustAnalyzerAdapter>) -> Self {
         let state = adapter
@@ -43,8 +43,8 @@ impl Tracker {
             .map_or(&[], |adapter| adapter.required_client_capabilities())
     }
 
-    /// `InitializeResult` に宣言する保証グレード (仕様 5 章)。
-    /// アダプタがなければ基本グレード。
+    /// `InitializeResult` に宣言する保証 (仕様 5 章)。
+    /// アダプタがなければ保証なしの宣言。
     pub fn provider(&self) -> ServerStateProvider {
         self.adapter
             .as_ref()

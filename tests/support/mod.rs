@@ -102,7 +102,7 @@ enum Incoming {
     Closed,
 }
 
-/// 拡張 S の準拠を確かめる偽クライアント。
+/// 本プロトコルの準拠を確かめる偽クライアント。
 pub struct ConformanceClient {
     child: Child,
     stdin: ChildStdin,
@@ -139,19 +139,19 @@ impl ConformanceClient {
 
     /// `initialize` → `initialized` を済ませ、`InitializeResult` を返す。
     ///
-    /// `declare_extension_s` は仕様 5.2 のクライアント宣言
+    /// `declare_server_state` は仕様 5.2 のクライアント宣言
     /// （`experimental.serverState: true`）を送るかどうか。
-    pub fn initialize(&mut self, declare_extension_s: bool) -> Value {
-        let result = self.initialize_raw(declare_extension_s);
+    pub fn initialize(&mut self, declare_server_state: bool) -> Value {
+        let result = self.initialize_raw(declare_server_state);
         self.notify("initialized", json!({}));
         result
     }
 
     /// `initialized` を送らずに `initialize` の応答だけを受け取る。
     /// handshake が成立しない場合の検証に使う。
-    pub fn initialize_raw(&mut self, declare_extension_s: bool) -> Value {
+    pub fn initialize_raw(&mut self, declare_server_state: bool) -> Value {
         let mut capabilities = json!({"textDocument": {"hover": {}}});
-        if declare_extension_s {
+        if declare_server_state {
             capabilities["experimental"] = json!({"serverState": true});
         }
         self.request(
@@ -185,7 +185,7 @@ impl ConformanceClient {
         );
     }
 
-    /// 拡張 S の状態を問い合わせる（仕様 4.1）。
+    /// 本プロトコルの状態を問い合わせる（仕様 4.1）。
     pub fn server_state(&mut self) -> ServerState {
         let response = self.request("experimental/serverState", json!(null));
         let result = response.get("result").unwrap_or_else(|| {

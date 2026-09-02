@@ -22,10 +22,10 @@ use support::{ConformanceClient, ServerUnderTest};
 /// 「届かないこと」を確かめるときの観測窓。
 const NEGATIVE_WINDOW: Duration = Duration::from_millis(750);
 
-fn client(declare_extension_s: bool) -> (ConformanceClient, Value) {
+fn client(declare_server_state: bool) -> (ConformanceClient, Value) {
     let server = ServerUnderTest::lsp_det_with_fake_upstream();
     let mut client = ConformanceClient::start(&server);
-    let result = client.initialize(declare_extension_s);
+    let result = client.initialize(declare_server_state);
     (client, result)
 }
 
@@ -188,10 +188,10 @@ fn spec_7_1_4_reports_an_index_failure_as_health_error() {
 // readiness を観測する手段がないので両軸 unknown を正直に報告する。
 // ---------------------------------------------------------------------------
 
-fn client_without_adapter(declare_extension_s: bool) -> (ConformanceClient, Value) {
+fn client_without_adapter(declare_server_state: bool) -> (ConformanceClient, Value) {
     let server = ServerUnderTest::lsp_det_without_adapter();
     let mut client = ConformanceClient::start(&server);
-    let result = client.initialize(declare_extension_s);
+    let result = client.initialize(declare_server_state);
     (client, result)
 }
 
@@ -267,7 +267,7 @@ fn spec_8_4_2_defers_to_a_conformant_upstream_without_an_adapter() {
     let mut client = ConformanceClient::start(&server);
     let result = client.initialize(true);
 
-    // 上流の宣言をそのまま通す (基本グレードで上書きしない)。
+    // 上流の宣言をそのまま通す (保証なしの宣言で上書きしない)。
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"freshness": true}),
@@ -407,7 +407,7 @@ fn an_initialize_error_does_not_end_the_handshake() {
 #[test]
 fn death_during_a_retried_initialize_is_still_closed_with_an_error() {
     // 1 回目はエラー、2 回目に答えず消える。2 回目も宙に浮かせない
-    // (ADR 0008 追補 D-4)。
+    // (仕様 8.2 の 7)。
     let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
         "--fail-first-initialize",
         "--exit-before-initialize-result",

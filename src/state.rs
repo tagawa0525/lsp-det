@@ -57,9 +57,9 @@ pub struct ServerState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ServerStateProvider {
-    /// 基本グレード。状態の通知そのものだけを保証する。
+    /// 保証なしの宣言。状態の通知そのものだけを保証する。
     Basic(bool),
-    Graded(Guarantees),
+    WithGuarantees(Guarantees),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -73,7 +73,7 @@ pub struct Guarantees {
 impl ServerStateProvider {
     /// `completeness` のみを宣言する。
     pub fn complete() -> Self {
-        ServerStateProvider::Graded(Guarantees {
+        ServerStateProvider::WithGuarantees(Guarantees {
             completeness: Some(true),
             freshness: None,
         })
@@ -81,7 +81,7 @@ impl ServerStateProvider {
 
     /// `completeness` と `freshness` の両方を宣言する。
     pub fn complete_and_fresh() -> Self {
-        ServerStateProvider::Graded(Guarantees {
+        ServerStateProvider::WithGuarantees(Guarantees {
             completeness: Some(true),
             freshness: Some(true),
         })
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn a_grade_serializes_both_guarantees_when_claimed() {
-        let both = ServerStateProvider::Graded(Guarantees {
+        let both = ServerStateProvider::WithGuarantees(Guarantees {
             completeness: Some(true),
             freshness: Some(true),
         });

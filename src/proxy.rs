@@ -36,7 +36,7 @@ enum Event {
 /// クライアントと上流を中継し、プロキシ自身の終了コードを返す。
 ///
 /// `adapter` を渡すと上流の readiness を追跡する (v0.1-design.md 5 章)。
-/// `None` でも拡張 S の surface は提供する。両軸 `unknown` と消失時の
+/// `None` でも上流側 は提供する。両軸 `unknown` と消失時の
 /// `dead` だけを出す (v0.1-design.md 4.1、ADR 0008)。
 pub fn run<R, W>(
     client_in: R,
@@ -49,7 +49,7 @@ where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
-    let mut surface = Surface::new(adapter);
+    let mut upstream_side = UpstreamSide::new(adapter);
     let mut handles = process::spawn(command, args)?;
     let mut upstream_stdin = handles.stdin;
     let mut client_out = client_out;
@@ -62,9 +62,9 @@ where
 
     let exit_code = loop {
         match rx.recv_timeout(UPSTREAM_POLL_INTERVAL) {
-            Ok(Event::FromClient(msg)) => match surface.on_client(msg) {
-                // 拡張 S のリクエストは原則として中継層が自ら答える。上流が
-                // 拡張 S を話す場合だけ転送する (仕様 6.1、ADR 0008 追補 D)。
+            Ok(Event::FromClient(msg)) => match upstream_side.on_client(msg) {
+                // serverState リクエストは原則として上流側が自ら答える。上流が
+                // 本プロトコルを話す場合だけ転送する (仕様 8.2 の 6)。
                 ClientAction::AnswerLocally(response) => {
                     let _ = framing::write_message(&mut client_out, &response);
                 }
@@ -75,7 +75,7 @@ where
                 }
             },
             Ok(Event::FromUpstream(msg)) => {
-                let (msg, notification) = surface.on_upstream(msg);
+                let (msg, notification) = upstream_side.on_upstream(msg);
                 if framing::write_message(&mut client_out, &msg).is_err() {
                     // クライアントが既に読み取りをやめている。無視して続行する
                     // (次のポーリングで上流の exit を検出する)。
@@ -87,7 +87,7 @@ where
             Ok(Event::UpstreamClosed) => {
                 // stdout を閉じた上流はもう応答しない。クライアントが
                 // 喋り続けていてもここで閉じる。
-                close_pending_handshake(&mut surface, &mut client_out);
+                close_pending_handshake(&mut upstream_side, &mut client_out);
                 break reap(&mut handles.upstream);
             }
             Ok(Event::ClientClosed) => {
@@ -106,7 +106,7 @@ where
                     if code != 0 {
                         eprintln!("lsp-det: upstream exited with status {code}");
                     }
-                    close_pending_handshake(&mut surface, &mut client_out);
+                    close_pending_handshake(&mut upstream_side, &mut client_out);
                     break code;
                 }
             }
@@ -119,7 +119,7 @@ where
                     .ok()
                     .and_then(|s| s.code())
                     .unwrap_or(1);
-                close_pending_handshake(&mut surface, &mut client_out);
+                close_pending_handshake(&mut upstream_side, &mut client_out);
                 break code;
             }
         }
@@ -172,17 +172,17 @@ fn reap(upstream: &mut process::Upstream) -> i32 {
 ///
 /// 死を表す通知は送らない。プロセスの消失は本プロトコルの値ではなく、
 /// この後の EOF が伝える。ループを抜ける前に書き切る必要がある。
-fn close_pending_handshake<W: Write>(surface: &mut Surface, client_out: &mut W) {
-    if let Some(response) = surface.fail_pending_initialize() {
+fn close_pending_handshake<W: Write>(upstream_side: &mut UpstreamSide, client_out: &mut W) {
+    if let Some(response) = upstream_side.fail_pending_initialize() {
         let _ = framing::write_message(client_out, &response);
     }
 }
 
-/// 拡張 S のサーバー側 surface (v0.1-design.md 4.1)。
+/// 上流側: 言語サーバーを代行して本プロトコルを提供する (v0.1-design.md 4.2)。
 ///
-/// アダプタの有無によらず存在する。アダプタなしでは両軸 `unknown` と
-/// 消失時の `dead` だけを出す (ADR 0008)。
-struct Surface {
+/// アダプタの有無によらず存在する。アダプタなしでは両軸 `unknown` を
+/// 報告する (仕様 8.2 の 3)。
+struct UpstreamSide {
     tracker: StateTracker,
     /// クライアントが仕様 5.2 の宣言をしたか。通知を送る条件。
     client_declared: bool,
@@ -197,29 +197,28 @@ struct Surface {
     /// 遷移は永久に失われ、通知だけを見ているクライアントは初期状態のまま
     /// 取り残される。
     pending_state: Option<ServerState>,
-    /// 上流自身が拡張 S に準拠している (`InitializeResult` に
-    /// `serverStateProvider` を宣言した)。以後、中継層は拡張 S について
-    /// 透過する: 宣言を足さず、リクエストを転送し、自前の通知も `dead` も
-    /// 出さない。同一接続に送信者の異なる 2 系統を流さないため
-    /// (ADR 0008 追補 D)。内部の追跡は続ける (ゲートが使う)。
-    defer_to_upstream: bool,
+    /// 上流自身が本プロトコルを宣言している (`InitializeResult` に
+    /// `serverStateProvider` がある)。以後、上流側は恒等写像になる: 宣言を
+    /// 足さず、リクエストを転送し、自前の通知を出さない。同一接続に送信者の
+    /// 異なる 2 系統を流さないため (仕様 8.2 の 6、ADR 0009 決定 D-1)。
+    identity: bool,
 }
 
-impl Surface {
+impl UpstreamSide {
     fn new(adapter: Option<RustAnalyzerAdapter>) -> Self {
-        Surface {
+        UpstreamSide {
             tracker: StateTracker::new(adapter),
             client_declared: false,
             initialize_id: None,
             handshake_done: false,
             pending_state: None,
-            defer_to_upstream: false,
+            identity: false,
         }
     }
 
     fn on_client(&mut self, msg: RawMessage) -> ClientAction {
-        if self.defer_to_upstream {
-            // 上流が拡張 S を話す。すべて上流の仕事なので覗き見もしない。
+        if self.identity {
+            // 恒等写像。すべて上流の仕事なので覗き見もしない。
             return ClientAction::Forward(msg);
         }
         let kind = match peek::peek(&msg.body) {
@@ -282,17 +281,17 @@ impl Surface {
                 }
                 UpstreamDeclares => {
                     self.handshake_done = true;
-                    self.defer_to_upstream = true;
+                    self.identity = true;
                     self.pending_state = None;
                     eprintln!(
                         "lsp-det: the upstream declares serverStateProvider itself; \
-                         deferring the extension S surface to it"
+                         the upstream side becomes an identity mapping"
                     );
                     return (msg, None);
                 }
                 Unrewritable => {
                     // capabilities / experimental がオブジェクトでない。宣言
-                    // できないまま拡張 S として振る舞うことになるので、黙って
+                    // できないまま上流側として振る舞うことになるので、黙って
                     // 進まず理由を残す。
                     self.handshake_done = true;
                     eprintln!(
@@ -333,7 +332,7 @@ impl Surface {
     /// 仕様 4.2 の通知を作る。宣言していないクライアントには送らない
     /// (仕様 5.2)。handshake 前なら送らずに溜める。
     fn notify_or_stash(&mut self, state: ServerState) -> Option<RawMessage> {
-        if !self.client_declared || self.defer_to_upstream {
+        if !self.client_declared || self.identity {
             return None;
         }
         if !self.handshake_done {

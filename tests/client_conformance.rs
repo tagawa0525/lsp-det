@@ -70,6 +70,13 @@ fn saw_upstream(client: &mut ConformanceClient, method: &str) -> bool {
     client.upstream_methods_seen().iter().any(|m| m == method)
 }
 
+/// 上流の状態変化が lsp-det に届くまで待つ同期点。偽上流は通知を送ってから
+/// 次のリクエストに答えるので、上流への往復リクエストが返れば、その前に
+/// 送らせた通知は lsp-det が処理済みである。
+fn sync_with_upstream(client: &mut ConformanceClient) {
+    let _ = client.upstream_methods_seen();
+}
+
 impl PartialEq for Subject {
     fn eq(&self, other: &Self) -> bool {
         matches!(
@@ -146,7 +153,7 @@ fn spec_9_1_2_fails_fast_when_health_is_error() {
     for subject in SUBJECTS {
         let mut client = start_indexing(subject, false);
         make_error(&mut client, subject);
-        // 状態が届いたことを確かめてから送る。
+        sync_with_upstream(&mut client);
         assert_eq!(client.server_state().health, lsp_det::state::Health::Error);
 
         let id = client.send_references();
@@ -188,9 +195,11 @@ fn returns_to_holding_after_the_error_recovers() {
     let subject = Subject::MappedUpstream;
     let mut client = start_indexing(subject, false);
     make_error(&mut client, subject);
+    sync_with_upstream(&mut client);
     assert_eq!(client.server_state().health, lsp_det::state::Health::Error);
 
     client.make_upstream_emit_status("ok", false);
+    sync_with_upstream(&mut client);
     assert_eq!(client.server_state().health, lsp_det::state::Health::Ok);
     let id = client.send_references();
     assert!(
@@ -302,6 +311,48 @@ fn spec_9_1_5_answers_held_requests_when_the_upstream_exits() {
             response.get("error").is_some(),
             "{subject:?}: 上流消失時の保留分が失敗応答でない: {response}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 7.2 完全性を、下流側 + 偽上流で回す
+//
+// 偽上流はインデックス未完了の間、references に空配列を返す (無言の嘘)。
+// 下流側が ready まで待たせるので、クライアントには完全な結果だけが届く。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spec_7_2_completeness_through_the_downstream_side_with_a_fake_upstream() {
+    let subjects = [
+        ServerUnderTest::lsp_det_with_conformant_upstream_flags(&[
+            "--initial-readiness",
+            "indexing",
+            "--references-depend-on-readiness",
+        ]),
+        ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--references-depend-on-readiness"]),
+    ];
+    for (i, server) in subjects.into_iter().enumerate() {
+        let subject = if i == 0 {
+            Subject::ConformantUpstream
+        } else {
+            Subject::MappedUpstream
+        };
+        let mut client = ConformanceClient::start(&server);
+        client.initialize(false);
+        if subject == Subject::MappedUpstream {
+            client.make_upstream_emit_status("ok", false);
+        }
+
+        let id = client.send_references();
+        assert!(client.response_within(id, NEGATIVE_WINDOW).is_none());
+        make_ready(&mut client, subject);
+        let response = client.await_response_to(id);
+        let found = response["result"].as_array().cloned().unwrap_or_default();
+        assert!(
+            found.iter().any(|l| l["range"]["start"]["line"] == 3),
+            "{subject:?}: インデックス未完了の空応答がクライアントに届いた: {response}"
+        );
+        client.shutdown();
     }
 }
 

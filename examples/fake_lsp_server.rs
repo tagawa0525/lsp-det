@@ -31,6 +31,10 @@
 //! - `--server-version <version>`: `serverInfo.version` で名乗る版。既定は
 //!   `1.98.0 (fake)`（rust-analyzer の写像が準拠テストを通した版の範囲内）。
 //!   `none` を渡すと version を省く
+//! - `--references-depend-on-readiness`: `textDocument/references` に、
+//!   自分が `ready` なら 1 件、そうでなければ空配列を返す（インデックス未完了の
+//!   空応答を再現する）。`ready` かどうかは準拠モードなら自分の状態、
+//!   rust-analyzer を演じるときは最後に送った `quiescent` で決まる
 //! - `--request-progress-create`: `initialized` を受けたら
 //!   `window/workDoneProgress/create` リクエスト（id `"wdp-1"`）を送る。
 //!   応答が返ったかは `$/fake/report` の `progressCreateAnswered` で分かる
@@ -54,6 +58,7 @@ fn main() {
     let fail_first_initialize = has("--fail-first-initialize");
     let exit_after_initialize_error = has("--exit-after-initialize-error");
     let request_progress_create = has("--request-progress-create");
+    let references_depend_on_readiness = has("--references-depend-on-readiness");
     let server_name = flags
         .iter()
         .position(|flag| flag == "--server-name")
@@ -186,7 +191,18 @@ fn main() {
                     }),
                 );
             }
+            "textDocument/references" if references_depend_on_readiness => {
+                let result = if fake_readiness == "ready" {
+                    json!([{"uri": "file:///fake/b.rs", "range": {"start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 10}}}])
+                } else {
+                    json!([])
+                };
+                respond(&mut stdout, id, result);
+            }
             "$/fake/emitServerStatus" => {
+                if let Some(quiescent) = params.get("quiescent").and_then(Value::as_bool) {
+                    fake_readiness = if quiescent { "ready" } else { "indexing" }.to_string();
+                }
                 send(
                     &mut stdout,
                     json!({

@@ -22,7 +22,7 @@
 
 ## 開発環境
 
-- `flake.nix` が Rust ツールチェーン・rust-analyzer・go・gopls を固定する（nixpkgs はシステム構成と同じ rev）。`nix develop` か direnv（`.envrc` は `use flake` + `PATH_add target/release`。グローバルの gitignore で追跡外なので手元で作る）で入る
+- `flake.nix` が Rust ツールチェーン・rust-analyzer・go・gopls を固定する（nixpkgs はシステム構成と同じ rev）。`nix develop` か direnv（`.envrc` は `use flake` + `PATH_add target/release`。グローバルの gitignore に負けるので `git add -f` で追跡している）で入る
 - 言語サーバーの版は保証の宣言に直結する（`src/adapter/*/TESTED_VERSIONS`）。`flake.lock` を更新して版が変わったら `cargo test --test conformance -- --ignored` を通してから一覧を動かす
 - ドッグフーディングは `dogfood/README.md`（`cargo build --release` → `claude --plugin-dir dogfood/claude-plugin`）
 

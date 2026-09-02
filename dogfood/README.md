@@ -4,13 +4,9 @@ Claude Code に、rust-analyzer と gopls を lsp-det 経由で起動させる�
 
 ## 手順
 
-1. 作業ツリーの `lsp-det` を PATH に置く（`.lsp.json` の `command` は PATH 上のバイナリを前提とする）。グローバルにはインストールしない。リポジトリ直下の `.envrc`（direnv。グローバルの gitignore で追跡外なので手元で作る）で開発環境を読み込み、`target/release` を PATH に足す
+1. 作業ツリーの `lsp-det` を PATH に置く（`.lsp.json` の `command` は PATH 上のバイナリを前提とする）。グローバルにはインストールしない。リポジトリ直下の `.envrc`（direnv）が開発環境（`flake.nix`）を読み込み、`target/release` を PATH に足す
 
    ```bash
-   cat > .envrc <<'EOF2'
-   use flake
-   PATH_add target/release
-   EOF2
    direnv allow
    cargo build --release
    which lsp-det   # → target/release/lsp-det

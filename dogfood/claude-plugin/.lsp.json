@@ -1,0 +1,12 @@
+{
+  "rust-analyzer-via-lsp-det": {
+    "command": "lsp-det",
+    "args": ["--", "rust-analyzer"],
+    "extensionToLanguage": { ".rs": "rust" }
+  },
+  "gopls-via-lsp-det": {
+    "command": "lsp-det",
+    "args": ["--", "gopls"],
+    "extensionToLanguage": { ".go": "go" }
+  }
+}

@@ -36,8 +36,8 @@ enum Event {
 /// クライアントと上流を中継し、プロキシ自身の終了コードを返す。
 ///
 /// `adapter` を渡すと上流の readiness を追跡する (v0.1-design.md 5 章)。
-/// `None` でも上流側 は提供する。両軸 `unknown` と消失時の
-/// `dead` だけを出す (v0.1-design.md 4.1、ADR 0008)。
+/// `None` でも上流側は宣言し、両軸 `unknown` を報告する (仕様 8.2 の 3)。
+/// 上流の消失は通知ではなく接続の終了で伝える (仕様 8.2 の 7)。
 pub fn run<R, W>(
     client_in: R,
     client_out: W,
@@ -277,6 +277,9 @@ impl UpstreamSide {
                 NotASuccess => {
                     // エラー応答。handshake は完了しておらず、クライアントは
                     // initialize を再試行しうる。溜めた遷移もまだ流さない。
+                    // この id には応答済みなので、宙に浮いたリクエストでは
+                    // なくなる (上流が消えても二重に応答しない)。
+                    self.initialize_id = None;
                     return (msg, None);
                 }
                 UpstreamDeclares => {

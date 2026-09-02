@@ -7,7 +7,7 @@
 
 ## 本文書の位置づけ
 
-本文書は 3 拡張（宣言範囲・サーバー状態・起動マニフェスト）の仕様化と標準化に関する**長期構想**である。拡張 S（サーバー状態）の規範は [spec/extension-s-server-state.md](spec/extension-s-server-state.md)、現在の実装スコープは [v0.1-design.md](v0.1-design.md) に定義する。本文書のうち、5 章（上流への提案経路）と 6.7 の標準化用調査タスクは凍結中であり、v0.1 が安定稼働した後に再開を判断する。スコープ選定の理由は [adr/0001-tool-first-readiness-gate.md](adr/0001-tool-first-readiness-gate.md) と [adr/0003-extension-s-zero-based.md](adr/0003-extension-s-zero-based.md) を参照。
+本文書は 3 拡張（宣言範囲・サーバー状態・起動マニフェスト）の仕様化と標準化に関する**長期構想**である。拡張 S（サーバー状態）の規範は [spec/server-state.md](spec/server-state.md)、現在の実装スコープは [v0.1-design.md](v0.1-design.md) に定義する。本文書のうち、5 章（上流への提案経路）と 6.7 の標準化用調査タスクは凍結中であり、v0.1 が安定稼働した後に再開を判断する。スコープ選定の理由は [adr/0001-tool-first-readiness-gate.md](adr/0001-tool-first-readiness-gate.md) と [adr/0003-extension-s-zero-based.md](adr/0003-extension-s-zero-based.md) を参照。
 
 ---
 
@@ -159,14 +159,14 @@ interface ServerCapabilities {
 
 ### 2.2 規定
 
-規範は [spec/extension-s-server-state.md](spec/extension-s-server-state.md) を正とする。要点:
+規範は [spec/server-state.md](spec/server-state.md) を正とする。要点:
 
 - `workspace/serverState` リクエストと `workspace/serverStateChanged` 通知で `ServerState` を返す
-- `ServerState` は `health`（`ok | warning | error | dead | unknown`）と `readiness`（`initializing | indexing | ready | unknown`）の 2 軸。`dead` と `unknown` は観測者（中継層）だけが出せる値
-- `ready` は、`health` が `error | dead` でない限り、宣言したグレードに応じて完全性（結果が後から増えない）と鮮度（受信済み didChange を織り込み済み）を保証する
+- `ServerState` は `health`（`ok | warning | error`）と `readiness`（`initializing | indexing | ready`）の 2 軸。サーバーの外から観測する主体（プロキシ、クライアントライブラリ等）は両軸に `unknown` を足せる。サーバーの死は値ではなく接続の終了で伝える
+- `ready` は、`health` が `error` でない限り、宣言した保証（`completeness` / `freshness`）に応じて完全性（結果が後から増えない）と鮮度（受信済み didChange を織り込み済み）を保証する
 - 診断フェーズ・鮮度トークンは前方互換な将来拡張として予約
 
-旧称「拡張 B (Readiness)」は readiness のみを扱っていたが、health・鮮度と統合して拡張 S に再定義した（[adr/0003](adr/0003-extension-s-zero-based.md)）。初期草案にあった `$partial` 注釈・`completeMethods` は、配列応答に付けられず無改造クライアントに効果がないため廃止した。
+旧称「拡張 B (Readiness)」は readiness のみを扱っていたが、health・鮮度と統合してサーバー状態に再定義した（[adr/0003](adr/0003-extension-s-zero-based.md)）。仕様の 2 層化と `dead` の削除は [adr/0009](adr/0009-success-criterion-and-two-sided-reference.md)。初期草案にあった `$partial` 注釈・`completeMethods` は、配列応答に付けられず無改造クライアントに効果がないため廃止した。
 
 ---
 

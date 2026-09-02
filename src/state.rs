@@ -1,4 +1,8 @@
-//! 拡張 S の `ServerState` (docs/spec/extension-s-server-state.md 3 章)。
+//! サーバー状態プロトコルの `ServerState`（docs/spec/server-state.md）。
+//!
+//! 注意: 本モジュールは ADR 0009 以前の仕様に基づいており、`Dead` を持つ。
+//! 改訂後の仕様（`dead` の削除、`unknown` の 8 章への移動）への追従は
+//! ADR 0009 E-2 の実装 PR で行う。
 //!
 //! `health` と `readiness` は独立の 2 軸。`message` は人間向けの補足であり
 //! 機械判定に使ってはならない。ワイヤ形式は仕様が規範なので、本モジュールの

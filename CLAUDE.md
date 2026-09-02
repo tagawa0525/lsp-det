@@ -38,7 +38,7 @@
 - **M4 — gopls の写像 完了**（2026-09-03）: `src/adapter/gopls.rs`（`$/progress` の "Setting up workspace" と "Error loading workspace" からの合成。写像は `adapter::Mapping` trait に統一し `adapter/{mod,rust_analyzer,gopls}.rs` に分割）。実 gopls v0.23.0 で 7.1 / 7.2 / 7.3 と go.mod 変更時の再発行なしを確認し（`docs/research/gopls-readiness-measurement.md`）、`{completeness, freshness}` を v0.23.0 の範囲で宣言。`serverInfo.version` はビルド情報の JSON 文字列。実サーバー結合テストは `cargo test --test conformance -- --ignored`（rust-analyzer 4 件 + gopls 4 件）
 - **M5（v0.1 後）**: Serena 統合・宣言範囲の再評価・上流 PR
 
-観測項目（ドッグフーディングで拾う事実）: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007：通常編集では往復しない）。
+ドッグフーディングは `dogfood/README.md` の手順（`cargo install --path .` → `claude --plugin-dir dogfood/claude-plugin`）。観測項目（ドッグフーディングで拾う事実）: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007：通常編集では往復しない）。
 
 ### この開発環境の rust-analyzer 起動不能問題（2026-08-28 解消）
 

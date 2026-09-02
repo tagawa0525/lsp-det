@@ -1,0 +1,5 @@
+{
+  "name": "lsp-det-dogfood",
+  "description": "lsp-det 経由で rust-analyzer と gopls を起動する。ドッグフーディング（観測手段）用",
+  "version": "0.1.0"
+}

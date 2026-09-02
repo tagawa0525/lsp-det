@@ -321,6 +321,28 @@ impl ConformanceClient {
         true
     }
 
+    /// 被験者が接続を閉じるまで読み、その間に**応答**（id 付きで method の
+    /// ないメッセージ）が届かなかったことを確かめる。応答済みの id に
+    /// 二重応答しないことの検証に使う。
+    pub fn expect_no_response_until_closed(&mut self) -> bool {
+        let deadline = std::time::Instant::now() + DEFAULT_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.incoming.recv_timeout(remaining) {
+                Ok(Incoming::Message(message)) => {
+                    if message.get("id").is_some() && message.get("method").is_none() {
+                        return false;
+                    }
+                    self.stash(message);
+                }
+                Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => return true,
+                Err(RecvTimeoutError::Timeout) => {
+                    panic!("応答が来ないことを確かめている間、被験者が閉じなかった")
+                }
+            }
+        }
+    }
+
     pub fn did_open(&mut self, path: &std::path::Path, language_id: &str) {
         let text = std::fs::read_to_string(path).expect("開くファイルを読めない");
         self.notify(

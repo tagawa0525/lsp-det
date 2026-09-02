@@ -424,6 +424,27 @@ fn death_during_a_retried_initialize_is_still_closed_with_an_error() {
 }
 
 #[test]
+fn an_answered_initialize_is_not_answered_again_when_the_upstream_dies() {
+    // initialize にエラー応答が返った時点で、その id は宙に浮いていない。
+    // その後に上流が消えても、同じ id に二重に応答してはならない
+    // (JSON-RPC は 1 リクエスト 1 応答)。
+    let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
+        "--fail-first-initialize",
+        "--exit-after-initialize-error",
+    ]);
+    let mut client = ConformanceClient::start(&server);
+    let first = client.initialize_raw(true);
+    assert!(
+        first.get("error").is_some(),
+        "偽上流は 1 回目を失敗させるはず"
+    );
+    assert!(
+        client.expect_no_response_until_closed(),
+        "応答済みの initialize に、上流消失時にもう一度応答した"
+    );
+}
+
+#[test]
 fn an_upstream_that_dies_before_answering_initialize_does_not_hang_the_client() {
     // 起動時クラッシュ。仕様 8.2 の 7: 未応答のリクエストにエラーを応答して
     // から接続を閉じる。

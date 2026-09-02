@@ -1,13 +1,13 @@
 # LSP Deterministic Extensions — 長期構想 (Vision)
 
 > LSP (Language Server Protocol) の応答を、クライアントが解釈なしに機械的に扱えるようにするための最小限の拡張。
-> 既存の LSP を置き換えず、**準拠すれば補正が不要になる** 3 点のみを規定する。
+> 既存の LSP を置き換えず、**準拠すれば補正が不要になる**仕様を定める。現在の中核はサーバー状態で、宣言範囲と起動の宣言は凍結中（[adr/0003](adr/0003-extension-s-zero-based.md) 決定 6）。
 > 動機はコーディングエージェントだが、対象はエディタを含むすべての LSP クライアント。
 > 本草案は日本語。上流提案時は英訳する。
 
 ## 本文書の位置づけ
 
-本文書は 3 拡張（宣言範囲・サーバー状態・起動マニフェスト）の仕様化と標準化に関する**長期構想**である。拡張 S（サーバー状態）の規範は [spec/server-state.md](spec/server-state.md)、現在の実装スコープは [v0.1-design.md](v0.1-design.md) に定義する。本文書のうち、5 章（上流への提案経路）と 6.7 の標準化用調査タスクは凍結中であり、v0.1 が安定稼働した後に再開を判断する。スコープ選定の理由は [adr/0001-tool-first-readiness-gate.md](adr/0001-tool-first-readiness-gate.md) と [adr/0003-extension-s-zero-based.md](adr/0003-extension-s-zero-based.md) を参照。
+本文書は 3 拡張（宣言範囲・サーバー状態・起動マニフェスト）の仕様化と標準化に関する**長期構想**である。サーバー状態の規範は [spec/server-state.md](spec/server-state.md)、現在の実装スコープは [v0.1-design.md](v0.1-design.md) に定義する。本文書のうち、5 章（上流への提案経路）と 6.7 の標準化用調査タスクは凍結中であり、v0.1 が安定稼働した後に再開を判断する。スコープ選定の理由は [adr/0001-tool-first-readiness-gate.md](adr/0001-tool-first-readiness-gate.md) と [adr/0003-extension-s-zero-based.md](adr/0003-extension-s-zero-based.md) を参照。
 
 ---
 
@@ -27,7 +27,7 @@ LSP は「エディタが表示するための情報」を返す前提で設計�
 
 コーディングエージェントはこの補いを持たない。応答を文字通り信じて機械的に切り貼りするため、同じ緩さが直接の破損として現れる。また 1 クライアントで全言語を扱うため、エディタ界に分散していた補正コストが一箇所に積み上がる（Serena の言語別コード約 2.7 万行）。
 
-つまりエージェントは問題を**新しく作った**のではなく、**可視化し、動機を強くした**。本仕様は 3 点を締めることで、エージェントとエディタの両方から補正を消すことを目的とする。
+つまりエージェントは問題を**新しく作った**のではなく、**可視化し、動機を強くした**。本仕様は「無言の嘘を消す」という問題定義のもとで語彙を締め、エージェントとエディタの両方から補正を消すことを目的とする。
 
 ### 非目的
 
@@ -39,7 +39,7 @@ LSP は「エディタが表示するための情報」を返す前提で設計�
 ### 設計原則
 
 1. **後方互換**: 非準拠サーバーはそのまま動く。準拠は capability で宣言する
-2. **要求最小**: サーバーに求めるのは 3 点のみ。これ以上増やさない
+2. **要求最小**: サーバーに求めるのは問題定義から導かれる最小の語彙だけ。将来候補はサーバー状態の語彙の拡張として増やし、独立した仕様を安易に足さない
 3. **準拠テストが本体**: 文章で書いても守られない（`documentSymbol.range` の前例）。テストで検証可能なものだけ規定する
 4. **プロキシで先行**: 非準拠サーバーを準拠して見せる参照プロキシを提供し、上流の対応を待たずに使えるようにする
 
@@ -65,7 +65,7 @@ LSP は「エディタが表示するための情報」を返す前提で設計�
 
 ---
 
-## 1. 拡張 A: 宣言範囲の契約 (Declaration Range Contract)
+## 1. 宣言範囲の契約 (Declaration Range Contract)
 
 ### 1.1 問題
 
@@ -151,7 +151,7 @@ interface ServerCapabilities {
 
 ---
 
-## 2. 拡張 S: サーバー状態 (Server State)
+## 2. サーバー状態 (Server State)
 
 ### 2.1 問題
 
@@ -170,7 +170,7 @@ interface ServerCapabilities {
 
 ---
 
-## 3. 拡張 C: 起動の宣言 (Launch Manifest)
+## 3. 起動の宣言 (Launch Manifest)
 
 ### 3.1 問題
 
@@ -266,12 +266,12 @@ interface Shim {
 ### 4.1 動作
 
 ```text
-Agent ──[LSP + 拡張 A/B]── Proxy ──[LSP]── Language Server
+Agent ──[LSP + 宣言範囲 + サーバー状態]── Proxy ──[LSP]── Language Server
 ```
 
 - クライアントからは準拠サーバーに見える
-- 上流が拡張 A に準拠していれば透過。していなければマニフェストの `shims` と言語別補正コードで `declarationRange` を合成する
-- 上流が拡張 S に準拠していれば透過。していなければ `$/progress` の監視、既知の初期化完了パターン、プロセス監視、タイムアウトから `ServerState` を推定する
+- 上流が宣言範囲に準拠していれば透過。していなければマニフェストの `shims` と言語別補正コードで `declarationRange` を合成する
+- 上流がサーバー状態に準拠していれば透過。していなければ `$/progress` の監視、既知の初期化完了パターン、プロセス監視から `ServerState` を推定する（経過時間からは推定しない。[spec/server-state.md](spec/server-state.md) 6 章 6 項）
 - マニフェストに従って上流を起動する
 
 ### 4.2 設計制約
@@ -293,7 +293,7 @@ gopls, rust-analyzer, typescript-language-server, pyright, clangd の 5 つ。
 
 1. 5 言語のプロキシと準拠テストを公開
 2. 各上流に「`declarationRange` と `workspace/serverState` を実装すれば、プロキシの補正コードが N 行消える」という issue を実測付きで立てる。gopls と rust-analyzer を先に
-3. 上流が 1 つでも取り込んだら、LSP 本体（microsoft/language-server-protocol）に proposal を出す。拡張 S は既存 issue #511 のスレッドに「エージェント用途からの再提案」として接続し、拡張 A は新規 issue とする。`proposed` 状態の拡張として `3.18` 以降のサイクルに載せることを目標にする。拡張 C は LSP 本体の対象外なので別仕様として出す
+3. 上流が 1 つでも取り込んだら、LSP 本体（microsoft/language-server-protocol）に proposal を出す。サーバー状態は既存 issue #511 のスレッドに「エージェント用途からの再提案」として接続し、宣言範囲は新規 issue とする。`proposed` 状態の拡張として `3.18` 以降のサイクルに載せることを目標にする。起動の宣言は LSP 本体の対象外なので別仕様として出す
 4. LSAP 等の上位レイヤーには、本仕様を前提とすることで自前の補正を消せることを提示し、依存してもらう
 
 ---
@@ -304,12 +304,12 @@ gopls, rust-analyzer, typescript-language-server, pyright, clangd の 5 つ。
 
 ### 6.1 LSP 本体
 
-| 項目                                                       | 内容                                                 | 本仕様との関係                                                |
-| ---------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------- |
-| `DocumentSymbol.range` の仕様文                            | 「先頭・末尾の空白を除き、コメント等を含む囲む範囲」 | 拡張 A が締める対象。準拠テストがないため守られていない       |
-| `selectionRange`                                           | 名前のみの範囲。3.10 で `range` と分離された         | 拡張 A の `body` / `full` は同じ発想の延長                    |
-| `$/progress` / `window/workDoneProgress`                   | 3.15 で追加。任意。トークンとタイトルは自由          | 拡張 S の前身。「何が終わると何が答えられるか」を表現できない |
-| `workspace/didChangeWatchedFiles` 等の capability 宣言方式 | 任意機能は capability で宣言                         | 拡張 A/B の宣言方式はこれに合わせる                           |
+| 項目                                                       | 内容                                                 | 本仕様との関係                                                     |
+| ---------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------ |
+| `DocumentSymbol.range` の仕様文                            | 「先頭・末尾の空白を除き、コメント等を含む囲む範囲」 | 宣言範囲が締める対象。準拠テストがないため守られていない           |
+| `selectionRange`                                           | 名前のみの範囲。3.10 で `range` と分離された         | 宣言範囲の `body` / `full` は同じ発想の延長                        |
+| `$/progress` / `window/workDoneProgress`                   | 3.15 で追加。任意。トークンとタイトルは自由          | サーバー状態の前身。「何が終わると何が答えられるか」を表現できない |
+| `workspace/didChangeWatchedFiles` 等の capability 宣言方式 | 任意機能は capability で宣言                         | 宣言範囲とサーバー状態の宣言方式はこれに合わせる                   |
 
 #### 3.18 の新機能（競合確認済み・2026-08-27 時点）
 
@@ -330,15 +330,15 @@ gopls, rust-analyzer, typescript-language-server, pyright, clangd の 5 つ。
 
 #### 関連する既存 issue（microsoft/language-server-protocol）
 
-| Issue                                                        | 内容                                                                                                                                                                | 状態              | 本仕様との関係                                                                                                                                                                                                                                                                                                                                             |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| #511 "Discussion: LSP-server readiness indicator"（2018-06） | Java 拡張・OmniSharp が各自でステータスバーに準備状態を出している。標準化を提案し、`window/showStatus`（type / actions / message / shortMessage）を実装例として提示 | **Open、Backlog** | 拡張 S に最も近い先行提案。ただし**人間向け UI（ステータスバー表示）**を目的としており、機械可読な「どのメソッドが完全な結果を返せるか」は含まない。拡張 S は #511 を引用しつつ「表示ではなく判定のための状態」として差別化する。8 年放置されているのは、UI 目的なら各エディタが独自にやれば済んだからで、エージェント用途という新しい動機を示す必要がある |
-| #54 "Clarification for the Indexing workflow"（2016-08）     | インデックス構築中のクライアント・サーバー間の通信が仕様にない                                                                                                      | 古い              | 拡張 S の問題意識と同一。最初期から認識されていた穴                                                                                                                                                                                                                                                                                                        |
-| #312 "filtering documentSymbol operation"（2017）            | 範囲指定で documentSymbol を絞る提案                                                                                                                                | —                 | 拡張 A とは別の話。無関係                                                                                                                                                                                                                                                                                                                                  |
+| Issue                                                        | 内容                                                                                                                                                                | 状態              | 本仕様との関係                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #511 "Discussion: LSP-server readiness indicator"（2018-06） | Java 拡張・OmniSharp が各自でステータスバーに準備状態を出している。標準化を提案し、`window/showStatus`（type / actions / message / shortMessage）を実装例として提示 | **Open、Backlog** | サーバー状態に最も近い先行提案。ただし**人間向け UI（ステータスバー表示）**を目的としており、機械可読な「どのメソッドが完全な結果を返せるか」は含まない。サーバー状態は #511 を引用しつつ「表示ではなく判定のための状態」として差別化する。8 年放置されているのは、UI 目的なら各エディタが独自にやれば済んだからで、エージェント用途という新しい動機を示す必要がある |
+| #54 "Clarification for the Indexing workflow"（2016-08）     | インデックス構築中のクライアント・サーバー間の通信が仕様にない                                                                                                      | 古い              | サーバー状態の問題意識と同一。最初期から認識されていた穴                                                                                                                                                                                                                                                                                                             |
+| #312 "filtering documentSymbol operation"（2017）            | 範囲指定で documentSymbol を絞る提案                                                                                                                                | —                 | 宣言範囲とは別の話。無関係                                                                                                                                                                                                                                                                                                                                           |
 
-`declarationRange` に相当する提案（キーワード・デコレータを含む完全な宣言範囲の規定）は、追加検索でも**見つからなかった**。関連して見つかったのは #613（`document/extendSelection`、後の `selectionRange` の起源）と #1270（`selectionRange` の null 応答の扱い）で、いずれも「範囲の意味を厳密化する」提案ではない。`DocumentSymbol.range` の仕様文（"not including leading/trailing whitespace but everything else like comments"）は `LocationLink.targetRange` からの流用で、3.14 から一度も改訂されていない。**拡張 A は新規提案として出せる。**
+`declarationRange` に相当する提案（キーワード・デコレータを含む完全な宣言範囲の規定）は、追加検索でも**見つからなかった**。関連して見つかったのは #613（`document/extendSelection`、後の `selectionRange` の起源）と #1270（`selectionRange` の null 応答の扱い）で、いずれも「範囲の意味を厳密化する」提案ではない。`DocumentSymbol.range` の仕様文（"not including leading/trailing whitespace but everything else like comments"）は `LocationLink.targetRange` からの流用で、3.14 から一度も改訂されていない。**宣言範囲は新規提案として出せる。**
 
-起動マニフェスト（拡張 C）に相当する提案は LSP 本体には存在しない。LSP は「サーバーの起動はクライアントの責任」と明記しており、仕様の対象外という立場。拡張 C は LSP 本体への提案ではなく、別仕様（レジストリ）として出すのが筋。
+起動の宣言に相当する提案は LSP 本体には存在しない。LSP は「サーバーの起動はクライアントの責任」と明記しており、仕様の対象外という立場。起動の宣言は LSP 本体への提案ではなく、別仕様（レジストリ）として出すのが筋。
 
 #### Base Protocol 0.9 (Upcoming) — 確認済み
 
@@ -346,26 +346,26 @@ LSP から「言語サーバーに依存しない共通部分」を切り出し�
 
 拡張との関係:
 
-- 拡張 A（宣言範囲）: 無関係。LSP 側の `DocumentSymbol` の話
-- 拡張 S（サーバー状態）: **Base Protocol 側に置く方が筋が良い可能性がある**。「サーバーが生きていて要求に完全に答えられるか」は言語サーバーに限らない概念で、Base Protocol のライフサイクル（initialize 〜 shutdown）の一部として提案できる。`health` / `readiness` の 2 軸はどちらも言語非依存
-- 拡張 C（起動）: Base Protocol も起動方法は対象外。変わらず別仕様
+- 宣言範囲: 無関係。LSP 側の `DocumentSymbol` の話
+- サーバー状態: **Base Protocol 側に置く方が筋が良い可能性がある**。「サーバーが生きていて要求に完全に答えられるか」は言語サーバーに限らない概念で、Base Protocol のライフサイクル（initialize 〜 shutdown）の一部として提案できる。`health` / `readiness` の 2 軸はどちらも言語非依存
+- 起動の宣言: Base Protocol も起動方法は対象外。変わらず別仕様
 
-Base Protocol はまだ 0.9 で、既存 issue から切り出された capability 名の予約リストを持っている。拡張 S の capability 名（`serverStateProvider`）が将来の予約と衝突しないか、提案時に確認する。
+Base Protocol はまだ 0.9 で、既存 issue から切り出された capability 名の予約リストを持っている。サーバー状態の capability 名（`serverStateProvider`）が将来の予約と衝突しないか、提案時に確認する。
 
 ### 6.2 各言語サーバーの「準備完了」の実態
 
-solidlsp の言語別クラスが実際に何を待っているかを読んだ結果。拡張 S の必要性を示す**一次証拠**であり、上流提案時にこの表をそのまま使う。
+solidlsp の言語別クラスが実際に何を待っているかを読んだ結果。サーバー状態の必要性を示す**一次証拠**であり、上流提案時にこの表をそのまま使う。
 
-| サーバー                   | 準備完了の判定方法（solidlsp の実装）                                                                                                                                                                                                                                         | 評価                                                                                                                                           |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| rust-analyzer              | 独自拡張 `experimental/serverStatus` の `quiescent: true` を待つ。タイムアウト付き                                                                                                                                                                                            | 最も機械可読。拡張 S に最も近い既存実装                                                                                                        |
-| jdtls                      | 独自通知 `language/status` の `type: "ServiceReady"` と `type: "ProjectStatus", message: "OK"` の 2 段階を待つ                                                                                                                                                                | 機械可読だが完全に独自形式。「サービス準備」と「プロジェクト準備」を区別している点は拡張 S の `initializing` / `indexing` / `ready` と対応する |
-| pyright                    | `window/logMessage` の**本文を正規表現** `Found \d+ source files?` でマッチして判定。コード内コメントに「pyright は信頼できず、これより良い方法がない」とある。`experimental/serverStatus` も補助的に監視                                                                     | **人間向けログを機械が読んでいる**。仕様がないことの典型例                                                                                     |
-| typescript-language-server | `$/progress` の `end` を待つが、tsserver がクラッシュした時も同じ `end` が来て区別できないため、`window/logMessage` の異常終了パターンを別途監視。「インデックスを始めるまでの猶予」（5 秒）、「インデックス完了」（30 秒）、「準備完了」（10 秒）の 3 つのタイムアウトを持つ | `$/progress` が「完了」と「中断」を区別できない実例                                                                                            |
-| clangd                     | 判定なし。コード内コメントに「clangd は準備完了時に意味のある通知を送らない」「これはイベントの目的を無にしている」とある                                                                                                                                                     | **判定不能**                                                                                                                                   |
-| gopls                      | 判定なし。「通常 initialize 直後に準備完了」とコメント                                                                                                                                                                                                                        | 実際は大規模モジュールで空応答が返る（Serena issue #890 等）が、判定手段がないので無視している                                                 |
+| サーバー                   | 準備完了の判定方法（solidlsp の実装）                                                                                                                                                                                                                                         | 評価                                                                                                                                                |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| rust-analyzer              | 独自拡張 `experimental/serverStatus` の `quiescent: true` を待つ。タイムアウト付き                                                                                                                                                                                            | 最も機械可読。サーバー状態に最も近い既存実装                                                                                                        |
+| jdtls                      | 独自通知 `language/status` の `type: "ServiceReady"` と `type: "ProjectStatus", message: "OK"` の 2 段階を待つ                                                                                                                                                                | 機械可読だが完全に独自形式。「サービス準備」と「プロジェクト準備」を区別している点はサーバー状態の `initializing` / `indexing` / `ready` と対応する |
+| pyright                    | `window/logMessage` の**本文を正規表現** `Found \d+ source files?` でマッチして判定。コード内コメントに「pyright は信頼できず、これより良い方法がない」とある。`experimental/serverStatus` も補助的に監視                                                                     | **人間向けログを機械が読んでいる**。仕様がないことの典型例                                                                                          |
+| typescript-language-server | `$/progress` の `end` を待つが、tsserver がクラッシュした時も同じ `end` が来て区別できないため、`window/logMessage` の異常終了パターンを別途監視。「インデックスを始めるまでの猶予」（5 秒）、「インデックス完了」（30 秒）、「準備完了」（10 秒）の 3 つのタイムアウトを持つ | `$/progress` が「完了」と「中断」を区別できない実例                                                                                                 |
+| clangd                     | 判定なし。コード内コメントに「clangd は準備完了時に意味のある通知を送らない」「これはイベントの目的を無にしている」とある                                                                                                                                                     | **判定不能**                                                                                                                                        |
+| gopls                      | 判定なし。「通常 initialize 直後に準備完了」とコメント                                                                                                                                                                                                                        | 実際は大規模モジュールで空応答が返る（Serena issue #890 等）が、判定手段がないので無視している                                                      |
 
-**まとめ**: 5+1 サーバーで、機械可読な準備完了通知を持つのは rust-analyzer と jdtls の 2 つのみで、しかも形式が異なる。残りは `$/progress` の曖昧さ、ログの正規表現、または諦め。これが「LSP に準備完了の標準がない」ことの実害であり、拡張 S の根拠になる。
+**まとめ**: 5+1 サーバーで、機械可読な準備完了通知を持つのは rust-analyzer と jdtls の 2 つのみで、しかも形式が異なる。残りは `$/progress` の曖昧さ、ログの正規表現、または諦め。これが「LSP に準備完了の標準がない」ことの実害であり、サーバー状態の根拠になる。
 
 **上流提案の優先順**: rust-analyzer（既に概念を持つ）→ jdtls（同上、形式変更のみ）→ pyright（Microsoft 製。ログ依存の現状を示せば動機は明確）→ gopls → clangd → tsserver。
 
@@ -373,9 +373,9 @@ solidlsp の言語別クラスが実際に何を待っているかを読んだ�
 
 rust-analyzer は独自拡張として `experimental/serverStatus` 通知を送り、`quiescent: true` でインデックス完了を伝える。
 
-- 拡張 S の**最も近い既存実装**。`health` / `quiescent` / `message` の 3 フィールド
+- サーバー状態の**最も近い既存実装**。`health` / `quiescent` / `message` の 3 フィールド
 - pyright と clangd も solidlsp 側で同じ通知名を監視している（rust-analyzer に倣った実装が他サーバーにも広がりつつある可能性。**要調査**: pyright / clangd が実際に `experimental/serverStatus` を送っているか、それとも solidlsp が念のため監視しているだけか）
-- 拡張 S は `experimental/serverStatus` の後継として、`health` を保ち `quiescent` を `readiness` の 3 値に拡張した形と位置づけると、rust-analyzer 側の移行コストが最小になる
+- サーバー状態は `experimental/serverStatus` の後継として、`health` を保ち `quiescent` を `readiness` の 3 値に拡張した形と位置づけると、rust-analyzer 側の移行コストが最小になる
 
 ### 6.4 エディタ側の実装
 
@@ -390,13 +390,13 @@ rust-analyzer は独自拡張として `experimental/serverStatus` 通知を送�
 
 - nvim-lspconfig: 言語ごとに `cmd`, `filetypes`, `root_markers`, `settings` を Lua テーブルで宣言。起動と初期化オプションの**事実上の標準スキーマ**
 - Mason registry: `package.yaml` に `source.id` を purl 形式（`pkg:npm/...`, `pkg:github/...`, `pkg:golang/...`）で記述し、`bin` で実行ファイルを指定。入手方法の**事実上の標準**。extra_packages、build ステップ、schemas.lsp（設定スキーマの URL）も持つ
-- 拡張 C のマニフェストは、この 2 つの合成に近い。独自形式を作るより **purl と nvim-lspconfig の語彙を流用**する方が採用されやすい
+- 起動の宣言のマニフェストは、この 2 つの合成に近い。独自形式を作るより **purl と nvim-lspconfig の語彙を流用**する方が採用されやすい
 - **要調査**: Neovim 0.11 の `vim.lsp.config` で lspconfig の形式がどう変わったか
 
 #### Zed
 
 - `LspAdapter` トレイト（初期化パラメータ、環境変数、補完ラベル）と `LspInstaller` トレイト（バイナリの検出・取得・キャッシュ）を分離。`check_if_user_installed()` で PATH と toolchain 内を先に探し、なければ自前で取得。SHA-256 で検証
-- 拡張 C の `install.detect` → `sources` の順序は Zed と同じ設計
+- 起動の宣言の `install.detect` → `sources` の順序は Zed と同じ設計
 - Rust 実装なので、参照プロキシの設計上参考にできる部分が多い
 - 拡張機能は WASM で書き、同じトレイトを実装する
 - **要調査**: Zed の rust-analyzer アダプタが `serverStatus` をどう扱っているか。範囲補正の有無
@@ -426,19 +426,19 @@ rust-analyzer は独自拡張として `experimental/serverStatus` 通知を送�
 
 - `SolidLanguageServer` 基底クラスを言語ごとに継承。multilspy の設計を継承
 - 言語別クラスが上書きしているフック（頻度順）:
-  - `__init__` (78), `_start_server` (75), `_create_base_initialize_params` (75) — 起動と初期化。拡張 C が吸収する部分
-  - `is_ignored_dirname` (56) — 無視ディレクトリ。マニフェストに入れるべき項目として**拡張 C に追加検討**
-  - `_create_dependency_provider` (44), `_setup_runtime_dependencies` (16) — 入手。拡張 C
-  - `_get_wait_time_for_cross_file_referencing` (14) — 準備完了の代替として**固定秒数の待ち**を言語ごとに持っている。拡張 S が消す対象
-  - `_document_symbols_cache_fingerprint` (10), `_normalize_symbol_name` (9), `request_document_symbols` (8) — 範囲・シンボルの補正。拡張 A が消す対象
+  - `__init__` (78), `_start_server` (75), `_create_base_initialize_params` (75) — 起動と初期化。起動の宣言が吸収する部分
+  - `is_ignored_dirname` (56) — 無視ディレクトリ。マニフェストに入れるべき項目として**起動の宣言に追加検討**
+  - `_create_dependency_provider` (44), `_setup_runtime_dependencies` (16) — 入手。起動の宣言
+  - `_get_wait_time_for_cross_file_referencing` (14) — 準備完了の代替として**固定秒数の待ち**を言語ごとに持っている。サーバー状態が消す対象
+  - `_document_symbols_cache_fingerprint` (10), `_normalize_symbol_name` (9), `request_document_symbols` (8) — 範囲・シンボルの補正。宣言範囲が消す対象
   - `request_text_document_diagnostics` (8) — pull/push 診断の違いの吸収
 - `dependency_provider.py` — 入手方法の抽象化。Mason の purl に相当するが独自形式
 
 **本仕様にとっての価値**
 
 - 74 言語分の「どこが標準から外れているか」の**実測記録**。各クラスの上書き内容を読めば、準拠テストの fixture に入れるべきケースが分かる
-- 特に `_get_wait_time_for_cross_file_referencing` の値と `request_document_symbols` の上書きは、拡張 A/B の必要性を示す証拠として上流提案に使える
-- **要調査**: 74 クラスの上書き内容を分類し、「マニフェストで表現可能」「shims で表現可能」「コードが必要」の 3 つに振り分ける。これが拡張 C の `Shim` の設計根拠になる
+- 特に `_get_wait_time_for_cross_file_referencing` の値と `request_document_symbols` の上書きは、宣言範囲とサーバー状態の必要性を示す証拠として上流提案に使える
+- **要調査**: 74 クラスの上書き内容を分類し、「マニフェストで表現可能」「shims で表現可能」「コードが必要」の 3 つに振り分ける。これが起動の宣言の `Shim` の設計根拠になる
 
 **引き継がない点**
 
@@ -460,7 +460,7 @@ rust-analyzer は独自拡張として `experimental/serverStatus` 通知を送�
 - 14 の意味的ツール（`impact`, `context` 等の合成含む）。上流 LSP が機能を欠く場合の**フォールバック戦略を仕様に含める**点は本仕様に近い
 - 参照実装 Zerox.Lsai は 10 言語、E2E 検証済み
 - ライセンスのため標準にはなり得ないが、フォールバック戦略の分類は参考になる
-- **要調査**: spec/LSAI-v1.4.md のフォールバック定義を読み、拡張 C の `Shim` に流用できる分類がないか
+- **要調査**: spec/LSAI-v1.4.md のフォールバック定義を読み、起動の宣言の `Shim` に流用できる分類がないか
 
 #### その他の MCP ブリッジ
 
@@ -474,12 +474,12 @@ rust-analyzer は独自拡張として `experimental/serverStatus` 通知を送�
 優先順:
 
 1. [x] LSP 3.18 に競合する proposal がないか確認 → なし（6.1 参照）。補足で issue #511 を引用対象に追加
-1b. [x] Base Protocol 0.9 の内容確認 → 拡張 S を Base Protocol 側に置く案を追加（6.1）
+1b. [x] Base Protocol 0.9 の内容確認 → サーバー状態を Base Protocol 側に置く案を追加（6.1）
 1c. [x] declarationRange 相当の先行提案 → なし。新規提案可（6.1）
 2. [x] gopls / tsserver / pyright / clangd / jdtls の準備完了通知の有無を確認 → 6.2 に表として記載
 2b. [ ] pyright / clangd が実際に `experimental/serverStatus` を送るか、各リポジトリのソースで確認
 3. [ ] solidlsp の 74 クラスの上書き内容を分類（マニフェスト / shims / コード）
-4. [ ] Neovim 0.11 `vim.lsp.config` と Mason `package.yaml` の語彙を拡張 C に取り込む
+4. [ ] Neovim 0.11 `vim.lsp.config` と Mason `package.yaml` の語彙を起動の宣言に取り込む
 5. [ ] Zed の `LspInstaller` の設計を参照プロキシに取り込む
 6. [ ] LSAP の内部実装で範囲・準備完了の補正がどこにあるか確認
 7. [ ] LSAI v1.4 のフォールバック分類を読む
@@ -487,8 +487,8 @@ rust-analyzer は独自拡張として `experimental/serverStatus` 通知を送�
 
 ## 7. 未決事項
 
-- 診断（diagnostics）の完了通知。「この編集に対する診断はいつ出揃ったか」を知る手段がない問題。拡張 S の将来拡張（`phases`）として予約済みだが、具体的な語彙は未設計
-- 無視ディレクトリの宣言（solidlsp で 56 クラスが上書きしている実測最上位級の補正）。拡張 C 凍結と共に保留中
+- 診断（diagnostics）の完了通知。「この編集に対する診断はいつ出揃ったか」を知る手段がない問題。サーバー状態の将来拡張（`phases`）として予約済みだが、具体的な語彙は未設計
+- 無視ディレクトリの宣言（solidlsp で 56 クラスが上書きしている実測最上位級の補正）。起動の宣言 凍結と共に保留中
 - `declarationRange.full` に末尾のコメント（同一行の trailing comment）を含めるか
 - `readiness` を workspace 単位でなくファイル単位で返す必要があるか（大規模モノレポ）
 - マニフェストのレジストリを誰がホストするか。当面は Git リポジトリで十分
@@ -499,8 +499,8 @@ rust-analyzer は独自拡張として `experimental/serverStatus` 通知を送�
 
 ## 付録: 既存仕様との対応
 
-| 本仕様              | 関連する既存 LSP 項目                     | 関係                             |
-| ------------------- | ----------------------------------------- | -------------------------------- |
-| A. declarationRange | `DocumentSymbol.range` / `selectionRange` | 追加。既存は変更しない           |
-| S. serverState      | `$/progress`, `experimental/serverStatus` | 追加。既存は補助情報として併用可 |
-| C. manifest         | なし（仕様外）                            | 新規                             |
+| 本仕様                      | 関連する既存 LSP 項目                     | 関係                             |
+| --------------------------- | ----------------------------------------- | -------------------------------- |
+| 宣言範囲 (declarationRange) | `DocumentSymbol.range` / `selectionRange` | 追加。既存は変更しない           |
+| サーバー状態 (serverState)  | `$/progress`, `experimental/serverStatus` | 追加。既存は補助情報として併用可 |
+| 起動の宣言 (manifest)       | なし（仕様外）                            | 新規                             |

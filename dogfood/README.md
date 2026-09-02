@@ -33,4 +33,4 @@ Claude Code に、rust-analyzer と gopls を lsp-det 経由で起動させる�
 - Claude Code のリクエストタイムアウトと、`RequestFailed` / `RequestCancelled` の見せ方
 - Claude Code が未知の通知（`$/progress`、`experimental/serverStatus`）をどう扱うか
 
-観測した事実は `docs/research/` に記録する。
+観測した事実は `docs/research/claude-code-dogfooding.md` に追記する。写像の選択ログ（lsp-det の stderr）は `claude --debug` で起動したときだけ `~/.claude/debug/` に残る。

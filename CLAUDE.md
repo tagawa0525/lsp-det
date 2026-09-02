@@ -9,7 +9,7 @@
 3. `docs/v0.1-design.md` — 実装スコープ（上流側・下流側・写像・実行モデル・マイルストーン）
 4. `docs/adr/` — 決定の経緯と却下案。成功基準と構造の根拠は ADR 0009、採用しなかった依存（tokio 等）の理由は ADR 0005
 5. `docs/vision.md` — 長期構想（宣言範囲・起動方法の宣言は凍結中）
-6. `docs/research/` — 調査報告 13 本。実装中の疑問はまずここを検索（先行プロキシの落とし穴、各サーバーの readiness 挙動、Serena / CC の統合仕様が実測済み）
+6. `docs/research/` — 調査報告 15 本。実装中の疑問はまずここを検索（先行プロキシの落とし穴、各サーバーの readiness 挙動、Serena / CC の統合仕様が実測済み、CC 経由のドッグフーディング観測は `claude-code-dogfooding.md`）
 
 ## 絶対の制約
 
@@ -44,7 +44,7 @@
 - **M4 — gopls の写像 完了**（2026-09-03）: `src/adapter/gopls.rs`（`$/progress` の "Setting up workspace" と "Error loading workspace" からの合成。写像は `adapter::Mapping` trait に統一し `adapter/{mod,rust_analyzer,gopls}.rs` に分割）。実 gopls v0.23.0 で 7.1 / 7.2 / 7.3 と go.mod 変更時の再発行なしを確認し（`docs/research/gopls-readiness-measurement.md`）、`{completeness, freshness}` を v0.23.0 に宣言。`serverInfo.version` はビルド情報の JSON 文字列。実サーバー結合テストは `cargo test --test conformance -- --ignored`（rust-analyzer 4 件 + gopls 4 件）
 - **M5（v0.1 後）**: Serena 統合・宣言範囲の再評価・上流 PR
 
-ドッグフーディングは `dogfood/README.md` の手順。観測項目（ドッグフーディングで拾う事実）: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007：通常編集では往復しない）。
+ドッグフーディングは `dogfood/README.md` の手順。観測結果は `docs/research/claude-code-dogfooding.md` に追記する（第 1 回で経路の成立と遅延起動、第 2 回で起動直後の横断リクエストが保留されて完全な結果になることを確認済み）。観測項目（ドッグフーディングで拾う事実）: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007：通常編集では往復しない）。
 
 ### この開発環境の rust-analyzer 起動不能問題（2026-08-28 解消）
 

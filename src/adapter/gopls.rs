@@ -77,6 +77,9 @@ pub struct GoplsAdapter {
     state: ServerState,
     /// begin を見て end を待っている "Setting up workspace" のトークン。
     loading: Vec<Value>,
+    /// 今回のロード (最後に `loading` が空から増えてから) で失敗した
+    /// フォルダの end メッセージ。1 つでもあれば今回の結果は信頼できない。
+    failed_in_round: Option<String>,
     /// begin 中の "Error loading workspace" のトークン。
     failure: Option<Value>,
 }
@@ -102,6 +105,7 @@ impl GoplsAdapter {
             version_is_tested,
             state: ServerState::initializing(),
             loading: Vec::new(),
+            failed_in_round: None,
             failure: None,
         }
     }
@@ -111,6 +115,10 @@ impl GoplsAdapter {
         match value.kind.as_str() {
             "begin" => match value.title.as_deref() {
                 Some(WORKSPACE_SETUP_TITLE) => {
+                    if self.loading.is_empty() {
+                        // 新しいロードの回。前回の失敗は持ち越さない。
+                        self.failed_in_round = None;
+                    }
                     self.loading.push(token);
                     self.state.readiness = Readiness::Indexing;
                 }
@@ -143,14 +151,19 @@ impl GoplsAdapter {
                     .is_some_and(|m| m.starts_with(FAILED_LOAD_PREFIX));
                 if failed {
                     // 試行は終わったが結果は信頼できない (仕様 6 章 5 項)。
-                    self.state.health = Health::Error;
-                    self.state.message = value.message;
+                    self.failed_in_round = value.message;
                 }
                 if self.loading.is_empty() {
                     // 全フォルダのロードが終わって初めて ready。health も
-                    // ここで初めて ok を名乗れる (途中で ok は観測なしの主張)。
+                    // ここで初めて決まる (途中で ok は観測なしの主張)。
+                    // 今回の回で 1 つでも失敗していれば error、全部成功なら
+                    // 観測できた成功に基づいて ok (前回の失敗は持ち越さない)。
+                    // ただし "Error loading workspace" が begin 中なら error のまま。
                     self.state.readiness = Readiness::Ready;
-                    if !failed && self.failure.is_none() && self.state.health != Health::Error {
+                    if let Some(message) = &self.failed_in_round {
+                        self.state.health = Health::Error;
+                        self.state.message = Some(message.clone());
+                    } else if self.failure.is_none() {
                         self.state.health = Health::Ok;
                         self.state.message = None;
                     }

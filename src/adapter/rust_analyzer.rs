@@ -203,6 +203,20 @@ mod tests {
     }
 
     #[test]
+    fn declares_guarantees_for_the_nixpkgs_build_the_suite_passed_on() {
+        // nixpkgs のビルドは日付で名乗る (`2026-08-03`)。この版にも 7.2 / 7.3 を
+        // 当てて通した (flake.nix の開発環境、2026-09-03)。版の識別は semver に
+        // 限らず、名乗りの先頭トークンをテスト済みの一覧と突き合わせる。
+        let tested = crate::adapter::select("rust-analyzer", Some("2026-08-03")).unwrap();
+        assert_eq!(
+            tested.guarantees(),
+            ServerStateProvider::complete_and_fresh()
+        );
+        let untested = crate::adapter::select("rust-analyzer", Some("2026-08-04")).unwrap();
+        assert_eq!(untested.guarantees(), ServerStateProvider::Basic(true));
+    }
+
+    #[test]
     fn maps_a_missing_workspace_warning_to_error() {
         // 設計 5.1: プロジェクトが 1 つも見つからないとき rust-analyzer は
         // warning と "Failed to discover workspace." を出す (reload.rs の

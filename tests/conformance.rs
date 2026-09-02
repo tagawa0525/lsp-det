@@ -322,7 +322,8 @@ fn gopls_client(declare_server_state: bool) -> (ConformanceClient, Value) {
 
 #[test]
 fn gopls_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
-    // 偽 gopls の既定の版 (1.98.0 (fake)) は gopls の版として読めない。
+    // 偽 gopls の既定の版 (1.98.0 (fake)) は読めるが gopls::TESTED_VERSIONS の
+    // 範囲外なので、保証は宣言しない。
     let (mut client, result) = gopls_client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],

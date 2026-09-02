@@ -20,6 +20,12 @@
 - **時間に基づく判定を持たない**。保留の打ち切りタイマーも、一定時間で `ready` とみなす合成も禁止（仕様 6 章 6 項、ADR 0009）
 - 造語を作らない。「拡張 S」「グレード」は廃止済み。概念は内容そのものの名前で呼び、LSP に既存の語彙があればそれに合わせる（ADR 0009 決定 B）
 
+## 開発環境
+
+- `flake.nix` が Rust ツールチェーン・rust-analyzer・go・gopls を固定する（nixpkgs はシステム構成と同じ rev）。`nix develop` か direnv（`.envrc` は `use flake` + `PATH_add target/release`。グローバルの gitignore で追跡外なので手元で作る）で入る
+- 言語サーバーの版は保証の宣言に直結する（`src/adapter/*/TESTED_VERSIONS`）。`flake.lock` を更新して版が変わったら `cargo test --test conformance -- --ignored` を通してから一覧を動かす
+- ドッグフーディングは `dogfood/README.md`（`cargo build --release` → `claude --plugin-dir dogfood/claude-plugin`）
+
 ## 開発プロセス
 
 - TDD 必須: RED（失敗テスト）→ GREEN（実装）→ REFACTOR を別コミットで
@@ -33,12 +39,12 @@
 成功基準は「仕様・上流側と下流側それぞれの準拠テスト・上流側と下流側の参照実装が自己無矛盾で、rust-analyzer と gopls に当てて通ること」（ADR 0009）。作者の Claude Code 環境での稼働は成功基準ではなく観測手段。
 
 - **M1 完了**（2026-08-28）: 素通しプロキシ。フレーミング（`src/framing.rs`）・プロセス寿命（`src/process.rs`）・イベントループ（`src/proxy.rs`）・CLI（`src/cli.rs`）を TDD で実装。pdeathsig 2 経路を手動 smoke テストで検証済み
-- **M2 — 上流側（rust-analyzer）完了**（2026-09-03）: 覗き見（`src/peek.rs`）・状態の保持（`src/tracker.rs`）・rust-analyzer の写像（`src/adapter.rs`）・capability 注入と `serverInfo` の読み取り（`src/initialize.rs`）・`experimental/serverState` / `serverStateChanged`・保証の宣言・上流側の準拠テスト（`tests/conformance.rs`、偽上流は `examples/fake_lsp_server.rs`）。ADR 0009 の追従も完了: `dead` の削除、`serverInfo.name` による写像選択と無条件の capability 注入、`window/workDoneProgress/create` の自前応答、版の範囲（`adapter::TESTED_VERSIONS`。広げるときは実 rust-analyzer で `cargo test --test conformance -- --ignored` を通してから）、`warning` の補正（"Failed to discover workspace." → `error`）、CLI の縮小（`lsp-det -- <上流コマンド>` のみ）、準拠テストの仕様 8.4 への追従。7.2 / 7.3 は rust-analyzer 1.98.0 で確認済み
+- **M2 — 上流側（rust-analyzer）完了**（2026-09-03）: 覗き見（`src/peek.rs`）・状態の保持（`src/tracker.rs`）・rust-analyzer の写像（`src/adapter.rs`）・capability 注入と `serverInfo` の読み取り（`src/initialize.rs`）・`experimental/serverState` / `serverStateChanged`・保証の宣言・上流側の準拠テスト（`tests/conformance.rs`、偽上流は `examples/fake_lsp_server.rs`）。ADR 0009 の追従も完了: `dead` の削除、`serverInfo.name` による写像選択と無条件の capability 注入、`window/workDoneProgress/create` の自前応答、テスト済みの版の一覧（`adapter::rust_analyzer::TESTED_VERSIONS`。足すときは実 rust-analyzer で `cargo test --test conformance -- --ignored` を通してから）、`warning` の補正（"Failed to discover workspace." → `error`）、CLI の縮小（`lsp-det -- <上流コマンド>` のみ）、準拠テストの仕様 8.4 への追従。7.2 / 7.3 は rust-analyzer 1.98.0 で確認済み
 - **M3 — 下流側 完了**（2026-09-03）: `src/gate.rs`（判定表・保留キュー・キャンセル・`shutdown` と上流消失での drain）と `src/proxy.rs` の配線。判定表は v0.1-design 4.3 が正。下流側の準拠テストは `tests/client_conformance.rs`（仕様 9.1。準拠した偽上流と rust-analyzer と名乗る偽上流の両方が被験者）。恒等写像のときは上流への `initialize` に `experimental.serverState` を注入し、初期状態を id `lsp-det:serverState` で自ら問い合わせる。打ち切りタイマーはない
-- **M4 — gopls の写像 完了**（2026-09-03）: `src/adapter/gopls.rs`（`$/progress` の "Setting up workspace" と "Error loading workspace" からの合成。写像は `adapter::Mapping` trait に統一し `adapter/{mod,rust_analyzer,gopls}.rs` に分割）。実 gopls v0.23.0 で 7.1 / 7.2 / 7.3 と go.mod 変更時の再発行なしを確認し（`docs/research/gopls-readiness-measurement.md`）、`{completeness, freshness}` を v0.23.0 の範囲で宣言。`serverInfo.version` はビルド情報の JSON 文字列。実サーバー結合テストは `cargo test --test conformance -- --ignored`（rust-analyzer 4 件 + gopls 4 件）
+- **M4 — gopls の写像 完了**（2026-09-03）: `src/adapter/gopls.rs`（`$/progress` の "Setting up workspace" と "Error loading workspace" からの合成。写像は `adapter::Mapping` trait に統一し `adapter/{mod,rust_analyzer,gopls}.rs` に分割）。実 gopls v0.23.0 で 7.1 / 7.2 / 7.3 と go.mod 変更時の再発行なしを確認し（`docs/research/gopls-readiness-measurement.md`）、`{completeness, freshness}` を v0.23.0 に宣言。`serverInfo.version` はビルド情報の JSON 文字列。実サーバー結合テストは `cargo test --test conformance -- --ignored`（rust-analyzer 4 件 + gopls 4 件）
 - **M5（v0.1 後）**: Serena 統合・宣言範囲の再評価・上流 PR
 
-ドッグフーディングは `dogfood/README.md` の手順（`cargo install --path .` → `claude --plugin-dir dogfood/claude-plugin`）。観測項目（ドッグフーディングで拾う事実）: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007：通常編集では往復しない）。
+ドッグフーディングは `dogfood/README.md` の手順。観測項目（ドッグフーディングで拾う事実）: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007：通常編集では往復しない）。
 
 ### この開発環境の rust-analyzer 起動不能問題（2026-08-28 解消）
 

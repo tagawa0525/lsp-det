@@ -86,8 +86,8 @@ where
             }
             Ok(Event::UpstreamClosed) => {
                 // stdout を閉じた上流はもう応答しない。クライアントが
-                // 喋り続けていてもここで死を伝える。
-                announce_death(&mut surface, &mut client_out);
+                // 喋り続けていてもここで閉じる。
+                close_pending_handshake(&mut surface, &mut client_out);
                 break reap(&mut handles.upstream);
             }
             Ok(Event::ClientClosed) => {
@@ -106,7 +106,7 @@ where
                     if code != 0 {
                         eprintln!("lsp-det: upstream exited with status {code}");
                     }
-                    announce_death(&mut surface, &mut client_out);
+                    close_pending_handshake(&mut surface, &mut client_out);
                     break code;
                 }
             }
@@ -119,7 +119,7 @@ where
                     .ok()
                     .and_then(|s| s.code())
                     .unwrap_or(1);
-                announce_death(&mut surface, &mut client_out);
+                close_pending_handshake(&mut surface, &mut client_out);
                 break code;
             }
         }
@@ -166,13 +166,15 @@ fn reap(upstream: &mut process::Upstream) -> i32 {
     1
 }
 
-/// 上流の死をクライアントへ知らせる (仕様 6.1)。
+/// 上流が消えた。`initialize` に答えないまま消えたなら、宙に浮いた
+/// リクエストをエラーで閉じる (仕様 8.2 の 7: 未応答のリクエストにエラーを
+/// 応答してから接続を閉じる)。
 ///
-/// ループを抜ける前に書き切る必要がある。抜けた後では `client_out` が
-/// 閉じ、死を伝えられないまま沈黙することになる。
-fn announce_death<W: Write>(surface: &mut Surface, client_out: &mut W) {
-    if let Some(notification) = surface.mark_dead() {
-        let _ = framing::write_message(client_out, &notification);
+/// 死を表す通知は送らない。プロセスの消失は本プロトコルの値ではなく、
+/// この後の EOF が伝える。ループを抜ける前に書き切る必要がある。
+fn close_pending_handshake<W: Write>(surface: &mut Surface, client_out: &mut W) {
+    if let Some(response) = surface.fail_pending_initialize() {
+        let _ = framing::write_message(client_out, &response);
     }
 }
 
@@ -318,16 +320,14 @@ impl Surface {
         (msg, notification)
     }
 
-    /// 上流の死を伝えるメッセージ。handshake の前後で手段が変わる。
-    fn mark_dead(&mut self) -> Option<RawMessage> {
-        let state = self.tracker.mark_dead()?;
-        if !self.handshake_done {
-            // 通知は送れない (LSP は InitializeResult より前のサーバー発
-            // 通知を許さない)。宙に浮いた initialize をエラーで閉じる。
-            // これをしないとクライアントは応答を永久に待つ。
-            return self.initialize_id.take().map(|id| initialize_failed(&id));
+    /// handshake が終わる前に上流が消えた。宙に浮いた `initialize` を
+    /// エラーで閉じる。これをしないとクライアントは応答を永久に待つ。
+    /// handshake 後なら何も返さない (EOF が伝える)。
+    fn fail_pending_initialize(&mut self) -> Option<RawMessage> {
+        if self.handshake_done {
+            return None;
         }
-        self.notify_or_stash(state)
+        self.initialize_id.take().map(|id| initialize_failed(&id))
     }
 
     /// 仕様 4.2 の通知を作る。宣言していないクライアントには送らない
@@ -369,8 +369,8 @@ fn changed_notification(state: &ServerState) -> RawMessage {
 
 /// 上流が `initialize` に答えないまま消えたときの応答。
 ///
-/// 沈黙させるとクライアントは応答を永久に待つ。死を隠さないという
-/// 方針 (設計 4.2) は handshake 中にも適用される。
+/// 沈黙させるとクライアントは応答を永久に待つ。応答を返さないリクエストを
+/// 作らない (設計 4.2「上流の消失」)。
 fn initialize_failed(id: &RequestId) -> RawMessage {
     RawMessage {
         body: serde_json::to_vec(&serde_json::json!({
@@ -430,12 +430,6 @@ impl StateTracker {
     /// 状態が変わったらログして新しい状態を返す。
     fn observe(&mut self, view: &peek::MessageView, body: &[u8]) -> Option<ServerState> {
         let state = self.tracker.observe_upstream(view, body)?;
-        self.log(&state);
-        Some(state)
-    }
-
-    fn mark_dead(&mut self) -> Option<ServerState> {
-        let state = self.tracker.mark_dead()?;
         self.log(&state);
         Some(state)
     }

@@ -1,14 +1,11 @@
-//! `ServerState` の保持と遷移 (v0.1-design.md 4.1、ADR 0008)。
+//! `ServerState` の保持と遷移 (v0.1-design.md 4.2、ADR 0008)。
 //!
-//! アダプタ (上流メッセージの解釈) と状態の保持を分ける。分けるのは、
-//! アダプタがなくてもプロセスの消失は観測できるからである。アダプタなしの
-//! 中継層は両軸 `unknown` から始まり、消失で `health` だけが `dead` になる。
-//! これが中継層の固有価値 (`dead` を出せること、ADR 0003) をアダプタのない
-//! サーバーにも届ける経路になる。
+//! 写像 (上流メッセージの解釈) と状態の保持を分ける。写像がなくても
+//! 上流側は存在し、両軸 `unknown` を正直に報告する (仕様 8.2 の 3)。
 
 use crate::adapter::RustAnalyzerAdapter;
 use crate::peek::MessageView;
-use crate::state::{Health, ServerState, ServerStateProvider};
+use crate::state::{ServerState, ServerStateProvider};
 
 pub struct Tracker {
     state: ServerState,
@@ -63,37 +60,8 @@ impl Tracker {
     /// アダプタだけで、なしのときに勝手に読むと他のサーバーの同名通知を
     /// 誤読する。
     pub fn observe_upstream(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
-        if self.state.health == Health::Dead {
-            return None;
-        }
         let next = self.adapter.as_mut()?.interpret(view, body)?;
         self.apply(next)
-    }
-
-    /// 上流プロセスの消失を観測した。`dead` は中継層だけが出せる終端状態
-    /// (仕様 6.1)。
-    ///
-    /// `readiness` は直前の値のまま残す。仕様 3 章が 2 軸を独立と定め、
-    /// 「`health` が `error | dead` のとき `readiness` を判断材料に
-    /// 使うべきではない」を推奨解釈としているため (ADR 0004 決定 1)。
-    /// `dead` に対応する `readiness` の値は仕様に存在せず、`initializing`
-    /// へ倒すのは別の嘘になる。
-    ///
-    /// **消費者への注意**: `{health: "dead", readiness: "ready"}` は正常に
-    /// 出る組み合わせである。ゲート (設計 4.2 の表) は `health` の行を先に
-    /// 見ること。
-    pub fn mark_dead(&mut self) -> Option<ServerState> {
-        if self.state.health == Health::Dead {
-            // 終了検出の経路は複数あり (stdout の EOF、try_wait、切断)、
-            // 同じ死を二度観測しうる。通知は apply が抑止するが、
-            // clone と代入まで繰り返す必要はない。
-            return None;
-        }
-        self.apply(ServerState {
-            health: Health::Dead,
-            readiness: self.state.readiness,
-            message: self.state.message.clone(),
-        })
     }
 
     /// 新しい状態を取り込み、通知を要する変化なら新しい状態を返す。
@@ -109,7 +77,7 @@ impl Tracker {
 mod tests {
     use super::*;
     use crate::peek::peek;
-    use crate::state::Readiness;
+    use crate::state::{Health, Readiness};
 
     fn observe(tracker: &mut Tracker, body: &str) -> Option<ServerState> {
         let view = peek(body.as_bytes()).expect("test bodies are valid JSON");
@@ -225,41 +193,5 @@ mod tests {
         let mut tracker = without_adapter();
         assert!(observe(&mut tracker, &status("ok", true)).is_none());
         assert_eq!(tracker.state(), &ServerState::unobserved());
-    }
-
-    // --- dead ---------------------------------------------------------------
-
-    #[test]
-    fn marking_dead_notifies_once() {
-        let mut tracker = with_adapter();
-        let changed = tracker.mark_dead().expect("death should notify");
-        assert_eq!(changed.health, Health::Dead);
-        assert!(tracker.mark_dead().is_none());
-    }
-
-    #[test]
-    fn dead_keeps_the_previous_readiness() {
-        let mut tracker = with_adapter();
-        observe(&mut tracker, &status("ok", true));
-        let dead = tracker.mark_dead().expect("death should notify");
-        assert_eq!(dead.readiness, Readiness::Ready);
-    }
-
-    #[test]
-    fn dead_is_terminal() {
-        // 仕様 6.1: dead は終端状態。上流の残存メッセージで生き返らない。
-        let mut tracker = with_adapter();
-        tracker.mark_dead();
-        assert!(observe(&mut tracker, &status("ok", true)).is_none());
-        assert_eq!(tracker.state().health, Health::Dead);
-    }
-
-    #[test]
-    fn dead_is_reported_even_without_an_adapter() {
-        // 中継層の固有価値。アダプタがなくてもプロセス消失は観測できる。
-        let mut tracker = without_adapter();
-        let dead = tracker.mark_dead().expect("death should notify");
-        assert_eq!(dead.health, Health::Dead);
-        assert_eq!(dead.readiness, Readiness::Unknown);
     }
 }

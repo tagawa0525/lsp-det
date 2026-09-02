@@ -35,8 +35,8 @@ impl ServerUnderTest {
         Self::lsp_det_with_fake_upstream_flags(&[])
     }
 
-    /// アダプタなしの lsp-det + 偽上流。両軸 `unknown` と `dead` だけを出す
-    /// 被験者（v0.1-design.md 4.1、ADR 0008）。
+    /// アダプタなしの lsp-det + 偽上流。両軸 `unknown` を報告する被験者
+    /// （仕様 8.2 の 3、8.4 の 1）。
     pub fn lsp_det_without_adapter() -> Self {
         Self::lsp_det_without_adapter_flags(&[])
     }
@@ -260,16 +260,15 @@ impl ConformanceClient {
     /// `readiness` が `ready` になるまで `serverStateChanged` を待つ。
     /// 実サーバーは自分のペースで ready になるため、時間ではなく状態で待つ。
     ///
-    /// `health` が `error` / `dead` になったら待つのをやめて失敗する（仕様
-    /// 6 章 5 項。待ち続けるのは本 ADR 0008 が警告する永久待ちそのもの）。
+    /// `health` が `error` になったら待つのをやめて失敗する（仕様 6 章 5 項、
+    /// 9 章 2 項。待ち続けるのは ADR 0008 が警告する永久待ちそのもの）。
     /// `readiness` が `unknown` の被験者には使えない（永遠に来ない）。
     pub fn wait_until_ready(&mut self) {
         let mut state = self.server_state();
         loop {
-            // health を先に見る。{dead, unknown} は正常に出る組み合わせで、
-            // それを「unknown の被験者を待たせた」と誤診してはならない。
+            // health を先に見る (仕様 3 章の推奨解釈)。
             assert!(
-                !matches!(state.health, Health::Error | Health::Dead),
+                state.health != Health::Error,
                 "ready を待つ間に被験者が壊れた: {state:?}"
             );
             if state.readiness == Readiness::Ready {

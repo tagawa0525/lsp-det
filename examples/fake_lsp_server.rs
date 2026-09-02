@@ -19,7 +19,10 @@
 //!   応答せず終了する（起動時クラッシュ）
 //! - `--declare-server-state-provider`: 上流自身が本プロトコルに準拠している
 //!   ふりをする。`InitializeResult` に `serverStateProvider: {freshness: true}`
-//!   を宣言し、`experimental/serverState` に自分で答える
+//!   を宣言し、`experimental/serverState` に自分の状態で答える。状態は
+//!   `--initial-readiness <initializing|indexing|ready>`（既定 `ready`）から
+//!   始まり、`$/fake/emitServerStateChanged`（通知。params は
+//!   `{health, readiness}`）で変えると `experimental/serverStateChanged` を送る
 //! - `--declare-server-state-provider-false`: `serverStateProvider: false` を
 //!   宣言する（`hoverProvider: false` と同じ「提供しない」の書き方）
 //! - `--server-name <name>`: `InitializeResult.serverInfo.name` で名乗る名前。
@@ -64,6 +67,13 @@ fn main() {
         .cloned()
         .unwrap_or_else(|| "1.98.0 (fake)".to_string());
     let mut progress_create_answered = false;
+    let mut fake_health = "ok".to_string();
+    let mut fake_readiness = flags
+        .iter()
+        .position(|flag| flag == "--initial-readiness")
+        .and_then(|i| flags.get(i + 1))
+        .cloned()
+        .unwrap_or_else(|| "ready".to_string());
     let mut initialize_failed_once = false;
 
     let stdin = io::stdin();
@@ -146,7 +156,23 @@ fn main() {
                 respond(
                     &mut stdout,
                     id,
-                    json!({"health": "ok", "readiness": "ready", "message": "answered by upstream"}),
+                    json!({"health": fake_health, "readiness": fake_readiness, "message": "answered by upstream"}),
+                );
+            }
+            "$/fake/emitServerStateChanged" => {
+                if let Some(health) = params.get("health").and_then(Value::as_str) {
+                    fake_health = health.to_string();
+                }
+                if let Some(readiness) = params.get("readiness").and_then(Value::as_str) {
+                    fake_readiness = readiness.to_string();
+                }
+                send(
+                    &mut stdout,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "method": "experimental/serverStateChanged",
+                        "params": {"health": fake_health, "readiness": fake_readiness}
+                    }),
                 );
             }
             "initialized" if request_progress_create => {

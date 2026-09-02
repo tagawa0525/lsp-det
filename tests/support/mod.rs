@@ -52,6 +52,14 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("rust-analyzer", upstream_flags)
     }
 
+    /// 本プロトコルに準拠した偽上流 + lsp-det。上流側は恒等写像になり、
+    /// 下流側は上流の状態を境界越しに読む（設計 4.1）。
+    pub fn lsp_det_with_conformant_upstream_flags(upstream_flags: &[&str]) -> Self {
+        let mut flags = vec!["--declare-server-state-provider"];
+        flags.extend_from_slice(upstream_flags);
+        Self::lsp_det_with_upstream("fake-lsp-server", &flags)
+    }
+
     fn lsp_det_with_upstream(server_name: &str, upstream_flags: &[&str]) -> Self {
         let mut args = vec![
             "--".to_string(),
@@ -106,7 +114,8 @@ pub struct ConformanceClient {
     /// 被験者の stderr。失敗の診断にだけ使う (読むのは被験者が終わった後)。
     stderr: Option<ChildStderr>,
     incoming: Receiver<Incoming>,
-    /// 受信済みだが取り出されていない通知。
+    /// 受信済みだが取り出されていないメッセージ（通知・応答・サーバー発
+    /// リクエスト）。
     pending_notifications: Vec<Value>,
     next_id: i64,
 }
@@ -177,12 +186,91 @@ impl ConformanceClient {
     }
 
     pub fn request(&mut self, method: &str, params: Value) -> Value {
+        let id = self.send_request(method, params);
+        self.await_response(id)
+    }
+
+    /// 応答を待たずにリクエストを送り、id を返す。保留の検証に使う。
+    pub fn send_request(&mut self, method: &str, params: Value) -> i64 {
         let id = self.next_id;
         self.next_id += 1;
         self.send(json!({
             "jsonrpc": "2.0", "id": id, "method": method, "params": params
         }));
+        id
+    }
+
+    /// `send_request` で送ったリクエストへの応答を待つ。
+    pub fn await_response_to(&mut self, id: i64) -> Value {
         self.await_response(id)
+    }
+
+    /// `$/cancelRequest` を送る。
+    pub fn cancel(&mut self, id: i64) {
+        self.notify("$/cancelRequest", json!({"id": id}));
+    }
+
+    /// `id` への応答が `window` の間に届かないことを確かめる。
+    /// 届いたら `Some(応答)` を返す（保留されずに通ったことの検出）。
+    pub fn response_within(&mut self, id: i64, window: Duration) -> Option<Value> {
+        if let Some(index) = self.pending_notifications.iter().position(|m| {
+            m.get("id").and_then(Value::as_i64) == Some(id) && m.get("method").is_none()
+        }) {
+            return Some(self.pending_notifications.remove(index));
+        }
+        let deadline = std::time::Instant::now() + window;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            match self.incoming.recv_timeout(remaining) {
+                Ok(Incoming::Message(message)) => {
+                    if message.get("id").and_then(Value::as_i64) == Some(id)
+                        && message.get("method").is_none()
+                    {
+                        return Some(message);
+                    }
+                    self.stash(message);
+                }
+                Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => {
+                    panic!("id={id} への応答を待つ間に被験者が沈黙した")
+                }
+                Err(RecvTimeoutError::Timeout) => return None,
+            }
+        }
+    }
+
+    /// `textDocument/references` を送るだけ（応答は待たない）。
+    pub fn send_references(&mut self) -> i64 {
+        self.send_request(
+            "textDocument/references",
+            json!({
+                "textDocument": {"uri": "file:///fake/a.rs"},
+                "position": {"line": 0, "character": 0},
+                "context": {"includeDeclaration": false},
+            }),
+        )
+    }
+
+    /// `textDocument/hover` を送るだけ（応答は待たない）。
+    pub fn send_hover(&mut self) -> i64 {
+        self.send_request(
+            "textDocument/hover",
+            json!({
+                "textDocument": {"uri": "file:///fake/a.rs"},
+                "position": {"line": 0, "character": 0},
+            }),
+        )
+    }
+
+    /// 準拠した偽上流に `experimental/serverStateChanged` を送らせる
+    /// （偽上流専用の制御）。
+    pub fn make_upstream_emit_server_state_changed(&mut self, health: &str, readiness: &str) {
+        self.notify(
+            "$/fake/emitServerStateChanged",
+            json!({"health": health, "readiness": readiness}),
+        );
     }
 
     pub fn notify(&mut self, method: &str, params: Value) {
@@ -454,6 +542,11 @@ impl ConformanceClient {
     }
 
     fn await_response(&mut self, id: i64) -> Value {
+        if let Some(index) = self.pending_notifications.iter().position(|m| {
+            m.get("id").and_then(Value::as_i64) == Some(id) && m.get("method").is_none()
+        }) {
+            return self.pending_notifications.remove(index);
+        }
         loop {
             let message = self
                 .recv()
@@ -468,11 +561,9 @@ impl ConformanceClient {
     }
 
     fn stash(&mut self, message: Value) {
-        if message.get("method").is_some() && message.get("id").is_none() {
-            self.pending_notifications.push(message);
-        }
-        // サーバー→クライアントのリクエストと、他 id への応答は本スイートの
-        // 関心外。捨てても被験者は待たないため放置する。
+        // 通知も、他 id への応答も、サーバー発リクエストも取っておく。
+        // 保留の検証では「後から届く応答」を拾う必要がある。
+        self.pending_notifications.push(message);
     }
 
     fn recv(&mut self) -> Option<Value> {

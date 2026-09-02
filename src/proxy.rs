@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::adapter;
 use crate::framing::{self, RawMessage};
+use crate::gate::{self, Decision, DrainReason, Gate, Release};
 use crate::initialize;
 use crate::peek::{self, RequestId};
 use crate::process;
@@ -38,13 +39,15 @@ enum Event {
 /// 写像は上流が `InitializeResult.serverInfo` で名乗る名前で選ぶ
 /// (v0.1-design.md 4.2)。既知でなければ上流側は保証なしで宣言し、両軸
 /// `unknown` を報告する (仕様 8.2 の 3)。上流の消失は通知ではなく接続の
-/// 終了で伝える (仕様 8.2 の 7)。
+/// 終了で伝える (仕様 8.2 の 7)。下流側 ([`Gate`]) は境界の上の状態を見て
+/// 横断リクエストを代行する (設計 4.3)。
 pub fn run<R, W>(client_in: R, client_out: W, command: &str, args: &[String]) -> io::Result<i32>
 where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
     let mut upstream_side = UpstreamSide::new();
+    let mut gate = Gate::new();
     let mut handles = process::spawn(command, args)?;
     let mut upstream_stdin = handles.stdin;
     let mut client_out = client_out;
@@ -55,37 +58,29 @@ where
     spawn_client_reader(client_in, tx.clone());
     spawn_upstream_reader(handles.stdout, tx);
 
-    let exit_code = loop {
-        match rx.recv_timeout(UPSTREAM_POLL_INTERVAL) {
-            Ok(Event::FromClient(msg)) => match upstream_side.on_client(msg) {
-                // serverState リクエストは原則として上流側が自ら答える。上流が
-                // 本プロトコルを話す場合だけ転送する (仕様 8.2 の 6)。
-                ClientAction::AnswerLocally(response) => {
-                    let _ = framing::write_message(&mut client_out, &response);
+    // 書き込みの失敗は無視して続行する。クライアントが読み取りをやめていても、
+    // 上流の stdin が閉じていても、次のポーリングで exit を検出する。
+    let mut deliver = |outs: Vec<Out>| {
+        for out in outs {
+            match out {
+                Out::ToClient(msg) => {
+                    let _ = framing::write_message(&mut client_out, &msg);
                 }
-                ClientAction::Forward(msg) => {
-                    // 上流の stdin が閉じていても続行する。
-                    // 次のポーリングで exit を検出する。
+                Out::ToUpstream(msg) => {
                     let _ = framing::write_message(&mut upstream_stdin, &msg);
                 }
-            },
-            Ok(Event::FromUpstream(msg)) => match upstream_side.on_upstream(msg) {
-                UpstreamAction::Forward { msg, notification } => {
-                    // クライアントが既に読み取りをやめていても無視して続行する
-                    // (次のポーリングで上流の exit を検出する)。
-                    let _ = framing::write_message(&mut client_out, &msg);
-                    if let Some(notification) = notification {
-                        let _ = framing::write_message(&mut client_out, &notification);
-                    }
-                }
-                UpstreamAction::AnswerUpstream(response) => {
-                    let _ = framing::write_message(&mut upstream_stdin, &response);
-                }
-            },
+            }
+        }
+    };
+
+    let exit_code = loop {
+        match rx.recv_timeout(UPSTREAM_POLL_INTERVAL) {
+            Ok(Event::FromClient(msg)) => deliver(upstream_side.on_client(msg, &mut gate)),
+            Ok(Event::FromUpstream(msg)) => deliver(upstream_side.on_upstream(msg, &mut gate)),
             Ok(Event::UpstreamClosed) => {
                 // stdout を閉じた上流はもう応答しない。クライアントが
                 // 喋り続けていてもここで閉じる。
-                close_pending_handshake(&mut upstream_side, &mut client_out);
+                deliver(close_pending(&mut upstream_side, &mut gate));
                 break reap(&mut handles.upstream);
             }
             Ok(Event::ClientClosed) => {
@@ -104,7 +99,7 @@ where
                     if code != 0 {
                         eprintln!("lsp-det: upstream exited with status {code}");
                     }
-                    close_pending_handshake(&mut upstream_side, &mut client_out);
+                    deliver(close_pending(&mut upstream_side, &mut gate));
                     break code;
                 }
             }
@@ -117,7 +112,7 @@ where
                     .ok()
                     .and_then(|s| s.code())
                     .unwrap_or(1);
-                close_pending_handshake(&mut upstream_side, &mut client_out);
+                deliver(close_pending(&mut upstream_side, &mut gate));
                 break code;
             }
         }
@@ -127,38 +122,38 @@ where
     Ok(exit_code)
 }
 
-/// クライアントから来たメッセージをどう扱うか。
-enum ClientAction {
-    /// そのまま (あるいは書き換えて) 上流へ流す。
-    Forward(RawMessage),
-    /// 中継層が自ら応答する。上流へは流さない。
-    AnswerLocally(RawMessage),
+/// 中継の出力。どちらへ書くか。
+enum Out {
+    ToClient(RawMessage),
+    ToUpstream(RawMessage),
 }
 
-/// 上流から来たメッセージをどう扱うか。
-enum UpstreamAction {
-    /// クライアントへ流す。付随して送る通知があれば続けて流す。
-    Forward {
-        msg: RawMessage,
-        notification: Option<RawMessage>,
-    },
-    /// 上流側が自ら上流に応答する。クライアントへは流さない。
-    AnswerUpstream(RawMessage),
-}
-
-/// クライアントから見た `initialize` リクエストの種類。
+/// クライアントから来たメッセージの種類。
 ///
 /// 覗き見の借用を `RawMessage` の所有権から切り離すために、判定結果だけを
 /// 所有データとして取り出す。
 enum ClientKind {
     ServerStateRequest(RequestId),
     InitializeRequest(Option<RequestId>),
+    ShutdownRequest,
+    CancelRequest(RequestId),
+    Request { id: RequestId, method: String },
     Other,
 }
 
 /// 注入した `window.workDoneProgress` に由来するサーバー発リクエスト。
 /// クライアントが自分で宣言していなければ上流側が答える (設計 4.2)。
 const WORK_DONE_PROGRESS_CREATE: &str = "window/workDoneProgress/create";
+
+/// 上流への `initialize` に注入する、本プロトコルの購読宣言 (設計 4.2)。
+/// 上流が自ら本プロトコルを話すとき、その通知を下流側が読むために要る。
+/// クライアントが宣言していなければ、届いた通知はクライアントへ流さない。
+const SERVER_STATE_CLIENT_CAPABILITY: &str = "experimental.serverState";
+
+/// 恒等写像のとき、上流の初期状態を lsp-det 自身が問い合わせるリクエストの
+/// id。上流の通知は変化のときにしか来ないので、最初の状態は聞くしかない。
+/// 文字列 id はクライアントの整数 id と衝突しない。
+const SELF_STATE_REQUEST_ID: &str = "lsp-det:serverState";
 
 /// 終了コードを取り、居座る上流は道連れにする。
 ///
@@ -179,22 +174,30 @@ fn reap(upstream: &mut process::Upstream) -> i32 {
     1
 }
 
-/// 上流が消えた。`initialize` に答えないまま消えたなら、宙に浮いた
-/// リクエストをエラーで閉じる (仕様 8.2 の 7: 未応答のリクエストにエラーを
-/// 応答してから接続を閉じる)。
+/// 上流が消えた。未応答のリクエストにエラーを応答してから接続を閉じる
+/// (仕様 8.2 の 7、設計 4.2「上流の消失」)。`initialize` に答えないまま
+/// 消えたならそれも、下流側が保留していた横断リクエストもすべて閉じる。
 ///
 /// 死を表す通知は送らない。プロセスの消失は本プロトコルの値ではなく、
 /// この後の EOF が伝える。ループを抜ける前に書き切る必要がある。
-fn close_pending_handshake<W: Write>(upstream_side: &mut UpstreamSide, client_out: &mut W) {
+fn close_pending(upstream_side: &mut UpstreamSide, gate: &mut Gate) -> Vec<Out> {
+    let mut outs = Vec::new();
     if let Some(response) = upstream_side.fail_pending_initialize() {
-        let _ = framing::write_message(client_out, &response);
+        outs.push(Out::ToClient(response));
     }
+    outs.extend(
+        gate.drain(DrainReason::UpstreamExited)
+            .into_iter()
+            .map(Out::ToClient),
+    );
+    outs
 }
 
 /// 上流側: 言語サーバーを代行して本プロトコルを提供する (v0.1-design.md 4.2)。
 ///
 /// アダプタの有無によらず存在する。アダプタなしでは両軸 `unknown` を
-/// 報告する (仕様 8.2 の 3)。
+/// 報告する (仕様 8.2 の 3)。境界の上の状態 ([`Self::boundary_state`]) を
+/// 下流側に渡す役目も持つ。
 struct UpstreamSide {
     tracker: StateTracker,
     /// クライアントが仕様 5.2 の宣言をしたか。通知を送る条件。
@@ -212,6 +215,10 @@ struct UpstreamSide {
     /// 足さず、リクエストを転送し、自前の通知を出さない。同一接続に送信者の
     /// 異なる 2 系統を流さないため (仕様 8.2 の 6、ADR 0009 決定 D-1)。
     identity: bool,
+    /// 恒等写像のときの境界の状態。上流の `serverStateChanged` と、lsp-det
+    /// 自身の問い合わせの応答で更新する。最初の応答が届くまでは
+    /// 「initialize 直後」の `initializing` (下流側は待つ)。
+    identity_state: ServerState,
 }
 
 impl UpstreamSide {
@@ -223,65 +230,110 @@ impl UpstreamSide {
             initialize_id: None,
             handshake_done: false,
             identity: false,
+            identity_state: ServerState::initializing(),
         }
     }
 
-    fn on_client(&mut self, msg: RawMessage) -> ClientAction {
+    /// 境界の上の状態。下流側はこれだけを見る (設計 4.1)。
+    fn boundary_state(&self) -> &ServerState {
         if self.identity {
-            // 恒等写像。すべて上流の仕事なので覗き見もしない。
-            return ClientAction::Forward(msg);
+            &self.identity_state
+        } else {
+            self.tracker.state()
         }
+    }
+
+    fn on_client(&mut self, msg: RawMessage, gate: &mut Gate) -> Vec<Out> {
         let kind = match peek::peek(&msg.body) {
             Ok(view) if view.is_request() => match (view.method(), view.id.clone()) {
                 (Some(state::SERVER_STATE_METHOD), Some(id)) => ClientKind::ServerStateRequest(id),
                 (Some("initialize"), id) => ClientKind::InitializeRequest(id),
+                (Some("shutdown"), _) => ClientKind::ShutdownRequest,
+                (Some(method), Some(id)) => ClientKind::Request {
+                    id,
+                    method: method.to_string(),
+                },
                 _ => ClientKind::Other,
             },
+            Ok(view) if view.is_notification() && view.method() == Some("$/cancelRequest") => {
+                match gate::cancel_target(&msg.body) {
+                    Some(id) => ClientKind::CancelRequest(id),
+                    None => ClientKind::Other,
+                }
+            }
             _ => ClientKind::Other,
         };
 
         match kind {
             ClientKind::ServerStateRequest(id) => {
-                // 仕様 5.2: このリクエストは宣言の有無によらず応答する。
-                ClientAction::AnswerLocally(self.state_response(&id))
+                if self.identity {
+                    // 上流が本プロトコルを話す。上流の仕事 (仕様 8.2 の 6)。
+                    vec![Out::ToUpstream(msg)]
+                } else {
+                    // 仕様 5.2: このリクエストは宣言の有無によらず応答する。
+                    vec![Out::ToClient(self.state_response(&id))]
+                }
             }
             ClientKind::InitializeRequest(id) => {
                 self.initialize_id = id;
                 self.client_declared = initialize::client_declares_server_state(&msg.body);
                 self.client_declared_progress =
                     initialize::client_declares_work_done_progress(&msg.body);
-                // 上流が誰かはまだ分からない。既知の写像ぶんを全部注入する。
-                let injected = initialize::inject_client_capabilities(
-                    &msg.body,
-                    adapter::CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS,
-                );
-                ClientAction::Forward(match injected {
+                gate.set_client_decides(self.client_declared);
+                // 上流が誰かはまだ分からない。既知の写像ぶんと、本プロトコルの
+                // 購読宣言を全部注入する。
+                let mut paths: Vec<&str> = adapter::CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS.to_vec();
+                paths.push(SERVER_STATE_CLIENT_CAPABILITY);
+                let injected = initialize::inject_client_capabilities(&msg.body, &paths);
+                vec![Out::ToUpstream(match injected {
                     Some(body) => RawMessage { body },
                     None => msg,
-                })
+                })]
             }
-            ClientKind::Other => ClientAction::Forward(msg),
+            ClientKind::ShutdownRequest => {
+                // 保留分すべてにエラーを応答してから shutdown を流す
+                // (仕様 9 章 6 項)。応答を返さないリクエストを作らない。
+                let mut outs: Vec<Out> = gate
+                    .drain(DrainReason::Shutdown)
+                    .into_iter()
+                    .map(Out::ToClient)
+                    .collect();
+                outs.push(Out::ToUpstream(msg));
+                outs
+            }
+            ClientKind::CancelRequest(id) => match gate.on_cancel(&id) {
+                // 保留中だった。キューから外して応答し、上流には送らない。
+                Some(response) => vec![Out::ToClient(response)],
+                None => vec![Out::ToUpstream(msg)],
+            },
+            ClientKind::Request { id, method } => {
+                match gate.on_request(msg, id, &method, self.boundary_state()) {
+                    Decision::Forward(msg) => vec![Out::ToUpstream(msg)],
+                    Decision::Held => Vec::new(),
+                    Decision::Reject(response) => vec![Out::ToClient(response)],
+                }
+            }
+            ClientKind::Other => vec![Out::ToUpstream(msg)],
         }
     }
 
-    /// 上流のメッセージを観測し、どう扱うかを返す。
-    fn on_upstream(&mut self, msg: RawMessage) -> UpstreamAction {
-        let forward = |msg| UpstreamAction::Forward {
-            msg,
-            notification: None,
-        };
-        // handshake 後、写像がなく progress の肩代わりも要らなければ、上流
-        // メッセージから読むものはない。覗き見 (serde_json はボディ全体を
-        // 字句解析する) を省き、透過経路の負荷を素通しと同じに保つ。
-        if self.handshake_done && !self.tracker.observes_upstream() && self.client_declared_progress
+    /// 上流のメッセージを観測し、出力列を返す。
+    fn on_upstream(&mut self, msg: RawMessage, gate: &mut Gate) -> Vec<Out> {
+        // handshake 後、写像がなく恒等写像でもなく progress の肩代わりも
+        // 要らなければ、上流メッセージから読むものはない。覗き見 (serde_json は
+        // ボディ全体を字句解析する) を省き、透過経路の負荷を素通しと同じに保つ。
+        if self.handshake_done
+            && !self.identity
+            && !self.tracker.observes_upstream()
+            && self.client_declared_progress
         {
-            return forward(msg);
+            return vec![Out::ToClient(msg)];
         }
 
         // 覗き見は 1 回だけ。上流のメッセージは大きくなりうる (diagnostics
         // 等) ので、判定ごとにパースし直すと透過経路の負荷が倍になる。
         let Ok(view) = peek::peek(&msg.body) else {
-            return forward(msg);
+            return vec![Out::ToClient(msg)];
         };
 
         if view.is_request()
@@ -291,7 +343,7 @@ impl UpstreamSide {
             // 注入した宣言に由来するリクエスト。クライアントは扱えないので
             // 上流側が成功応答する。id は上流のものをそのまま返す。
             let id = view.id.clone().expect("is_request は id を持つ");
-            return UpstreamAction::AnswerUpstream(null_response(&id));
+            return vec![Out::ToUpstream(null_response(&id))];
         }
 
         let is_initialize_response = !self.handshake_done
@@ -300,57 +352,117 @@ impl UpstreamSide {
             && view.id == self.initialize_id;
 
         if is_initialize_response {
-            use initialize::InitializeResultAction::*;
-            // 上流が名乗った名前で写像を選ぶ。宣言する保証はその写像に聞く。
-            if let Some(state) = self
-                .tracker
-                .select_mapping(initialize::server_info(&msg.body).as_ref())
-            {
-                debug_assert_eq!(state, *self.tracker.state());
-            }
-            let provider = self.tracker.provider();
-            let forwarded = match initialize::declare_server_state_provider(&msg.body, &provider) {
-                NotASuccess => {
-                    // エラー応答。handshake は完了しておらず、クライアントは
-                    // initialize を再試行しうる。この id には応答済みなので、
-                    // 宙に浮いたリクエストではなくなる (上流が消えても二重に
-                    // 応答しない)。
-                    self.initialize_id = None;
-                    return forward(msg);
-                }
-                UpstreamDeclares => {
-                    self.handshake_done = true;
-                    self.identity = true;
-                    eprintln!(
-                        "lsp-det: the upstream declares serverStateProvider itself; \
-                         the upstream side becomes an identity mapping"
-                    );
-                    return forward(msg);
-                }
-                Unrewritable => {
-                    // capabilities / experimental がオブジェクトでない。宣言
-                    // できないまま上流側として振る舞うことになるので、黙って
-                    // 進まず理由を残す。
-                    self.handshake_done = true;
-                    eprintln!(
-                        "lsp-det: cannot declare serverStateProvider; \
-                         the upstream InitializeResult has an unexpected shape"
-                    );
-                    msg
-                }
-                Declared(body) => {
-                    self.handshake_done = true;
-                    RawMessage { body }
-                }
-            };
-            return forward(forwarded);
+            return self.on_initialize_result(msg);
         }
 
-        let changed = self.tracker.observe(&view, &msg.body);
-        UpstreamAction::Forward {
-            msg,
-            notification: changed.and_then(|state| self.notify(state)),
+        if self.identity {
+            let is_self_response = view.method().is_none()
+                && view.id == Some(RequestId::String(SELF_STATE_REQUEST_ID.to_string()));
+            let is_state_changed =
+                view.is_notification() && view.method() == Some(state::SERVER_STATE_CHANGED_METHOD);
+            return self.on_upstream_under_identity(msg, is_self_response, is_state_changed, gate);
         }
+
+        let mut outs = Vec::new();
+        let changed = self.tracker.observe(&view, &msg.body);
+        outs.push(Out::ToClient(msg));
+        if let Some(state) = changed {
+            if let Some(notification) = self.notify(&state) {
+                outs.push(Out::ToClient(notification));
+            }
+            outs.extend(releases(gate, &state));
+        }
+        outs
+    }
+
+    /// 上流の `InitializeResult`。写像を選び、宣言を足すか恒等写像に切り替える。
+    fn on_initialize_result(&mut self, msg: RawMessage) -> Vec<Out> {
+        use initialize::InitializeResultAction::*;
+        // 上流が名乗った名前で写像を選ぶ。宣言する保証はその写像に聞く。
+        self.tracker
+            .select_mapping(initialize::server_info(&msg.body).as_ref());
+        let provider = self.tracker.provider();
+        match initialize::declare_server_state_provider(&msg.body, &provider) {
+            NotASuccess => {
+                // エラー応答。handshake は完了しておらず、クライアントは
+                // initialize を再試行しうる。この id には応答済みなので、
+                // 宙に浮いたリクエストではなくなる (上流が消えても二重に
+                // 応答しない)。
+                self.initialize_id = None;
+                vec![Out::ToClient(msg)]
+            }
+            UpstreamDeclares => {
+                self.handshake_done = true;
+                self.identity = true;
+                eprintln!(
+                    "lsp-det: the upstream declares serverStateProvider itself; \
+                     the upstream side becomes an identity mapping"
+                );
+                // 上流の通知は変化のときにしか来ない。初期状態は自分で聞く。
+                vec![Out::ToClient(msg), Out::ToUpstream(self_state_request())]
+            }
+            Unrewritable => {
+                // capabilities / experimental がオブジェクトでない。宣言
+                // できないまま上流側として振る舞うことになるので、黙って
+                // 進まず理由を残す。
+                self.handshake_done = true;
+                eprintln!(
+                    "lsp-det: cannot declare serverStateProvider; \
+                     the upstream InitializeResult has an unexpected shape"
+                );
+                vec![Out::ToClient(msg)]
+            }
+            Declared(body) => {
+                self.handshake_done = true;
+                vec![Out::ToClient(RawMessage { body })]
+            }
+        }
+    }
+
+    /// 恒等写像のとき。上流の状態は上流の通知と自分の問い合わせから読む。
+    /// 通知はクライアントが宣言していれば流し、していなければ下流側だけが読む
+    /// (仕様 5.2)。自分の問い合わせの応答はクライアントに見せない。
+    fn on_upstream_under_identity(
+        &mut self,
+        msg: RawMessage,
+        is_self_response: bool,
+        is_state_changed: bool,
+        gate: &mut Gate,
+    ) -> Vec<Out> {
+        if is_self_response {
+            match parse_state_response(&msg.body) {
+                Some(state) => return self.adopt_identity_state(state, gate),
+                None => {
+                    // 準拠を名乗る上流が初期状態に答えなかった。待つ根拠が
+                    // ないので、観測できない状態に落とす。
+                    eprintln!(
+                        "lsp-det: the upstream did not answer {}; treating its state as unknown",
+                        state::SERVER_STATE_METHOD
+                    );
+                    return self.adopt_identity_state(ServerState::unobserved(), gate);
+                }
+            }
+        }
+
+        if is_state_changed {
+            let mut outs = Vec::new();
+            if self.client_declared {
+                outs.push(Out::ToClient(msg.clone()));
+            }
+            if let Some(state) = parse_state_notification(&msg.body) {
+                outs.extend(self.adopt_identity_state(state, gate));
+            }
+            return outs;
+        }
+
+        vec![Out::ToClient(msg)]
+    }
+
+    /// 恒等写像のときの境界の状態を更新し、下流側に再評価させる。
+    fn adopt_identity_state(&mut self, state: ServerState, gate: &mut Gate) -> Vec<Out> {
+        self.tracker.log_boundary(&state);
+        self.identity_state = state.clone();
+        releases(gate, &state)
     }
 
     /// handshake が終わる前に上流が消えた。宙に浮いた `initialize` を
@@ -365,11 +477,11 @@ impl UpstreamSide {
 
     /// 仕様 4.2 の通知を作る。宣言していないクライアントには送らない
     /// (仕様 5.2)。恒等写像中は上流が送信者なので送らない。
-    fn notify(&self, state: ServerState) -> Option<RawMessage> {
+    fn notify(&self, state: &ServerState) -> Option<RawMessage> {
         if !self.client_declared || self.identity {
             return None;
         }
-        Some(changed_notification(&state))
+        Some(changed_notification(state))
     }
 
     fn state_response(&self, id: &RequestId) -> RawMessage {
@@ -383,6 +495,49 @@ impl UpstreamSide {
             .expect("ServerState は常にシリアライズできる"),
         }
     }
+}
+
+/// 状態変化で下流側が解放・拒否した保留分を出力列にする。
+fn releases(gate: &mut Gate, state: &ServerState) -> Vec<Out> {
+    gate.on_state(state)
+        .into_iter()
+        .map(|release| match release {
+            Release::Forward(msg) => Out::ToUpstream(msg),
+            Release::Reject(response) => Out::ToClient(response),
+        })
+        .collect()
+}
+
+/// 恒等写像のとき、上流の初期状態を問い合わせるリクエスト。
+fn self_state_request() -> RawMessage {
+    RawMessage {
+        body: serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": SELF_STATE_REQUEST_ID,
+            "method": state::SERVER_STATE_METHOD,
+        }))
+        .expect("固定の構造なので常にシリアライズできる"),
+    }
+}
+
+fn parse_state_response(body: &[u8]) -> Option<ServerState> {
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        result: ServerState,
+    }
+    serde_json::from_slice::<Envelope>(body)
+        .ok()
+        .map(|e| e.result)
+}
+
+fn parse_state_notification(body: &[u8]) -> Option<ServerState> {
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        params: ServerState,
+    }
+    serde_json::from_slice::<Envelope>(body)
+        .ok()
+        .map(|e| e.params)
 }
 
 /// 上流発リクエストへの成功応答 (`result: null`)。
@@ -486,6 +641,11 @@ impl StateTracker {
 
     fn observes_upstream(&self) -> bool {
         self.tracker.observes_upstream()
+    }
+
+    /// 恒等写像のとき、上流から読んだ境界の状態をログする。
+    fn log_boundary(&mut self, state: &ServerState) {
+        self.log(state);
     }
 
     /// 状態が変わったらログして新しい状態を返す。

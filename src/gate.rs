@@ -37,6 +37,21 @@ pub fn is_cross_workspace(method: &str) -> bool {
     CROSS_WORKSPACE_METHODS.contains(&method)
 }
 
+/// `$/cancelRequest` の `params.id`。読めなければ `None`。
+pub fn cancel_target(body: &[u8]) -> Option<RequestId> {
+    #[derive(serde::Deserialize)]
+    struct Params {
+        id: RequestId,
+    }
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        params: Params,
+    }
+    serde_json::from_slice::<Envelope>(body)
+        .ok()
+        .map(|e| e.params.id)
+}
+
 /// JSON-RPC / LSP のエラーコード。
 pub mod error_code {
     /// JSON-RPC `InternalError`。上流が消えて答えられない。
@@ -92,8 +107,7 @@ impl Gate {
     /// クライアントが `experimental.serverState` を宣言したら呼ぶ。以後は
     /// 何も保留しない (仕様 5.2)。
     pub fn set_client_decides(&mut self, decides: bool) {
-        let _ = decides;
-        todo!("M3 GREEN")
+        self.client_decides = decides;
     }
 
     /// クライアントのリクエストを判定する。`method` は覗き見済みのもの。
@@ -104,31 +118,106 @@ impl Gate {
         method: &str,
         state: &ServerState,
     ) -> Decision {
-        let _ = (msg, id, method, state);
-        todo!("M3 GREEN")
+        if self.client_decides || !is_cross_workspace(method) {
+            return Decision::Forward(msg);
+        }
+        match verdict(state) {
+            Verdict::Forward => Decision::Forward(msg),
+            Verdict::Hold => {
+                self.held.push((id, msg));
+                Decision::Held
+            }
+            Verdict::Reject => Decision::Reject(request_failed(&id, state)),
+        }
     }
 
     /// 境界の上の状態が変わった。保留分を再評価する。
     pub fn on_state(&mut self, state: &ServerState) -> Vec<Release> {
-        let _ = state;
-        todo!("M3 GREEN")
+        match verdict(state) {
+            Verdict::Hold => Vec::new(),
+            Verdict::Forward => self
+                .held
+                .drain(..)
+                .map(|(_, msg)| Release::Forward(msg))
+                .collect(),
+            Verdict::Reject => self
+                .held
+                .drain(..)
+                .map(|(id, _)| Release::Reject(request_failed(&id, state)))
+                .collect(),
+        }
     }
 
     /// `$/cancelRequest`。保留中なら除去して `RequestCancelled` を返す。
     /// 保留していなければ `None` (上流へ素通しする)。
     pub fn on_cancel(&mut self, id: &RequestId) -> Option<RawMessage> {
-        let _ = id;
-        todo!("M3 GREEN")
+        let index = self.held.iter().position(|(held, _)| held == id)?;
+        self.held.remove(index);
+        Some(error_response(
+            id,
+            error_code::REQUEST_CANCELLED,
+            "lsp-det: the request was cancelled while waiting for the server to become ready",
+        ))
     }
 
     /// 保留分すべてにエラー応答を作り、空にする。
     pub fn drain(&mut self, reason: DrainReason) -> Vec<RawMessage> {
-        let _ = reason;
-        todo!("M3 GREEN")
+        let (code, message) = match reason {
+            DrainReason::Shutdown => (
+                error_code::REQUEST_FAILED,
+                "lsp-det: shutdown was requested while waiting for the server to become ready",
+            ),
+            DrainReason::UpstreamExited => (
+                error_code::INTERNAL_ERROR,
+                "lsp-det: the upstream language server exited while the request was waiting",
+            ),
+        };
+        self.held
+            .drain(..)
+            .map(|(id, _)| error_response(&id, code, message))
+            .collect()
     }
 
     pub fn held_count(&self) -> usize {
         self.held.len()
+    }
+}
+
+/// 判定表の行。`health` を先に見る (仕様 3 章の推奨解釈)。
+enum Verdict {
+    Forward,
+    Hold,
+    Reject,
+}
+
+fn verdict(state: &ServerState) -> Verdict {
+    if state.health == Health::Error {
+        return Verdict::Reject;
+    }
+    match state.readiness {
+        Readiness::Ready | Readiness::Unknown => Verdict::Forward,
+        Readiness::Initializing | Readiness::Indexing => Verdict::Hold,
+    }
+}
+
+/// `health` が `error` のときの応答。`ServerState` の `message` を添える
+/// (設計 4.3)。壊れたサーバーを隠さない。
+fn request_failed(id: &RequestId, state: &ServerState) -> RawMessage {
+    let message = match &state.message {
+        Some(detail) => format!("lsp-det: the language server reports health: error ({detail})"),
+        None => "lsp-det: the language server reports health: error".to_string(),
+    };
+    error_response(id, error_code::REQUEST_FAILED, &message)
+}
+
+fn error_response(id: &RequestId, code: i64, message: &str) -> RawMessage {
+    RawMessage {
+        body: serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": code, "message": message},
+        }))
+        .expect("固定の構造なので常にシリアライズできる"),
     }
 }
 

@@ -4,7 +4,7 @@
 
 ## 観測環境
 
-- CC: `claude -c --plugin-dir dogfood/claude-plugin`（`--debug` なし）。作業ディレクトリは本リポジトリで、direnv が `target/release` を PATH に置く
+- CC: `claude --plugin-dir dogfood/claude-plugin`（`dogfood/README.md` と同じ。セッションの再開 `-c` は付けても挙動は変わらない）。第 1 回は `--debug` なし、第 2 回は `--debug` あり。作業ディレクトリは本リポジトリで、direnv が `target/release` を PATH に置く
 - lsp-det: main `f9b8237` の release ビルド
 - 上流: rust-analyzer 2026-08-03（flake.nix で固定した nixpkgs のビルド）
 - 確認手段: CC の LSP ツール（hover / findReferences）と、`ps` / `/proc` でのプロセス系譜の確認
@@ -27,14 +27,46 @@
 - 横断リクエスト以外（hover・documentSymbol 等）で起きる「インデックス未完了の空応答」は、設計 4.3 の判定表の対象外なのでそのまま見える。これは設計どおりであり、対象を広げるかは仕様 7.0 の横断リクエストの定義の問題であって lsp-det 単独では決めない
 - CC がサーバーを遅延起動するため、「起動直後に横断リクエストが来る」状況は CC で普通に起きる。下流側の保留（`indexing` の間 `references` を保留し `ready` で流す）は CC にとって意味がある
 
+## 第 2 回（2026-09-03）: 起動直後の横断リクエストと `--debug` ログ
+
+`claude --debug` で開き直し、言語サーバーが起動していない状態で最初の操作として `findReferences` を投げた。CC は `--debug` のとき言語サーバーの stderr と LSP メッセージの送受信を `~/.claude/debug/<セッション ID>.txt` に残す。
+
+### 結論
+
+| 項目                                  | 観測                                                                                                                                                                                                            |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 写像の選択と宣言                      | stderr に `upstream is "rust-analyzer" version "2026-08-03"; using its mapping, declaring {"completeness":true,"freshness":true}` が出た。テスト済みの版の一覧に載っている版なので保証が宣言されている          |
+| CC が最初の横断リクエストを投げる時点 | `initialize` の応答から **6ms 後**。`initialized` → `didOpen`（対象ファイル 1 つ）→ `textDocument/references` の順で、インデックスの完了を待たない                                                              |
+| 下流側の保留                          | `references` が届いた時点の状態は `{ok, indexing}`。lsp-det が保留し、6.7 秒後の `ready` で流した。CC には **完全な結果（2 ファイル 6 箇所）** が返った。保留がなければ第 1 回の hover と同じく空応答だった局面 |
+| CC のリクエストタイムアウト           | 応答まで 8.4 秒（保留 6.7 秒 + rust-analyzer の処理 1.7 秒）でタイムアウトしていない。上限の値はこの観測では分からない（8.4 秒より長い、としか言えない）                                                        |
+| CC が宣言していない通知の扱い         | `$/progress` が 223 件 CC に届いたが、エラーもログの警告もない。`experimental/serverStateChanged` は写像ありのとき CC に流さない設計なので届いていない（設計 4.2）                                              |
+| サーバー → クライアントのリクエスト   | rust-analyzer の `workspace/diagnostic/refresh` を CC が 0ms で応答した。lsp-det が代行するのは注入に由来する `window/workDoneProgress/create` だけで、これは素通し                                             |
+
+時系列（`--debug` ログの時刻、`initialize` 送信を 0 とする）:
+
+| 時刻   | 出来事                                                                      |
+| ------ | --------------------------------------------------------------------------- |
+| 0.000s | CC が `initialize` を送る。lsp-det の初期状態は `{unknown, unknown}`        |
+| 0.005s | `initialize` 応答。写像を選び `{unknown, initializing}` へ                  |
+| 0.006s | CC が `initialized`・`didOpen`・`references (1)` を送る                     |
+| 0.008s | 最初の `experimental/serverStatus` で `{ok, indexing}`。`references` は保留 |
+| 6.715s | `{ok, ready}`。保留を解放                                                   |
+| 8.376s | `references (1)` の応答が CC に届く                                         |
+
+### 設計への含意
+
+- 「CC は起動直後に横断リクエストを投げる」が事実として確定した。下流側の保留は CC のこの使い方に直接効いている
+- CC のリクエストタイムアウトは今回の保留（6.7 秒）では掛からなかった。大規模ワークスペースで保留が長引いたときに CC がどう見せるかは未観測のまま。仕様は時間による打ち切りを禁じている（6 章 6 項）ので、掛かった場合の対処は CC 側の `$/cancelRequest` を受けて保留を取り消す経路（設計 4.3）になる
+- 未知の通知（`$/progress`）を CC は黙って受け取る。設計 4.2 の「問題が出たら握りつぶしに変更する」条件は今のところ満たしていない
+
 ### 未観測（次回以降）
 
-- 起動直後に `findReferences` を投げたときの CC の見せ方（保留が CC のリクエストタイムアウトに掛かるか。掛かるなら CC 側の時間値を記録する）
-- `experimental/serverStateChanged` など CC が宣言していない通知の扱い（恒等写像でなく写像ありのときは通知を流さないので、CC が受け取るのは rust-analyzer 由来の通知だけ）
-- `claude --debug` での lsp-det の stderr（`lsp-det: upstream is "rust-analyzer" version "2026-08-03"; using its mapping, declaring {...}`）の確認
+- 保留が長引いたときの CC のタイムアウト値と見せ方（大規模ワークスペースが要る）
 - gopls 経路（本リポジトリに `.go` がないため別ディレクトリで行う）
+- health が `error` のときの拒否（RequestFailed）を CC がどう表示するか
 
 ## 一般化してはならない点
 
-- 「最初の LSP ツール呼び出しで起動」は CC のこの版での観測。CC の版が変われば変わり得る
-- 起動直後の hover が null を返す時間幅は本リポジトリの規模での話で、他のワークスペースには一般化できない
+- 「最初の LSP ツール呼び出しで起動」「`initialize` の直後に横断リクエストを投げる」は CC のこの版での観測。CC の版が変われば変わり得る
+- 起動直後の hover が null を返す時間幅と、保留の 6.7 秒は本リポジトリの規模での話で、他のワークスペースには一般化できない
+- 「8.4 秒でタイムアウトしなかった」は上限の下界にすぎず、CC のタイムアウト値そのものは分かっていない

@@ -152,7 +152,8 @@ const SERVER_STATE_CLIENT_CAPABILITY: &str = "experimental.serverState";
 
 /// 恒等写像のとき、上流の初期状態を lsp-det 自身が問い合わせるリクエストの
 /// id。上流の通知は変化のときにしか来ないので、最初の状態は聞くしかない。
-/// 文字列 id はクライアントの整数 id と衝突しない。
+/// JSON-RPC の id は文字列も許すので衝突しない保証はないが、`lsp-det:` を
+/// 予約 prefix として使うことで実用上衝突しない。
 const SELF_STATE_REQUEST_ID: &str = "lsp-det:serverState";
 
 /// 終了コードを取り、居座る上流は道連れにする。

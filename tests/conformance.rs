@@ -205,6 +205,42 @@ fn selects_the_mapping_from_the_server_info_name() {
 }
 
 #[test]
+fn spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
+    // 仕様 8.2 の 5: 保証は準拠テストを通した版の範囲でのみ宣言する。
+    // 範囲外の版や版の名乗りがない上流には、状態の通知だけを約束する。
+    for version in ["1.97.0 (old)", "none"] {
+        let server =
+            ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--server-version", version]);
+        let mut client = ConformanceClient::start(&server);
+        let result = client.initialize(true);
+        assert_eq!(
+            result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+            json!(true),
+            "テストを当てていない版 {version:?} に保証を宣言した: {result}"
+        );
+        // 写像そのものは働く (状態は追跡する)。
+        client.make_upstream_emit_status("ok", true);
+        assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+        client.shutdown();
+    }
+}
+
+#[test]
+fn maps_the_missing_workspace_warning_of_rust_analyzer_to_error() {
+    // 設計 5.1: 写像は言語サーバーの語彙の粗さを補う。プロジェクト未発見の
+    // warning は横断問い合わせにとって機能不全なので error に写す。
+    let (mut client, _) = client(true);
+    client.make_upstream_emit_status_with_message(
+        "warning",
+        true,
+        "Failed to discover workspace.\nConsider adding the `Cargo.toml` ...",
+    );
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Error);
+    client.shutdown();
+}
+
+#[test]
 fn injects_the_capabilities_of_every_known_mapping_unconditionally() {
     // serverInfo は initialize の応答で分かる。注入はその前に要るので、
     // 上流が誰であっても既知の写像ぶんを注入する。

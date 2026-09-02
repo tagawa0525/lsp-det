@@ -456,9 +456,12 @@ impl StateTracker {
     fn select_mapping(&mut self, info: Option<&initialize::ServerInfo>) -> Option<ServerState> {
         match self.tracker.select_mapping(info) {
             Some(state) => {
+                let provider = serde_json::to_string(&self.tracker.provider())
+                    .unwrap_or_else(|_| "<unserializable>".to_string());
                 eprintln!(
-                    "lsp-det: upstream is {:?}; using its mapping",
-                    info.map(|i| i.name.as_str()).unwrap_or("")
+                    "lsp-det: upstream is {:?} version {:?}; using its mapping, declaring {provider}",
+                    info.map(|i| i.name.as_str()).unwrap_or(""),
+                    info.and_then(|i| i.version.as_deref()).unwrap_or("<none>")
                 );
                 self.log(&state);
                 Some(state)

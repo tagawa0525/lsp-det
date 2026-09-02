@@ -25,6 +25,9 @@
 //! - `--server-name <name>`: `InitializeResult.serverInfo.name` で名乗る名前。
 //!   既定は `fake-lsp-server`（既知の写像がない名前）。`rust-analyzer` と
 //!   名乗れば lsp-det は rust-analyzer の写像を選ぶ
+//! - `--server-version <version>`: `serverInfo.version` で名乗る版。既定は
+//!   `1.98.0 (fake)`（rust-analyzer の写像が準拠テストを通した版の範囲内）。
+//!   `none` を渡すと version を省く
 //! - `--request-progress-create`: `initialized` を受けたら
 //!   `window/workDoneProgress/create` リクエスト（id `"wdp-1"`）を送る。
 //!   応答が返ったかは `$/fake/report` の `progressCreateAnswered` で分かる
@@ -54,6 +57,12 @@ fn main() {
         .and_then(|i| flags.get(i + 1))
         .cloned()
         .unwrap_or_else(|| "fake-lsp-server".to_string());
+    let server_version = flags
+        .iter()
+        .position(|flag| flag == "--server-version")
+        .and_then(|i| flags.get(i + 1))
+        .cloned()
+        .unwrap_or_else(|| "1.98.0 (fake)".to_string());
     let mut progress_create_answered = false;
     let mut initialize_failed_once = false;
 
@@ -125,7 +134,11 @@ fn main() {
                             "referencesProvider": true,
                             "experimental": experimental
                         },
-                        "serverInfo": {"name": server_name, "version": "0"}
+                        "serverInfo": if server_version == "none" {
+                            json!({"name": server_name})
+                        } else {
+                            json!({"name": server_name, "version": server_version})
+                        }
                     }),
                 );
             }

@@ -197,6 +197,19 @@ impl ConformanceClient {
         );
     }
 
+    /// `message` 付きで `experimental/serverStatus` を送らせる。
+    pub fn make_upstream_emit_status_with_message(
+        &mut self,
+        health: &str,
+        quiescent: bool,
+        message: &str,
+    ) {
+        self.notify(
+            "$/fake/emitServerStatus",
+            json!({"health": health, "quiescent": quiescent, "message": message}),
+        );
+    }
+
     /// 本プロトコルの状態を問い合わせる（仕様 4.1）。
     pub fn server_state(&mut self) -> ServerState {
         let response = self.request("experimental/serverState", json!(null));

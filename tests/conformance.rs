@@ -183,6 +183,93 @@ fn spec_7_1_4_reports_an_index_failure_as_health_error() {
 }
 
 // ---------------------------------------------------------------------------
+// 写像の選択と capability の注入 (設計 4.2、ADR 0009 決定 D-2・D-3)
+//
+// 写像は上流が InitializeResult.serverInfo.name で名乗る名前で選ぶ。
+// 名乗る前に initialize を上流へ送る必要があるので、既知の写像ぶんの
+// capability は無条件に注入する。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn selects_the_mapping_from_the_server_info_name() {
+    // 既定の被験者は偽上流が rust-analyzer と名乗る。--adapter は存在しない。
+    let (mut client, result) = client(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "rust-analyzer と名乗った上流に rust-analyzer の写像が選ばれていない: {result}"
+    );
+    client.make_upstream_emit_status("ok", true);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn injects_the_capabilities_of_every_known_mapping_unconditionally() {
+    // serverInfo は initialize の応答で分かる。注入はその前に要るので、
+    // 上流が誰であっても既知の写像ぶんを注入する。
+    for server in [
+        ServerUnderTest::lsp_det_with_fake_upstream(),
+        ServerUnderTest::lsp_det_without_adapter(),
+    ] {
+        let mut client = ConformanceClient::start(&server);
+        client.initialize(true);
+        let capabilities = client.upstream_client_capabilities();
+        assert_eq!(
+            capabilities["experimental"]["serverStatusNotification"],
+            json!(true),
+            "rust-analyzer 用の宣言が注入されていない: {capabilities}"
+        );
+        assert_eq!(
+            capabilities["window"]["workDoneProgress"],
+            json!(true),
+            "gopls 用の宣言が注入されていない: {capabilities}"
+        );
+        // 注入は対象の 2 キーを true にするだけで、クライアントの他の宣言
+        // (hover 等) は残る。
+        assert_eq!(capabilities["textDocument"]["hover"], json!({}));
+        client.shutdown();
+    }
+}
+
+#[test]
+fn answers_work_done_progress_create_itself_when_the_client_did_not_declare_it() {
+    // 注入した window.workDoneProgress に由来するリクエストは、クライアントに
+    // 転送せず lsp-det が自ら成功応答する (設計 4.2)。宣言していない
+    // クライアントは MethodNotFound を返す (Serena で確認済み)。
+    let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--request-progress-create"]);
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(true);
+    assert!(
+        client.expect_no_notification("window/workDoneProgress/create", NEGATIVE_WINDOW),
+        "宣言していないクライアントに window/workDoneProgress/create を転送した"
+    );
+    assert!(
+        client.upstream_progress_create_answered(),
+        "上流の window/workDoneProgress/create に応答していない"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn forwards_work_done_progress_create_when_the_client_declared_it() {
+    // クライアントが元々宣言していた capability に基づくリクエストは素通し。
+    let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--request-progress-create"]);
+    let mut client = ConformanceClient::start(&server);
+    client.initialize_with_capabilities(json!({
+        "window": {"workDoneProgress": true},
+        "experimental": {"serverState": true},
+    }));
+    assert!(
+        client
+            .await_notification("window/workDoneProgress/create")
+            .is_some(),
+        "宣言したクライアントへ window/workDoneProgress/create が届かない"
+    );
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
 // 写像なし (仕様 8.2 の 3、8.4 の 1)
 //
 // readiness を観測する手段がないので両軸 unknown を正直に報告する。
@@ -217,8 +304,8 @@ fn spec_8_4_1_reports_unknown_on_both_axes_without_an_adapter() {
 
 #[test]
 fn does_not_interpret_the_upstream_status_without_an_adapter() {
-    // 上流が rust-analyzer 風の serverStatus を送っても、アダプタなしでは
-    // 読まない。他のサーバーの同名通知を誤読しないため。
+    // 既知の写像がない名前を名乗る上流が rust-analyzer 風の serverStatus を
+    // 送っても読まない。他のサーバーの同名通知を誤読しないため。
     let (mut client, _) = client_without_adapter(true);
     client.make_upstream_emit_status("ok", true);
     assert!(
@@ -327,22 +414,6 @@ fn does_not_emit_its_own_notifications_under_deferral_with_an_adapter() {
 }
 
 #[test]
-fn drops_a_pre_handshake_transition_under_deferral() {
-    // handshake 前に溜めた遷移も、恒等写像に切り替わったら流さない。
-    let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
-        "--status-before-initialize-result",
-        "--declare-server-state-provider",
-    ]);
-    let mut client = ConformanceClient::start(&server);
-    client.initialize(true);
-    assert!(
-        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "恒等写像に切り替わった後に、溜めていた遷移を流した"
-    );
-    client.shutdown();
-}
-
-#[test]
 fn spec_8_4_2_defers_to_a_conformant_upstream_even_with_an_adapter() {
     // 写像は上流の語彙を補うためのもの。上流が本プロトコルを話すなら不要で、
     // 上流側の宣言で上流の宣言を隠してはならない。
@@ -364,24 +435,11 @@ fn spec_8_4_2_defers_to_a_conformant_upstream_even_with_an_adapter() {
 // ---------------------------------------------------------------------------
 // handshake 前後の境界
 //
-// LSP は `InitializeResult` より前のサーバー発通知を許さない。しかし
-// 「送れないから捨てる」と、その遷移は永久に失われる。沈黙は本プロトコルが
-// 消そうとしているものそのものなので、境界の扱いを明示的に縛る。
+// 写像は InitializeResult の serverInfo で選ぶので、それより前の上流の
+// 状態通知は解釈できない。LSP はサーバー発の通知を InitializeResult の後に
+// 限っている (許されるのは showMessage / logMessage / telemetry だけ) ので、
+// これは仕様の範囲内である。ここで縛るのは initialize の失敗と再試行の扱い。
 // ---------------------------------------------------------------------------
-
-#[test]
-fn a_state_change_before_the_handshake_is_delivered_afterwards() {
-    // 偽上流は InitializeResult より前に quiescent:true を送る。
-    let server =
-        ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--status-before-initialize-result"]);
-    let mut client = ConformanceClient::start(&server);
-    client.initialize(true);
-
-    // handshake 前に起きた遷移も、宣言したクライアントには届かねばならない。
-    let state = client.await_state_changed();
-    assert_eq!(state.readiness, Readiness::Ready);
-    client.shutdown();
-}
 
 #[test]
 fn an_initialize_error_does_not_end_the_handshake() {
@@ -569,12 +627,7 @@ fn spec_7_3_cross_file_freshness_through_lsp_det_with_real_rust_analyzer() {
 fn real_rust_analyzer(project: &support::TempCargoProject) -> ServerUnderTest {
     ServerUnderTest {
         program: support::lsp_det_binary(),
-        args: vec![
-            "--adapter".to_string(),
-            "rust-analyzer".to_string(),
-            "--".to_string(),
-            "rust-analyzer".to_string(),
-        ],
+        args: vec!["--".to_string(), "rust-analyzer".to_string()],
         root: project.root.clone(),
     }
 }
@@ -599,12 +652,7 @@ fn references_in(
 fn spec_7_1_through_lsp_det_with_real_rust_analyzer() {
     let server = ServerUnderTest {
         program: support::lsp_det_binary(),
-        args: vec![
-            "--adapter".to_string(),
-            "rust-analyzer".to_string(),
-            "--".to_string(),
-            "rust-analyzer".to_string(),
-        ],
+        args: vec!["--".to_string(), "rust-analyzer".to_string()],
         root: support::repo_root(),
     };
     let mut client = ConformanceClient::start(&server);

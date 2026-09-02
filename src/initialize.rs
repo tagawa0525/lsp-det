@@ -1,12 +1,15 @@
-//! `initialize` の capability 書き換え (v0.1-design.md 4.5)。
+//! `initialize` の capability 注入と `InitializeResult` の読み取り
+//! (v0.1-design.md 4.2)。
 //!
 //! ready 信号はクライアントの capability 宣言に依存する。rust-analyzer は
 //! `experimental.serverStatusNotification` が未宣言だと
 //! `experimental/serverStatus` を一切送らないため、プロキシが上流への
-//! `initialize` に自ら宣言を足す。
+//! `initialize` に自ら宣言を足す。どの写像を使うかは `InitializeResult` の
+//! `serverInfo` で分かるが、注入はその前に要るので既知の写像ぶんを無条件に
+//! 注入する (ADR 0009 決定 D-3)。
 //!
 //! ここはボディを完全パースして再シリアライズする数少ない例外である
-//! (4.6 が `initialize` と readiness 追跡用の通知にだけ認めている)。
+//! (4.4 が `initialize` / `InitializeResult` と写像用の通知にだけ認めている)。
 //! 書き換えが不要なら原文バイトをそのまま使うよう伝える。
 
 use serde_json::{Map, Value};
@@ -29,7 +32,43 @@ pub fn client_declares_server_state(body: &[u8]) -> bool {
         == Some(&Value::Bool(true))
 }
 
-/// 上流の `initialize` 応答をどう扱うか。1 回のパースで判定する。
+/// クライアントが `window.workDoneProgress` を自分で宣言していたか。
+///
+/// 宣言していないクライアントは、注入した宣言に由来する
+/// `window/workDoneProgress/create` を扱えない (Serena は `MethodNotFound` を
+/// 返す)。その場合は上流側が自ら応答する (設計 4.2)。
+pub fn client_declares_work_done_progress(body: &[u8]) -> bool {
+    let Ok(root) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    root.get("params")
+        .and_then(|params| params.get("capabilities"))
+        .and_then(|caps| caps.get("window"))
+        .and_then(|window| window.get("workDoneProgress"))
+        == Some(&Value::Bool(true))
+}
+
+/// 上流が `InitializeResult.serverInfo` で名乗った名前と版 (LSP 3.15)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerInfo {
+    pub name: String,
+    pub version: Option<String>,
+}
+
+/// 成功した `initialize` 応答から `serverInfo` を読む。名乗りがなければ
+/// `None` (写像は選べず、上流側は両軸 `unknown` を報告する)。
+pub fn server_info(body: &[u8]) -> Option<ServerInfo> {
+    let root = serde_json::from_slice::<Value>(body).ok()?;
+    let info = root.get("result")?.get("serverInfo")?;
+    let name = info.get("name")?.as_str()?.to_string();
+    let version = info
+        .get("version")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Some(ServerInfo { name, version })
+}
+
+/// 上流の `initialize` 応答をどう扱うか。
 #[derive(Debug, PartialEq, Eq)]
 pub enum InitializeResultAction {
     /// 上流自身が `serverStateProvider` を宣言している。上流側は恒等写像に
@@ -284,7 +323,7 @@ mod tests {
 
     #[test]
     fn does_nothing_when_no_paths_are_requested() {
-        // アダプタなしのとき。原文をそのまま流す。
+        // 注入する宣言がなければ原文をそのまま流す。
         let body = r#"{"id":1,"method":"initialize","params":{"capabilities":{}}}"#;
         assert!(inject_client_capabilities(body.as_bytes(), &[]).is_none());
     }
@@ -310,6 +349,43 @@ mod tests {
                 !client_declares_server_state(body.as_bytes()),
                 "宣言とみなしてはならない: {body}"
             );
+        }
+    }
+
+    #[test]
+    fn detects_the_client_work_done_progress_declaration() {
+        let declared = r#"{"id":1,"method":"initialize","params":{"capabilities":{"window":{"workDoneProgress":true}}}}"#;
+        assert!(client_declares_work_done_progress(declared.as_bytes()));
+        for body in [
+            r#"{"id":1,"method":"initialize","params":{"capabilities":{}}}"#,
+            r#"{"id":1,"method":"initialize","params":{"capabilities":{"window":{"workDoneProgress":false}}}}"#,
+            "{not json",
+        ] {
+            assert!(!client_declares_work_done_progress(body.as_bytes()));
+        }
+    }
+
+    #[test]
+    fn reads_the_server_info_from_a_successful_result() {
+        let body = r#"{"id":1,"result":{"capabilities":{},"serverInfo":{"name":"rust-analyzer","version":"1.98.0 (88d9e12 2026-08-18)"}}}"#;
+        assert_eq!(
+            server_info(body.as_bytes()),
+            Some(ServerInfo {
+                name: "rust-analyzer".to_string(),
+                version: Some("1.98.0 (88d9e12 2026-08-18)".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn server_info_is_absent_when_the_upstream_does_not_name_itself() {
+        for body in [
+            r#"{"id":1,"result":{"capabilities":{}}}"#,
+            r#"{"id":1,"result":{"capabilities":{},"serverInfo":{"version":"1"}}}"#,
+            r#"{"id":1,"error":{"code":-32603,"message":"boom"}}"#,
+            "{not json",
+        ] {
+            assert_eq!(server_info(body.as_bytes()), None, "名乗りがない: {body}");
         }
     }
 

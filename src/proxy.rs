@@ -1,15 +1,15 @@
-//! クライアントと上流言語サーバーを中継するイベントループ (v0.1-design.md 4.8)。
+//! クライアントと上流言語サーバーを中継するイベントループ (v0.1-design.md 4.6)。
 //!
-//! M1 の範囲は純粋な素通し (ゲートなし)。全状態はこのモジュールの
-//! 単一ループに閉じ、ロックを持たない。読み取りは std スレッド + `mpsc`
-//! で行い、判断はループ内でのみ行う。
+//! 全状態はこのモジュールの単一ループに閉じ、ロックを持たない。読み取りは
+//! std スレッド + `mpsc` で行い、判断はループ内でのみ行う。上流側
+//! ([`UpstreamSide`]) がここに住む。下流側 (M3) も同じループに載せる。
 
 use std::io::{self, BufReader, Read, Write};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::adapter::RustAnalyzerAdapter;
+use crate::adapter;
 use crate::framing::{self, RawMessage};
 use crate::initialize;
 use crate::peek::{self, RequestId};
@@ -35,21 +35,16 @@ enum Event {
 
 /// クライアントと上流を中継し、プロキシ自身の終了コードを返す。
 ///
-/// `adapter` を渡すと上流の readiness を追跡する (v0.1-design.md 5 章)。
-/// `None` でも上流側は宣言し、両軸 `unknown` を報告する (仕様 8.2 の 3)。
-/// 上流の消失は通知ではなく接続の終了で伝える (仕様 8.2 の 7)。
-pub fn run<R, W>(
-    client_in: R,
-    client_out: W,
-    command: &str,
-    args: &[String],
-    adapter: Option<RustAnalyzerAdapter>,
-) -> io::Result<i32>
+/// 写像は上流が `InitializeResult.serverInfo` で名乗る名前で選ぶ
+/// (v0.1-design.md 4.2)。既知でなければ上流側は保証なしで宣言し、両軸
+/// `unknown` を報告する (仕様 8.2 の 3)。上流の消失は通知ではなく接続の
+/// 終了で伝える (仕様 8.2 の 7)。
+pub fn run<R, W>(client_in: R, client_out: W, command: &str, args: &[String]) -> io::Result<i32>
 where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
-    let mut upstream_side = UpstreamSide::new(adapter);
+    let mut upstream_side = UpstreamSide::new();
     let mut handles = process::spawn(command, args)?;
     let mut upstream_stdin = handles.stdin;
     let mut client_out = client_out;
@@ -74,16 +69,19 @@ where
                     let _ = framing::write_message(&mut upstream_stdin, &msg);
                 }
             },
-            Ok(Event::FromUpstream(msg)) => {
-                let (msg, notification) = upstream_side.on_upstream(msg);
-                if framing::write_message(&mut client_out, &msg).is_err() {
-                    // クライアントが既に読み取りをやめている。無視して続行する
+            Ok(Event::FromUpstream(msg)) => match upstream_side.on_upstream(msg) {
+                UpstreamAction::Forward { msg, notification } => {
+                    // クライアントが既に読み取りをやめていても無視して続行する
                     // (次のポーリングで上流の exit を検出する)。
+                    let _ = framing::write_message(&mut client_out, &msg);
+                    if let Some(notification) = notification {
+                        let _ = framing::write_message(&mut client_out, &notification);
+                    }
                 }
-                if let Some(notification) = notification {
-                    let _ = framing::write_message(&mut client_out, &notification);
+                UpstreamAction::AnswerUpstream(response) => {
+                    let _ = framing::write_message(&mut upstream_stdin, &response);
                 }
-            }
+            },
             Ok(Event::UpstreamClosed) => {
                 // stdout を閉じた上流はもう応答しない。クライアントが
                 // 喋り続けていてもここで閉じる。
@@ -137,6 +135,17 @@ enum ClientAction {
     AnswerLocally(RawMessage),
 }
 
+/// 上流から来たメッセージをどう扱うか。
+enum UpstreamAction {
+    /// クライアントへ流す。付随して送る通知があれば続けて流す。
+    Forward {
+        msg: RawMessage,
+        notification: Option<RawMessage>,
+    },
+    /// 上流側が自ら上流に応答する。クライアントへは流さない。
+    AnswerUpstream(RawMessage),
+}
+
 /// クライアントから見た `initialize` リクエストの種類。
 ///
 /// 覗き見の借用を `RawMessage` の所有権から切り離すために、判定結果だけを
@@ -146,6 +155,10 @@ enum ClientKind {
     InitializeRequest(Option<RequestId>),
     Other,
 }
+
+/// 注入した `window.workDoneProgress` に由来するサーバー発リクエスト。
+/// クライアントが自分で宣言していなければ上流側が答える (設計 4.2)。
+const WORK_DONE_PROGRESS_CREATE: &str = "window/workDoneProgress/create";
 
 /// 終了コードを取り、居座る上流は道連れにする。
 ///
@@ -186,17 +199,14 @@ struct UpstreamSide {
     tracker: StateTracker,
     /// クライアントが仕様 5.2 の宣言をしたか。通知を送る条件。
     client_declared: bool,
+    /// クライアントが `window.workDoneProgress` を自分で宣言していたか。
+    /// していなければ `window/workDoneProgress/create` は上流側が答える。
+    client_declared_progress: bool,
     initialize_id: Option<RequestId>,
-    /// `InitializeResult` を転送済みか。これより前に通知を送ると
-    /// handshake を壊す (7 章チェックリスト #1 と同種の事故)。
+    /// `InitializeResult` を転送済みか。写像の選択もこの時点で行うので、
+    /// これより前に状態が動くことはない (LSP はサーバー発の通知を
+    /// `InitializeResult` の後に限っている)。
     handshake_done: bool,
-    /// handshake 前に起きた状態変化。`InitializeResult` の直後に送る。
-    ///
-    /// 送れないからと捨ててはならない。アダプタ側の状態は既に進んでおり、
-    /// 同じ状態は二度と通知されない (仕様 4.2 の重複抑止)。捨てるとその
-    /// 遷移は永久に失われ、通知だけを見ているクライアントは初期状態のまま
-    /// 取り残される。
-    pending_state: Option<ServerState>,
     /// 上流自身が本プロトコルを宣言している (`InitializeResult` に
     /// `serverStateProvider` がある)。以後、上流側は恒等写像になる: 宣言を
     /// 足さず、リクエストを転送し、自前の通知を出さない。同一接続に送信者の
@@ -205,13 +215,13 @@ struct UpstreamSide {
 }
 
 impl UpstreamSide {
-    fn new(adapter: Option<RustAnalyzerAdapter>) -> Self {
+    fn new() -> Self {
         UpstreamSide {
-            tracker: StateTracker::new(adapter),
+            tracker: StateTracker::new(),
             client_declared: false,
+            client_declared_progress: false,
             initialize_id: None,
             handshake_done: false,
-            pending_state: None,
             identity: false,
         }
     }
@@ -238,9 +248,12 @@ impl UpstreamSide {
             ClientKind::InitializeRequest(id) => {
                 self.initialize_id = id;
                 self.client_declared = initialize::client_declares_server_state(&msg.body);
+                self.client_declared_progress =
+                    initialize::client_declares_work_done_progress(&msg.body);
+                // 上流が誰かはまだ分からない。既知の写像ぶんを全部注入する。
                 let injected = initialize::inject_client_capabilities(
                     &msg.body,
-                    self.tracker.required_client_capabilities(),
+                    adapter::CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS,
                 );
                 ClientAction::Forward(match injected {
                     Some(body) => RawMessage { body },
@@ -251,20 +264,36 @@ impl UpstreamSide {
         }
     }
 
-    /// 上流のメッセージを観測し、(転送するメッセージ, 付随して送る通知) を返す。
-    fn on_upstream(&mut self, msg: RawMessage) -> (RawMessage, Option<RawMessage>) {
-        // handshake 後、アダプタがなければ上流メッセージから読むものはない。
-        // 覗き見 (serde_json はボディ全体を字句解析する) を省き、透過経路の
-        // 負荷を main と同じに保つ。
-        if self.handshake_done && !self.tracker.observes_upstream() {
-            return (msg, None);
+    /// 上流のメッセージを観測し、どう扱うかを返す。
+    fn on_upstream(&mut self, msg: RawMessage) -> UpstreamAction {
+        let forward = |msg| UpstreamAction::Forward {
+            msg,
+            notification: None,
+        };
+        // handshake 後、写像がなく progress の肩代わりも要らなければ、上流
+        // メッセージから読むものはない。覗き見 (serde_json はボディ全体を
+        // 字句解析する) を省き、透過経路の負荷を素通しと同じに保つ。
+        if self.handshake_done && !self.tracker.observes_upstream() && self.client_declared_progress
+        {
+            return forward(msg);
         }
 
         // 覗き見は 1 回だけ。上流のメッセージは大きくなりうる (diagnostics
         // 等) ので、判定ごとにパースし直すと透過経路の負荷が倍になる。
         let Ok(view) = peek::peek(&msg.body) else {
-            return (msg, None);
+            return forward(msg);
         };
+
+        if view.is_request()
+            && view.method() == Some(WORK_DONE_PROGRESS_CREATE)
+            && !self.client_declared_progress
+        {
+            // 注入した宣言に由来するリクエスト。クライアントは扱えないので
+            // 上流側が成功応答する。id は上流のものをそのまま返す。
+            let id = view.id.clone().expect("is_request は id を持つ");
+            return UpstreamAction::AnswerUpstream(null_response(&id));
+        }
+
         let is_initialize_response = !self.handshake_done
             && view.method().is_none()
             && view.id.is_some()
@@ -272,25 +301,31 @@ impl UpstreamSide {
 
         if is_initialize_response {
             use initialize::InitializeResultAction::*;
+            // 上流が名乗った名前で写像を選ぶ。宣言する保証はその写像に聞く。
+            if let Some(state) = self
+                .tracker
+                .select_mapping(initialize::server_info(&msg.body).as_ref())
+            {
+                debug_assert_eq!(state, *self.tracker.state());
+            }
             let provider = self.tracker.provider();
             let forwarded = match initialize::declare_server_state_provider(&msg.body, &provider) {
                 NotASuccess => {
                     // エラー応答。handshake は完了しておらず、クライアントは
-                    // initialize を再試行しうる。溜めた遷移もまだ流さない。
-                    // この id には応答済みなので、宙に浮いたリクエストでは
-                    // なくなる (上流が消えても二重に応答しない)。
+                    // initialize を再試行しうる。この id には応答済みなので、
+                    // 宙に浮いたリクエストではなくなる (上流が消えても二重に
+                    // 応答しない)。
                     self.initialize_id = None;
-                    return (msg, None);
+                    return forward(msg);
                 }
                 UpstreamDeclares => {
                     self.handshake_done = true;
                     self.identity = true;
-                    self.pending_state = None;
                     eprintln!(
                         "lsp-det: the upstream declares serverStateProvider itself; \
                          the upstream side becomes an identity mapping"
                     );
-                    return (msg, None);
+                    return forward(msg);
                 }
                 Unrewritable => {
                     // capabilities / experimental がオブジェクトでない。宣言
@@ -308,18 +343,14 @@ impl UpstreamSide {
                     RawMessage { body }
                 }
             };
-            // handshake 前に溜まった遷移をここで 1 通だけ流す。
-            let flushed = self
-                .pending_state
-                .take()
-                .filter(|_| self.client_declared)
-                .map(|state| changed_notification(&state));
-            return (forwarded, flushed);
+            return forward(forwarded);
         }
 
         let changed = self.tracker.observe(&view, &msg.body);
-        let notification = changed.and_then(|state| self.notify_or_stash(state));
-        (msg, notification)
+        UpstreamAction::Forward {
+            msg,
+            notification: changed.and_then(|state| self.notify(state)),
+        }
     }
 
     /// handshake が終わる前に上流が消えた。宙に浮いた `initialize` を
@@ -333,13 +364,9 @@ impl UpstreamSide {
     }
 
     /// 仕様 4.2 の通知を作る。宣言していないクライアントには送らない
-    /// (仕様 5.2)。handshake 前なら送らずに溜める。
-    fn notify_or_stash(&mut self, state: ServerState) -> Option<RawMessage> {
+    /// (仕様 5.2)。恒等写像中は上流が送信者なので送らない。
+    fn notify(&self, state: ServerState) -> Option<RawMessage> {
         if !self.client_declared || self.identity {
-            return None;
-        }
-        if !self.handshake_done {
-            self.pending_state = Some(state);
             return None;
         }
         Some(changed_notification(&state))
@@ -355,6 +382,18 @@ impl UpstreamSide {
             }))
             .expect("ServerState は常にシリアライズできる"),
         }
+    }
+}
+
+/// 上流発リクエストへの成功応答 (`result: null`)。
+fn null_response(id: &RequestId) -> RawMessage {
+    RawMessage {
+        body: serde_json::to_vec(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": null,
+        }))
+        .expect("固定の構造なので常にシリアライズできる"),
     }
 }
 
@@ -399,10 +438,10 @@ struct StateTracker {
 }
 
 impl StateTracker {
-    fn new(adapter: Option<RustAnalyzerAdapter>) -> Self {
+    fn new() -> Self {
         let now = Instant::now();
         let mut tracker = StateTracker {
-            tracker: Tracker::new(adapter),
+            tracker: Tracker::new(),
             started: now,
             entered_state: now,
         };
@@ -411,6 +450,27 @@ impl StateTracker {
         let initial = tracker.tracker.state().clone();
         tracker.log(&initial);
         tracker
+    }
+
+    /// 上流が名乗った。写像が選べたら開始状態をログして返す。
+    fn select_mapping(&mut self, info: Option<&initialize::ServerInfo>) -> Option<ServerState> {
+        match self.tracker.select_mapping(info) {
+            Some(state) => {
+                eprintln!(
+                    "lsp-det: upstream is {:?}; using its mapping",
+                    info.map(|i| i.name.as_str()).unwrap_or("")
+                );
+                self.log(&state);
+                Some(state)
+            }
+            None => {
+                eprintln!(
+                    "lsp-det: upstream is {:?}; no known mapping, reporting unknown",
+                    info.map(|i| i.name.as_str()).unwrap_or("<unnamed>")
+                );
+                None
+            }
+        }
     }
 
     fn state(&self) -> &ServerState {
@@ -423,10 +483,6 @@ impl StateTracker {
 
     fn observes_upstream(&self) -> bool {
         self.tracker.observes_upstream()
-    }
-
-    fn required_client_capabilities(&self) -> &'static [&'static str] {
-        self.tracker.required_client_capabilities()
     }
 
     /// 状態が変わったらログして新しい状態を返す。
@@ -510,18 +566,15 @@ mod tests {
 
     /// `cat` を上流にすると client -> proxy -> cat -> proxy -> client と
     /// 往復するため、「プロキシが上流へ書いたバイト列」をそのまま観測できる。
-    fn spawn_with_cat(
-        adapter: Option<RustAnalyzerAdapter>,
-    ) -> (
+    fn spawn_with_cat() -> (
         io::PipeWriter,
         BufReader<io::PipeReader>,
         thread::JoinHandle<i32>,
     ) {
         let (client_out_reader, client_out_writer) = io::pipe().unwrap();
         let (client_in_reader, client_in_writer) = io::pipe().unwrap();
-        let handle = thread::spawn(move || {
-            run(client_in_reader, client_out_writer, "cat", &[], adapter).unwrap()
-        });
+        let handle =
+            thread::spawn(move || run(client_in_reader, client_out_writer, "cat", &[]).unwrap());
         (client_in_writer, BufReader::new(client_out_reader), handle)
     }
 
@@ -536,10 +589,10 @@ mod tests {
     }
 
     #[test]
-    fn injects_the_status_capability_into_the_initialize_it_forwards() {
-        // 設計 4.5: rust-analyzer は宣言がないと serverStatus を送らない。
-        let (mut client_in, mut client_out, handle) =
-            spawn_with_cat(Some(RustAnalyzerAdapter::new()));
+    fn injects_the_capabilities_of_every_known_mapping_before_knowing_the_upstream() {
+        // 設計 4.2: serverInfo は initialize の応答で分かるので、注入は
+        // 上流が誰か分かる前に、既知の写像ぶんを無条件に行う。
+        let (mut client_in, mut client_out, handle) = spawn_with_cat();
 
         send(
             &mut client_in,
@@ -552,21 +605,10 @@ mod tests {
             value["params"]["capabilities"]["experimental"]["serverStatusNotification"],
             serde_json::Value::Bool(true)
         );
-
-        drop(client_in);
-        handle.join().unwrap();
-    }
-
-    #[test]
-    fn leaves_the_initialize_alone_when_no_adapter_is_selected() {
-        let (mut client_in, mut client_out, handle) = spawn_with_cat(None);
-
-        let original =
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#;
-        send(&mut client_in, original);
-
-        let forwarded = framing::read_message(&mut client_out).unwrap().unwrap();
-        assert_eq!(forwarded.body, original.as_bytes());
+        assert_eq!(
+            value["params"]["capabilities"]["window"]["workDoneProgress"],
+            serde_json::Value::Bool(true)
+        );
 
         drop(client_in);
         handle.join().unwrap();
@@ -574,9 +616,8 @@ mod tests {
 
     #[test]
     fn forwards_observed_upstream_messages_byte_for_byte() {
-        // 状態を追跡しても、クライアントへ届くのは原文のまま (設計 4.6)。
-        let (mut client_in, mut client_out, handle) =
-            spawn_with_cat(Some(RustAnalyzerAdapter::new()));
+        // 状態を追跡しても、クライアントへ届くのは原文のまま (設計 4.4)。
+        let (mut client_in, mut client_out, handle) = spawn_with_cat();
 
         let status = r#"{"jsonrpc":"2.0","method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"message":null}}"#;
         send(&mut client_in, status);
@@ -591,8 +632,7 @@ mod tests {
     #[test]
     fn only_rewrites_the_initialize_request() {
         // 同じ method でも通知なら書き換えない。
-        let (mut client_in, mut client_out, handle) =
-            spawn_with_cat(Some(RustAnalyzerAdapter::new()));
+        let (mut client_in, mut client_out, handle) = spawn_with_cat();
 
         let notification =
             r#"{"jsonrpc":"2.0","method":"initialize","params":{"capabilities":{}}}"#;
@@ -612,12 +652,13 @@ mod tests {
         let (client_out_reader, client_out_writer) = io::pipe().unwrap();
         let (client_in_reader, mut client_in_writer) = io::pipe().unwrap();
 
-        let handle = thread::spawn(move || {
-            run(client_in_reader, client_out_writer, "cat", &[], None).unwrap()
-        });
+        let handle =
+            thread::spawn(move || run(client_in_reader, client_out_writer, "cat", &[]).unwrap());
 
+        // initialize は capability 注入で書き換わる (設計 4.2) ので、それ以外の
+        // リクエストで測る。
         let sent = RawMessage {
-            body: br#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#.to_vec(),
+            body: br#"{"jsonrpc":"2.0","id":1,"method":"textDocument/hover","params":{}}"#.to_vec(),
         };
         write_message(&mut client_in_writer, &sent).unwrap();
 
@@ -641,7 +682,6 @@ mod tests {
                 client_out_writer,
                 "sh",
                 &["-c".to_string(), "exit 7".to_string()],
-                None,
             )
             .unwrap()
         });
@@ -670,7 +710,6 @@ mod tests {
                 client_out_writer,
                 "sleep",
                 &["30".to_string()],
-                None,
             )
             .unwrap()
         });

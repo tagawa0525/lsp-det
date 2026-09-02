@@ -72,8 +72,8 @@ impl From<UpstreamHealth> for Health {
 pub const TESTED_VERSIONS: &[&str] = &["1.98.0", "2026-08-03"];
 
 /// `serverInfo.version` の先頭トークン。ハッシュや日付の後置を捨てる。
-pub fn leading_token(version: &str) -> &str {
-    version.split(' ').next().unwrap_or("")
+fn leading_token(version: &str) -> &str {
+    version.split_whitespace().next().unwrap_or("")
 }
 
 /// プロジェクトが 1 つも見つからないときに rust-analyzer が `warning` に

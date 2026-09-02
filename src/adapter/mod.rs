@@ -57,18 +57,6 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
     }
 }
 
-/// `X.Y.Z` の 3 つ組。rust-analyzer の版文字列の先頭部分。
-pub type Version = (u32, u32, u32);
-
-/// rust-analyzer の版文字列 (`1.98.0 (88d9e12 2026-08-18)` 等) の先頭の
-/// `X.Y.Z` を読む。ハッシュや日付、`-standalone` 等の後置は捨てる。
-pub fn parse_version(version: &str) -> Option<Version> {
-    let leading = version.split([' ', '-']).next().unwrap_or("");
-    let mut parts = leading.split('.').map(|part| part.parse::<u32>().ok());
-    let (major, minor, patch) = (parts.next()??, parts.next()??, parts.next()??);
-    Some((major, minor, patch))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,17 +101,5 @@ mod tests {
                 "テストを当てていない版 {untested:?} に保証を宣言した"
             );
         }
-    }
-
-    #[test]
-    fn parses_the_leading_semver_of_a_rust_analyzer_version_string() {
-        assert_eq!(
-            parse_version("1.98.0 (88d9e12 2026-08-18)"),
-            Some((1, 98, 0))
-        );
-        assert_eq!(parse_version("1.98.0"), Some((1, 98, 0)));
-        assert_eq!(parse_version("0.3.2600-standalone"), Some((0, 3, 2600)));
-        assert_eq!(parse_version("nightly"), None);
-        assert_eq!(parse_version(""), None);
     }
 }

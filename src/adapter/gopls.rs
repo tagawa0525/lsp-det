@@ -49,15 +49,23 @@ pub const TESTED_VERSIONS: &[&str] = &["0.23.0"];
 ///
 /// gopls はビルド情報 (`debug.BuildInfo`) を JSON にした文字列を名乗る。
 /// 版はその最上位の `"Version"` (`v0.23.0`)。`Main.Version` は nix ビルド
-/// では `(devel)` なので使えない。JSON でなければ文字列そのものを版とみなし、
-/// 先頭の `v` を除く。
+/// では `(devel)` なので使えない。JSON でなければ文字列そのものを版とみなす。
+/// 前後の空白と先頭の `v` を落とし、`X.Y.Z` の形だけを受理する
+/// (`(devel)` 等は `None`)。
 pub fn gopls_version(version: &str) -> Option<String> {
     let raw = match serde_json::from_str::<Value>(version) {
         Ok(Value::Object(info)) => info.get("Version")?.as_str()?.to_string(),
         _ => version.to_string(),
     };
-    let stripped = raw.strip_prefix('v').unwrap_or(&raw);
-    (!stripped.is_empty()).then(|| stripped.to_string())
+    let trimmed = raw.trim();
+    let stripped = trimmed.strip_prefix('v').unwrap_or(trimmed);
+    let mut parts = stripped.split('.');
+    let is_semver = parts
+        .by_ref()
+        .take(3)
+        .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+        && stripped.matches('.').count() == 2;
+    is_semver.then(|| stripped.to_string())
 }
 
 #[derive(Debug, Deserialize)]
@@ -398,7 +406,9 @@ mod tests {
         assert_eq!(gopls_version(GOPLS_VERSION_JSON).as_deref(), Some("0.23.0"));
         assert_eq!(gopls_version("v0.23.0").as_deref(), Some("0.23.0"));
         assert_eq!(gopls_version("0.23.0").as_deref(), Some("0.23.0"));
-        assert_eq!(gopls_version("(devel)").as_deref(), Some("(devel)"));
+        assert_eq!(gopls_version(" v0.23.0 ").as_deref(), Some("0.23.0"));
+        assert_eq!(gopls_version("(devel)"), None, "X.Y.Z 以外は受理しない");
+        assert_eq!(gopls_version("0.23"), None);
         assert_eq!(gopls_version(""), None);
     }
 

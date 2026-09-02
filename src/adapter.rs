@@ -47,17 +47,23 @@ pub const CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS: &[&str] = &[
 
 /// 上流が名乗った名前に対応する写像。既知でなければ `None`
 /// (上流側は両軸 `unknown` を報告する。仕様 8.2 の 3)。
-pub fn select(server_name: &str, _version: Option<&str>) -> Option<RustAnalyzerAdapter> {
+pub fn select(server_name: &str, version: Option<&str>) -> Option<RustAnalyzerAdapter> {
     match server_name {
-        "rust-analyzer" => Some(RustAnalyzerAdapter::new()),
+        "rust-analyzer" => Some(RustAnalyzerAdapter::for_version(version)),
         _ => None,
     }
 }
 
+/// `X.Y.Z` の 3 つ組。rust-analyzer の版文字列の先頭部分。
+pub type Version = (u32, u32, u32);
+
 /// rust-analyzer の版文字列 (`1.98.0 (88d9e12 2026-08-18)` 等) の先頭の
-/// `X.Y.Z` を読む。
-pub fn parse_version(_version: &str) -> Option<(u32, u32, u32)> {
-    None
+/// `X.Y.Z` を読む。ハッシュや日付、`-standalone` 等の後置は捨てる。
+pub fn parse_version(version: &str) -> Option<Version> {
+    let leading = version.split([' ', '-']).next().unwrap_or("");
+    let mut parts = leading.split('.').map(|part| part.parse::<u32>().ok());
+    let (major, minor, patch) = (parts.next()??, parts.next()??, parts.next()??);
+    Some((major, minor, patch))
 }
 
 /// `experimental/serverStatus` の params。
@@ -91,15 +97,49 @@ impl From<UpstreamHealth> for Health {
     }
 }
 
+/// 準拠テスト 7.2 / 7.3 を実 rust-analyzer に当てて通した版の範囲 (両端含む)。
+///
+/// lsp-det は rust-analyzer の内部を保証できず、テストに通ったという観測しか
+/// 持たない (仕様 8.2 の 5)。この範囲の外では保証を宣言しない。範囲を広げる
+/// ときは、その版で `cargo test --test conformance -- --ignored` を通してから
+/// 端を動かすこと。守れない保証の宣言は仕様 5.1 違反である。
+///
+/// 通した記録: 1.98.0 (88d9e12 2026-08-18)、2026-08-29 と 2026-09-03。
+pub const TESTED_VERSIONS: std::ops::RangeInclusive<Version> = (1, 98, 0)..=(1, 98, 0);
+
+/// プロジェクトが 1 つも見つからないときに rust-analyzer が `warning` に
+/// 添えるメッセージ (`reload.rs` の `current_status()`)。判別材料はこれしか
+/// ないので文字列で見る。脆いが、[`TESTED_VERSIONS`] の範囲で守る。
+const MISSING_WORKSPACE_MESSAGE: &str = "Failed to discover workspace.";
+
 #[derive(Default)]
 pub struct RustAnalyzerAdapter {
+    /// 名乗った版が [`TESTED_VERSIONS`] に入っているか。保証を宣言する条件。
+    version_is_tested: bool,
     /// パース不能な status を一度ログしたか (連投を避けるため)。
     warned_unparseable: bool,
 }
 
 impl RustAnalyzerAdapter {
+    /// 版を名乗らない (または読めない) rust-analyzer 向け。保証は宣言しない。
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// `serverInfo.version` を見て、テスト済みの版なら保証を宣言する。
+    pub fn for_version(version: Option<&str>) -> Self {
+        let version_is_tested = version
+            .and_then(parse_version)
+            .is_some_and(|v| TESTED_VERSIONS.contains(&v));
+        RustAnalyzerAdapter {
+            version_is_tested,
+            warned_unparseable: false,
+        }
+    }
+
+    /// 名乗った版が準拠テストを通した範囲に入っているか。
+    pub fn version_is_tested(&self) -> bool {
+        self.version_is_tested
     }
 
     /// 上流に接続した直後の状態。rust-analyzer は `initialize` 応答後に
@@ -112,11 +152,15 @@ impl RustAnalyzerAdapter {
     ///
     /// rust-analyzer は両方の保証を満たす。準拠テストスイートの仕様 7.2
     /// (完全性) と 7.3 (クロスファイル鮮度) を実 rust-analyzer に当てて
-    /// 確認済み (tests/conformance.rs の #[ignore] 付き 2 件)。守れない
-    /// 保証を宣言することは仕様 5.1 違反なので、この宣言を変えるときは
-    /// 対応するテストの結果を根拠にすること。
+    /// 確認済み (tests/conformance.rs の #[ignore] 付き 2 件)。ただし宣言
+    /// できるのはテストを当てた版 ([`TESTED_VERSIONS`]) に限る (仕様 8.2 の 5)。
+    /// 範囲外の版には状態の通知だけを約束する。
     pub fn guarantees(&self) -> ServerStateProvider {
-        ServerStateProvider::complete_and_fresh()
+        if self.version_is_tested {
+            ServerStateProvider::complete_and_fresh()
+        } else {
+            ServerStateProvider::Basic(true)
+        }
     }
 
     /// 上流→クライアント方向のメッセージから、上流が報告している状態を
@@ -145,8 +189,20 @@ impl RustAnalyzerAdapter {
             return None;
         };
 
+        // 語彙の粗さを補う (設計 5.1)。プロジェクト未発見は横断問い合わせに
+        // とって機能不全なので、rust-analyzer の warning を error に写す。
+        let mut health: Health = params.health.into();
+        if health == Health::Warning
+            && params
+                .message
+                .as_deref()
+                .is_some_and(|m| m.contains(MISSING_WORKSPACE_MESSAGE))
+        {
+            health = Health::Error;
+        }
+
         Some(ServerState {
-            health: params.health.into(),
+            health,
             readiness: if params.quiescent {
                 Readiness::Ready
             } else {

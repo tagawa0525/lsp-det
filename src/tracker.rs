@@ -101,10 +101,11 @@ mod tests {
         )
     }
 
+    /// 準拠テストを通した版 (adapter::TESTED_VERSIONS) を名乗る serverInfo。
     fn info(name: &str) -> ServerInfo {
         ServerInfo {
             name: name.to_string(),
-            version: None,
+            version: Some("1.98.0 (88d9e12 2026-08-18)".to_string()),
         }
     }
 

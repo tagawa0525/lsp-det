@@ -225,7 +225,8 @@ fn injects_the_capabilities_of_every_known_mapping_unconditionally() {
             json!(true),
             "gopls 用の宣言が注入されていない: {capabilities}"
         );
-        // 注入は足すだけ。クライアントの元の宣言は残る。
+        // 注入は対象の 2 キーを true にするだけで、クライアントの他の宣言
+        // (hover 等) は残る。
         assert_eq!(capabilities["textDocument"]["hover"], json!({}));
         client.shutdown();
     }

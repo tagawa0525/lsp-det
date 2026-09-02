@@ -425,13 +425,17 @@ impl ConformanceClient {
     fn send(&mut self, value: Value) {
         let body = serde_json::to_vec(&value).expect("client payloads are serializable");
         if let Err(err) = framing::write_message(&mut self.stdin, &RawMessage { body }) {
+            // 診断のために stderr を EOF まで読む。生きている被験者を相手に
+            // 読むとハングするので、先に終了を確定させる。
             let status = self.child.try_wait();
+            let _ = self.child.kill();
+            let _ = self.child.wait();
             let mut log = String::new();
             if let Some(mut stderr) = self.stderr.take() {
                 let _ = stderr.read_to_string(&mut log);
             }
             panic!(
-                "被験者の stdin へ書けない: {err} (被験者の状態: {status:?})\n被験者の stderr:\n{log}"
+                "被験者の stdin へ書けない: {err} (書き込み時点の被験者の状態: {status:?})\n被験者の stderr:\n{log}"
             );
         }
     }

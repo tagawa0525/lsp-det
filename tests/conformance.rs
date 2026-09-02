@@ -306,6 +306,163 @@ fn forwards_work_done_progress_create_when_the_client_declared_it() {
 }
 
 // ---------------------------------------------------------------------------
+// gopls の写像 (設計 5.2)
+//
+// gopls は readiness の語彙を持たない。上流側は `$/progress` の
+// "Setting up workspace" の begin / end から readiness を、
+// "Error loading workspace" の begin / end から health を合成する。
+// ---------------------------------------------------------------------------
+
+fn gopls_client(declare_server_state: bool) -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_gopls();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(declare_server_state);
+    (client, result)
+}
+
+#[test]
+fn gopls_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
+    // 偽 gopls の既定の版 (1.98.0 (fake)) は読めるが gopls::TESTED_VERSIONS の
+    // 範囲外なので、保証は宣言しない。
+    let (mut client, result) = gopls_client(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!(true),
+        "gopls に測っていない保証を宣言した: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn gopls_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
+    // 7.2 / 7.3 を実 gopls v0.23.0 に当てて通した (gopls_* ignored)。
+    let server =
+        ServerUnderTest::lsp_det_with_upstream_flags("gopls", &["--server-version", "v0.23.0"]);
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版に保証を宣言していない: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn gopls_spec_7_1_1_starts_initializing_with_unknown_health() {
+    let (mut client, _) = gopls_client(true);
+    let state = client.server_state();
+    assert_eq!(state.readiness, Readiness::Initializing);
+    assert_eq!(state.health, Health::Unknown);
+    client.shutdown();
+}
+
+#[test]
+fn gopls_spec_7_1_2_becomes_ready_when_the_workspace_load_ends() {
+    let (mut client, _) = gopls_client(true);
+    client.make_upstream_begin_workspace_load("1234");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.make_upstream_end_workspace_load("1234", "Finished loading packages.");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(state.health, Health::Ok, "ロード成功で health は ok");
+    client.shutdown();
+}
+
+#[test]
+fn gopls_waits_for_every_workspace_folder() {
+    // フォルダごとに progress が 1 つ出る。全部終わるまで ready ではない。
+    let (mut client, _) = gopls_client(true);
+    client.make_upstream_begin_workspace_load("a");
+    client.make_upstream_begin_workspace_load("b");
+    client.await_state_changed();
+    client.make_upstream_end_workspace_load("a", "Finished loading packages.");
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "1 フォルダの終了で ready を名乗った"
+    );
+    client.make_upstream_end_workspace_load("b", "Finished loading packages.");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn gopls_spec_7_1_3_rearms_when_a_folder_is_added() {
+    // didChangeWorkspaceFolders で "Setting up workspace" が再発行される。
+    let (mut client, _) = gopls_client(true);
+    client.make_upstream_begin_workspace_load("1");
+    client.await_state_changed();
+    client.make_upstream_end_workspace_load("1", "Finished loading packages.");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+
+    client.make_upstream_begin_workspace_load("2");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.make_upstream_end_workspace_load("2", "Finished loading packages.");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn gopls_spec_7_1_4_reports_a_workspace_load_failure_as_health_error() {
+    let (mut client, _) = gopls_client(true);
+    client.make_upstream_begin_workspace_load("1");
+    client.await_state_changed();
+    client.make_upstream_emit_progress(json!({
+        "token": "err",
+        "value": {"kind": "begin", "title": "Error loading workspace", "message": "err: go.mod file not found", "cancellable": false}
+    }));
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Error);
+    assert_eq!(
+        state.message.as_deref(),
+        Some("err: go.mod file not found"),
+        "失敗の message を添える"
+    );
+
+    // 回復: "Done." で終わる。
+    client.make_upstream_emit_progress(json!({
+        "token": "err",
+        "value": {"kind": "end", "message": "Done."}
+    }));
+    assert_eq!(client.await_state_changed().health, Health::Ok);
+    client.shutdown();
+}
+
+#[test]
+fn gopls_reports_a_failed_load_as_health_error() {
+    // フォルダのロード失敗は "Error loading packages: ..." で end する。
+    // 試行は終わったので ready、結果は信頼できないので error (仕様 6 章 5 項)。
+    let (mut client, _) = gopls_client(true);
+    client.make_upstream_begin_workspace_load("1");
+    client.await_state_changed();
+    client.make_upstream_end_workspace_load("1", "Error loading packages: no Go files");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(state.health, Health::Error);
+    client.shutdown();
+}
+
+#[test]
+fn gopls_ignores_unrelated_progress() {
+    // 診断や govulncheck 等、他の title の progress は readiness に触れない。
+    let (mut client, _) = gopls_client(true);
+    client.make_upstream_emit_progress(json!({
+        "token": "diag",
+        "value": {"kind": "begin", "title": "Calculating diagnostics", "message": "..."}
+    }));
+    client.make_upstream_emit_progress(json!({
+        "token": "diag",
+        "value": {"kind": "end", "message": "Done."}
+    }));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "無関係な progress で状態が動いた"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
 // 写像なし (仕様 8.2 の 3、8.4 の 1)
 //
 // readiness を観測する手段がないので両軸 unknown を正直に報告する。
@@ -657,6 +814,138 @@ fn spec_7_3_cross_file_freshness_through_lsp_det_with_real_rust_analyzer() {
     );
 
     client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 実 gopls 結合（ローカル専用。CI に入れない — v0.1-design.md 6 章）
+//
+// gopls と go ツールチェーンが PATH にあること。
+// ---------------------------------------------------------------------------
+
+/// lsp-det 経由で実 gopls を起動する被験者。
+fn real_gopls(project: &support::TempGoProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec!["--".to_string(), "gopls".to_string()],
+        root: project.root.clone(),
+    }
+}
+
+/// gopls 経由。initializing から ready への遷移を見る (設計 5.2 の写像)。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn gopls_spec_7_1_through_lsp_det_with_real_gopls() {
+    let project = support::TempGoProject::with_cross_file_reference("readiness");
+    let mut client = ConformanceClient::start(&real_gopls(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版の実 gopls に保証が宣言されていない: {result}"
+    );
+    assert_ne!(client.server_state().readiness, Readiness::Ready);
+    client.wait_until_ready();
+    assert_eq!(client.server_state().health, Health::Ok);
+    client.shutdown();
+}
+
+/// 7.2 完全性を実 gopls で測る。宣言の根拠 (設計 5.2)。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn gopls_spec_7_2_completeness_through_lsp_det_with_real_gopls() {
+    let project = support::TempGoProject::with_cross_file_reference("completeness");
+    let a = project.file("a.go");
+    let b = project.file("b.go");
+
+    let mut client = ConformanceClient::start(&real_gopls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    client.did_open(&a, "go");
+    client.did_open(&b, "go");
+
+    let found = go_references_in(&mut client, &a, &b);
+    assert!(
+        found
+            .iter()
+            .any(|location| location["range"]["start"]["line"] == 3),
+        "ready を名乗りながら b.go の呼び出しを取りこぼした (完全性違反): {found:#?}"
+    );
+    client.shutdown();
+}
+
+/// 7.3 鮮度を実 gopls で測る (クロスファイル)。宣言の根拠 (設計 5.2)。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn gopls_spec_7_3_cross_file_freshness_through_lsp_det_with_real_gopls() {
+    let project = support::TempGoProject::with_cross_file_reference("freshness");
+    let a = project.file("a.go");
+    let b = project.file("b.go");
+
+    let mut client = ConformanceClient::start(&real_gopls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    client.did_open(&a, "go");
+    client.did_open(&b, "go");
+
+    let before = go_references_in(&mut client, &a, &b);
+    assert!(
+        !before.is_empty(),
+        "前提が崩れている。b.go からの参照が見えるはず"
+    );
+
+    client.did_change(&b, 2, support::GO_B_WITHOUT_CALL);
+    assert_eq!(client.server_state().readiness, Readiness::Ready);
+
+    let after = go_references_in(&mut client, &a, &b);
+    assert!(
+        after.is_empty(),
+        "ready を名乗りながら、消したはずの参照を返した (鮮度違反): {after:#?}"
+    );
+    client.shutdown();
+}
+
+/// go.mod の変更で "Setting up workspace" が再発行されるか (設計 5.2 の実測)。
+///
+/// gopls のソースでは再発行は didChangeWorkspaceFolders のときだけで、go.mod の
+/// 変更では出ない。ここではその読みを実サーバーで確かめる。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn gopls_does_not_reemit_workspace_setup_on_go_mod_change() {
+    let project = support::TempGoProject::with_cross_file_reference("gomod");
+    let mut client = ConformanceClient::start(&real_gopls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+
+    // go.mod をディスク上で変える (Claude Code の編集はディスク書き込み)。
+    let go_mod = project.file("go.mod");
+    std::fs::write(&go_mod, "module fixture\n\ngo 1.21\n\n// touched\n").unwrap();
+    client.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": support::file_uri(&go_mod), "type": 2}]}),
+    );
+
+    let observed =
+        client.await_notification_within("experimental/serverStateChanged", Duration::from_secs(8));
+    assert!(
+        observed.is_none(),
+        "go.mod の変更で readiness が動いた (ソースの読みと違う): {observed:?}"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+/// `a.go` の `Target` への参照のうち、`file` を指すものだけを返す。
+fn go_references_in(
+    client: &mut ConformanceClient,
+    a: &std::path::Path,
+    file: &std::path::Path,
+) -> Vec<Value> {
+    let wanted = support::file_uri(file);
+    client
+        .references(a, 2, 5)
+        .into_iter()
+        .filter(|location| location["uri"] == Value::String(wanted.clone()))
+        .collect()
 }
 
 /// lsp-det 経由で実 rust-analyzer を起動する被験者。

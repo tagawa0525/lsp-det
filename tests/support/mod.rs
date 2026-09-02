@@ -52,12 +52,22 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("rust-analyzer", upstream_flags)
     }
 
+    /// gopls と名乗る偽上流 + lsp-det。lsp-det は gopls の写像を選ぶ。
+    pub fn lsp_det_with_fake_gopls() -> Self {
+        Self::lsp_det_with_upstream("gopls", &[])
+    }
+
     /// 本プロトコルに準拠した偽上流 + lsp-det。上流側は恒等写像になり、
     /// 下流側は上流の状態を境界越しに読む（設計 4.1）。
     pub fn lsp_det_with_conformant_upstream_flags(upstream_flags: &[&str]) -> Self {
         let mut flags = vec!["--declare-server-state-provider"];
         flags.extend_from_slice(upstream_flags);
         Self::lsp_det_with_upstream("fake-lsp-server", &flags)
+    }
+
+    /// 名乗る名前と偽上流のフラグを指定する版。
+    pub fn lsp_det_with_upstream_flags(server_name: &str, upstream_flags: &[&str]) -> Self {
+        Self::lsp_det_with_upstream(server_name, upstream_flags)
     }
 
     fn lsp_det_with_upstream(server_name: &str, upstream_flags: &[&str]) -> Self {
@@ -165,6 +175,60 @@ impl ConformanceClient {
             capabilities["experimental"] = json!({"serverState": true});
         }
         self.initialize_raw_with_capabilities(capabilities)
+    }
+
+    /// `rootUri` と `workspaceFolders` を指定して `initialize` → `initialized`
+    /// を済ませる。gopls はワークスペースフォルダごとに progress を出すので、
+    /// フォルダなしだと "Setting up workspace" が出ない。
+    pub fn initialize_with_root(
+        &mut self,
+        declare_server_state: bool,
+        root: &std::path::Path,
+    ) -> Value {
+        let mut capabilities = json!({"textDocument": {"hover": {}}});
+        if declare_server_state {
+            capabilities["experimental"] = json!({"serverState": true});
+        }
+        let uri = file_uri(root);
+        let result = self.request(
+            "initialize",
+            json!({
+                "processId": std::process::id(),
+                "rootUri": uri,
+                "workspaceFolders": [{"uri": uri, "name": "fixture"}],
+                "capabilities": capabilities,
+            }),
+        );
+        self.notify("initialized", json!({}));
+        result
+    }
+
+    /// 指定した通知を `window` の間だけ待ち、届けば params を返す。
+    pub fn await_notification_within(&mut self, method: &str, window: Duration) -> Option<Value> {
+        if let Some(index) = self
+            .pending_notifications
+            .iter()
+            .position(|n| n["method"] == method)
+        {
+            return Some(self.pending_notifications.remove(index)["params"].clone());
+        }
+        let deadline = std::time::Instant::now() + window;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            match self.incoming.recv_timeout(remaining) {
+                Ok(Incoming::Message(message)) => {
+                    if message["method"] == method {
+                        return Some(message["params"].clone());
+                    }
+                    self.stash(message);
+                }
+                Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => return None,
+                Err(RecvTimeoutError::Timeout) => return None,
+            }
+        }
     }
 
     /// 任意の `ClientCapabilities` で `initialize` → `initialized` を済ませる。
@@ -283,6 +347,28 @@ impl ConformanceClient {
             "$/fake/emitServerStatus",
             json!({"health": health, "quiescent": quiescent}),
         );
+    }
+
+    /// 偽上流に `$/progress` を送らせる（偽上流専用の制御）。gopls の
+    /// `{"token", "value": {"kind", "title", "message"}}` をそのまま渡す。
+    pub fn make_upstream_emit_progress(&mut self, params: Value) {
+        self.notify("$/fake/emitProgress", params);
+    }
+
+    /// gopls 風の "Setting up workspace" の begin。
+    pub fn make_upstream_begin_workspace_load(&mut self, token: &str) {
+        self.make_upstream_emit_progress(json!({
+            "token": token,
+            "value": {"kind": "begin", "title": "Setting up workspace", "message": "Loading packages...", "cancellable": false}
+        }));
+    }
+
+    /// gopls 風の "Setting up workspace" の end。
+    pub fn make_upstream_end_workspace_load(&mut self, token: &str, message: &str) {
+        self.make_upstream_emit_progress(json!({
+            "token": token,
+            "value": {"kind": "end", "message": message}
+        }));
     }
 
     /// `message` 付きで `experimental/serverStatus` を送らせる。
@@ -644,6 +730,41 @@ impl Drop for TempCargoProject {
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
+
+/// 一時的な Go モジュール。`fixture.Target` を `b.go` の `Caller` から呼ぶ。
+pub struct TempGoProject {
+    pub root: PathBuf,
+}
+
+impl TempGoProject {
+    pub fn with_cross_file_reference(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-go-{tag}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("一時モジュールを作れない");
+        std::fs::write(root.join("go.mod"), "module fixture\n\ngo 1.21\n").unwrap();
+        std::fs::write(root.join("a.go"), GO_A).unwrap();
+        std::fs::write(root.join("b.go"), GO_B_WITH_CALL).unwrap();
+        TempGoProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempGoProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// `Target` は 3 行目の 6 文字目 (0 起点で line 2, character 5) にある。
+pub const GO_A: &str = "package fixture\n\nfunc Target() {}\n";
+/// 呼び出しは 4 行目 (0 起点で line 3)。
+pub const GO_B_WITH_CALL: &str = "package fixture\n\nfunc Caller() {\n\tTarget()\n}\n";
+pub const GO_B_WITHOUT_CALL: &str = "package fixture\n\nfunc Caller() {}\n";
 
 /// `target` は 1 行目の 8 文字目 (0 起点で line 0, character 7) にある。
 pub const A_RS: &str = "pub fn target() {}\n";

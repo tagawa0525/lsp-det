@@ -30,6 +30,30 @@ use crate::state::{Health, Readiness, ServerState, ServerStateProvider};
 /// rust-analyzer が送る readiness 通知のメソッド名。
 pub const SERVER_STATUS_METHOD: &str = "experimental/serverStatus";
 
+/// 既知の写像すべてが必要とする client capability の和 (設計 4.2)。
+///
+/// 写像は `InitializeResult.serverInfo.name` で選ぶが、注入は上流へ
+/// `initialize` を送る前に要る。だから上流が誰であっても全部を注入する
+/// (ADR 0009 決定 D-3)。どちらも「通知を送ってよい」という許可にすぎない。
+///
+/// - `experimental.serverStatusNotification`: rust-analyzer。未宣言だと
+///   `experimental/serverStatus` は一切送られない
+/// - `window.workDoneProgress`: gopls (M4)。未宣言だと `$/progress` ではなく
+///   `window/showMessage` にフォールバックする
+pub const CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS: &[&str] = &[
+    "experimental.serverStatusNotification",
+    "window.workDoneProgress",
+];
+
+/// 上流が名乗った名前に対応する写像。既知でなければ `None`
+/// (上流側は両軸 `unknown` を報告する。仕様 8.2 の 3)。
+pub fn select(server_name: &str) -> Option<RustAnalyzerAdapter> {
+    match server_name {
+        "rust-analyzer" => Some(RustAnalyzerAdapter::new()),
+        _ => None,
+    }
+}
+
 /// `experimental/serverStatus` の params。
 ///
 /// `health` を `state::Health` ではなく専用の enum で受けるのは、仕様 8.1 が
@@ -68,11 +92,6 @@ pub struct RustAnalyzerAdapter {
 }
 
 impl RustAnalyzerAdapter {
-    /// 上流への `initialize` に注入する client capability (v0.1-design.md 4.5)。
-    /// 未宣言だと rust-analyzer は `experimental/serverStatus` を一切送らない。
-    pub const REQUIRED_CLIENT_CAPABILITIES: &'static [&'static str] =
-        &["experimental.serverStatusNotification"];
-
     pub fn new() -> Self {
         Self::default()
     }
@@ -81,11 +100,6 @@ impl RustAnalyzerAdapter {
     /// 最初の `serverStatus` を送るまで何も報告しない。
     pub fn initial_state(&self) -> ServerState {
         ServerState::initializing()
-    }
-
-    /// 上流への `initialize` に注入する client capability (v0.1-design.md 4.5)。
-    pub fn required_client_capabilities(&self) -> &'static [&'static str] {
-        Self::REQUIRED_CLIENT_CAPABILITIES
     }
 
     /// `InitializeResult` に宣言する保証 (仕様 5 章)。
@@ -164,6 +178,14 @@ mod tests {
         format!(
             r#"{{"jsonrpc":"2.0","method":"experimental/serverStatus","params":{{"health":"{health}","quiescent":{quiescent},"message":null}}}}"#
         )
+    }
+
+    #[test]
+    fn selects_rust_analyzer_by_its_server_info_name() {
+        assert!(select("rust-analyzer").is_some());
+        for unknown in ["gopls", "fake-lsp-server", "", "Rust-Analyzer"] {
+            assert!(select(unknown).is_none(), "既知でない名前: {unknown:?}");
+        }
     }
 
     #[test]

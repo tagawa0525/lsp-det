@@ -17,8 +17,6 @@
 //!
 //! - `--exit-before-initialize-result`: `initialize` を受け取った瞬間に、
 //!   応答せず終了する（起動時クラッシュ）
-//! - `--status-before-initialize-result`: `InitializeResult` より**前**に
-//!   `experimental/serverStatus` を送る
 //! - `--declare-server-state-provider`: 上流自身が本プロトコルに準拠している
 //!   ふりをする。`InitializeResult` に `serverStateProvider: {freshness: true}`
 //!   を宣言し、`experimental/serverState` に自分で答える
@@ -45,7 +43,6 @@ fn main() {
     let flags: Vec<String> = std::env::args().skip(1).collect();
     let has = |name: &str| flags.iter().any(|flag| flag == name);
     let exit_before_initialize_result = has("--exit-before-initialize-result");
-    let status_before_initialize_result = has("--status-before-initialize-result");
     let declare_server_state_provider = has("--declare-server-state-provider");
     let declare_server_state_provider_false = has("--declare-server-state-provider-false");
     let fail_first_initialize = has("--fail-first-initialize");
@@ -67,7 +64,14 @@ fn main() {
     let mut methods_seen: Vec<String> = Vec::new();
     let mut initialize_params = Value::Null;
 
-    while let Ok(Some(msg)) = framing::read_message(&mut reader) {
+    loop {
+        let msg = match framing::read_message(&mut reader) {
+            Ok(Some(msg)) => msg,
+            other => {
+                eprintln!("fake-lsp-server: stdin ended: {other:?}");
+                return;
+            }
+        };
         let Ok(value) = serde_json::from_slice::<Value>(&msg.body) else {
             continue;
         };
@@ -104,16 +108,6 @@ fn main() {
                 }
                 if exit_before_initialize_result {
                     return;
-                }
-                if status_before_initialize_result {
-                    send(
-                        &mut stdout,
-                        json!({
-                            "jsonrpc": "2.0",
-                            "method": "experimental/serverStatus",
-                            "params": {"health": "ok", "quiescent": true}
-                        }),
-                    );
                 }
                 let mut experimental = json!({"fakeUpstreamMarker": true});
                 if declare_server_state_provider {

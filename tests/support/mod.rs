@@ -7,9 +7,10 @@
 
 #![allow(dead_code)] // 被験者ごとに使うヘルパーが異なる
 
+use std::io::Read;
 use std::io::{BufReader, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::thread;
 use std::time::Duration;
@@ -102,6 +103,8 @@ enum Incoming {
 pub struct ConformanceClient {
     child: Child,
     stdin: ChildStdin,
+    /// 被験者の stderr。失敗の診断にだけ使う (読むのは被験者が終わった後)。
+    stderr: Option<ChildStderr>,
     incoming: Receiver<Incoming>,
     /// 受信済みだが取り出されていない通知。
     pending_notifications: Vec<Value>,
@@ -115,18 +118,20 @@ impl ConformanceClient {
             .current_dir(&server.root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .unwrap_or_else(|err| panic!("被験者 {:?} を起動できない: {err}", server.program));
 
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
+        let stderr = child.stderr.take();
         let (tx, rx) = channel();
         spawn_reader(stdout, tx);
 
         ConformanceClient {
             child,
             stdin,
+            stderr,
             incoming: rx,
             pending_notifications: Vec::new(),
             next_id: 1,
@@ -150,7 +155,7 @@ impl ConformanceClient {
         if declare_server_state {
             capabilities["experimental"] = json!({"serverState": true});
         }
-        self.initialize_with_capabilities(capabilities)
+        self.initialize_raw_with_capabilities(capabilities)
     }
 
     /// 任意の `ClientCapabilities` で `initialize` → `initialized` を済ませる。
@@ -419,8 +424,16 @@ impl ConformanceClient {
 
     fn send(&mut self, value: Value) {
         let body = serde_json::to_vec(&value).expect("client payloads are serializable");
-        framing::write_message(&mut self.stdin, &RawMessage { body })
-            .expect("被験者の stdin へ書けない");
+        if let Err(err) = framing::write_message(&mut self.stdin, &RawMessage { body }) {
+            let status = self.child.try_wait();
+            let mut log = String::new();
+            if let Some(mut stderr) = self.stderr.take() {
+                let _ = stderr.read_to_string(&mut log);
+            }
+            panic!(
+                "被験者の stdin へ書けない: {err} (被験者の状態: {status:?})\n被験者の stderr:\n{log}"
+            );
+        }
     }
 
     fn await_response(&mut self, id: i64) -> Value {

@@ -1,9 +1,12 @@
 //! `ServerState` の保持と遷移 (v0.1-design.md 4.2、ADR 0008)。
 //!
-//! 写像 (上流メッセージの解釈) と状態の保持を分ける。写像がなくても
-//! 上流側は存在し、両軸 `unknown` を正直に報告する (仕様 8.2 の 3)。
+//! 写像 (上流メッセージの解釈) と状態の保持を分ける。写像は上流が
+//! `InitializeResult.serverInfo` で名乗るまで選べないので、それまでは
+//! 両軸 `unknown`。既知の名前なら写像に切り替え、そうでなければ
+//! `unknown` のまま正直に報告する (仕様 8.2 の 3)。
 
-use crate::adapter::RustAnalyzerAdapter;
+use crate::adapter::{self, RustAnalyzerAdapter};
+use crate::initialize::ServerInfo;
 use crate::peek::MessageView;
 use crate::state::{ServerState, ServerStateProvider};
 
@@ -12,17 +15,32 @@ pub struct Tracker {
     adapter: Option<RustAnalyzerAdapter>,
 }
 
+impl Default for Tracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Tracker {
-    /// アダプタがあれば `initializing`、なければ両軸 `unknown` から始める。
+    /// 上流が名乗るまでは写像がなく、両軸 `unknown`。
+    pub fn new() -> Self {
+        Tracker {
+            state: ServerState::unobserved(),
+            adapter: None,
+        }
+    }
+
+    /// 上流が `InitializeResult` で名乗った。既知の名前なら写像を選び、
+    /// その開始状態 (「initialize 直後」の `initializing`) に移る。
+    /// 名乗りがない・既知でない場合は何もしない。
     ///
-    /// 開始状態・注入する capability・保証はアダプタの値に聞く。
-    /// 「アダプタがある」ことを rust-analyzer と同一視すると、M4 で gopls を
-    /// 足したときに 3 箇所の match を書き直すことになる。
-    pub fn new(adapter: Option<RustAnalyzerAdapter>) -> Self {
-        let state = adapter
-            .as_ref()
-            .map_or_else(ServerState::unobserved, |adapter| adapter.initial_state());
-        Tracker { state, adapter }
+    /// 開始状態・保証は写像の値に聞く。「写像がある」ことを rust-analyzer と
+    /// 同一視すると、M4 で gopls を足したときに match を書き直すことになる。
+    pub fn select_mapping(&mut self, server_info: Option<&ServerInfo>) -> Option<ServerState> {
+        let adapter = adapter::select(&server_info?.name)?;
+        self.state = adapter.initial_state();
+        self.adapter = Some(adapter);
+        Some(self.state.clone())
     }
 
     pub fn state(&self) -> &ServerState {
@@ -35,16 +53,8 @@ impl Tracker {
         self.adapter.is_some()
     }
 
-    /// 上流への `initialize` に注入する client capability (v0.1-design.md 4.5)。
-    /// アダプタがなければ何も注入しない。
-    pub fn required_client_capabilities(&self) -> &'static [&'static str] {
-        self.adapter
-            .as_ref()
-            .map_or(&[], |adapter| adapter.required_client_capabilities())
-    }
-
     /// `InitializeResult` に宣言する保証 (仕様 5 章)。
-    /// アダプタがなければ保証なしの宣言。
+    /// 写像がなければ保証なしの宣言 (`true`)。
     pub fn provider(&self) -> ServerStateProvider {
         self.adapter
             .as_ref()
@@ -90,24 +100,45 @@ mod tests {
         )
     }
 
+    fn info(name: &str) -> ServerInfo {
+        ServerInfo {
+            name: name.to_string(),
+            version: None,
+        }
+    }
+
     fn with_adapter() -> Tracker {
-        Tracker::new(Some(RustAnalyzerAdapter::new()))
+        let mut tracker = Tracker::new();
+        tracker.select_mapping(Some(&info("rust-analyzer")));
+        tracker
     }
 
     fn without_adapter() -> Tracker {
-        Tracker::new(None)
+        let mut tracker = Tracker::new();
+        tracker.select_mapping(Some(&info("fake-lsp-server")));
+        tracker
     }
 
     // --- 開始状態 -----------------------------------------------------------
 
     #[test]
-    fn starts_in_initializing_with_an_adapter() {
+    fn starts_unobserved_before_the_upstream_names_itself() {
+        // 写像は serverInfo で選ぶ。それまでは何も観測していない。
+        assert_eq!(Tracker::new().state(), &ServerState::unobserved());
+    }
+
+    #[test]
+    fn selecting_a_known_mapping_moves_to_initializing() {
         // readiness は「initialize 直後」という既知の局面なので initializing。
         // health は最初の serverStatus が届くまで何も観測していないので
-        // unknown (ADR 0008 追補 E)。ok を名乗るのは観測なしの主張になる。
-        let tracker = with_adapter();
-        assert_eq!(tracker.state().readiness, Readiness::Initializing);
-        assert_eq!(tracker.state().health, Health::Unknown);
+        // unknown (仕様 8.2 の 2)。ok を名乗るのは観測なしの主張になる。
+        let mut tracker = Tracker::new();
+        let state = tracker
+            .select_mapping(Some(&info("rust-analyzer")))
+            .expect("既知の名前なら開始状態に移る");
+        assert_eq!(state.readiness, Readiness::Initializing);
+        assert_eq!(state.health, Health::Unknown);
+        assert!(tracker.observes_upstream());
     }
 
     #[test]
@@ -118,14 +149,18 @@ mod tests {
     }
 
     #[test]
-    fn starts_unobserved_without_an_adapter() {
-        // v0.1-design 4.1: initializing からも ok からも始めない。
-        let tracker = without_adapter();
+    fn stays_unobserved_when_the_name_is_unknown_or_absent() {
+        // 仕様 8.2 の 3: 信号のないサーバーは両軸 unknown。initializing からも
+        // ok からも始めない。
+        let mut tracker = Tracker::new();
+        assert!(tracker.select_mapping(None).is_none());
+        assert!(tracker.select_mapping(Some(&info("gopls"))).is_none());
         assert_eq!(tracker.state(), &ServerState::unobserved());
+        assert!(!tracker.observes_upstream());
     }
 
     #[test]
-    fn declares_the_adapter_guarantees_or_the_basic_grade() {
+    fn declares_the_adapter_guarantees_or_no_guarantees() {
         assert_eq!(
             with_adapter().provider(),
             ServerStateProvider::complete_and_fresh()
@@ -134,15 +169,6 @@ mod tests {
             without_adapter().provider(),
             ServerStateProvider::Basic(true)
         );
-    }
-
-    #[test]
-    fn injects_client_capabilities_only_with_an_adapter() {
-        assert_eq!(
-            with_adapter().required_client_capabilities(),
-            RustAnalyzerAdapter::REQUIRED_CLIENT_CAPABILITIES
-        );
-        assert!(without_adapter().required_client_capabilities().is_empty());
     }
 
     // --- 遷移 (アダプタあり) -----------------------------------------------

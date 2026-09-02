@@ -413,22 +413,6 @@ fn does_not_emit_its_own_notifications_under_deferral_with_an_adapter() {
 }
 
 #[test]
-fn drops_a_pre_handshake_transition_under_deferral() {
-    // handshake 前に溜めた遷移も、恒等写像に切り替わったら流さない。
-    let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
-        "--status-before-initialize-result",
-        "--declare-server-state-provider",
-    ]);
-    let mut client = ConformanceClient::start(&server);
-    client.initialize(true);
-    assert!(
-        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "恒等写像に切り替わった後に、溜めていた遷移を流した"
-    );
-    client.shutdown();
-}
-
-#[test]
 fn spec_8_4_2_defers_to_a_conformant_upstream_even_with_an_adapter() {
     // 写像は上流の語彙を補うためのもの。上流が本プロトコルを話すなら不要で、
     // 上流側の宣言で上流の宣言を隠してはならない。
@@ -450,24 +434,11 @@ fn spec_8_4_2_defers_to_a_conformant_upstream_even_with_an_adapter() {
 // ---------------------------------------------------------------------------
 // handshake 前後の境界
 //
-// LSP は `InitializeResult` より前のサーバー発通知を許さない。しかし
-// 「送れないから捨てる」と、その遷移は永久に失われる。沈黙は本プロトコルが
-// 消そうとしているものそのものなので、境界の扱いを明示的に縛る。
+// 写像は InitializeResult の serverInfo で選ぶので、それより前の上流の
+// 状態通知は解釈できない。LSP はサーバー発の通知を InitializeResult の後に
+// 限っている (許されるのは showMessage / logMessage / telemetry だけ) ので、
+// これは仕様の範囲内である。ここで縛るのは initialize の失敗と再試行の扱い。
 // ---------------------------------------------------------------------------
-
-#[test]
-fn a_state_change_before_the_handshake_is_delivered_afterwards() {
-    // 偽上流は InitializeResult より前に quiescent:true を送る。
-    let server =
-        ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--status-before-initialize-result"]);
-    let mut client = ConformanceClient::start(&server);
-    client.initialize(true);
-
-    // handshake 前に起きた遷移も、宣言したクライアントには届かねばならない。
-    let state = client.await_state_changed();
-    assert_eq!(state.readiness, Readiness::Ready);
-    client.shutdown();
-}
 
 #[test]
 fn an_initialize_error_does_not_end_the_handshake() {

@@ -1,7 +1,7 @@
 # ADR 0008: readiness に観測者専用の `unknown` を足し、`health` による待機終了を規範化する
 
 - 日付: 2026-08-30
-- 状態: 採用（決定 A・B、追補 C、追補 D・E はいずれも 2026-08-30 承認）
+- 状態: 一部廃止（決定 A・B、追補 C、追補 D・E はいずれも 2026-08-30 承認）。決定 A-5、決定 B-4、追補 C-1 と C-5 の `dead`、追補 D は [ADR 0009](0009-success-criterion-and-two-sided-reference.md) が置き換え。`unknown` の追加（A）、`health` による待機終了（B-1〜B-3）、追補 E は生きている
 - 関連: [ADR 0003](0003-extension-s-zero-based.md) 決定 2（`dead` の位置づけ）、[ADR 0004](0004-spec-grilling.md) 決定 1（2 軸の独立）、[ADR 0007](0007-quiescent-flap-measured.md)
 
 ## 経緯

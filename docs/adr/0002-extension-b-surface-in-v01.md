@@ -1,7 +1,7 @@
 # ADR 0002: 拡張 B の surface を v0.1 に含め、ゲートは互換モードと位置づける
 
 - 日付: 2026-08-28
-- 状態: 採用
+- 状態: 一部廃止。決定 1・2 の名称と `completeMethods` は [ADR 0003](0003-extension-s-zero-based.md) が改名・廃止。決定 4 の位置づけは [ADR 0009](0009-success-criterion-and-two-sided-reference.md) 決定 D-7 が置き換え。決定 3・5 は生きている
 - 関連: [ADR 0001](0001-tool-first-readiness-gate.md)
 
 ## 経緯

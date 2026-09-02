@@ -1,7 +1,7 @@
 # ADR 0003: スコープをゼロベースで再導出し、拡張 B を拡張 S（Server State）に再定義する
 
 - 日付: 2026-08-28
-- 状態: 採用
+- 状態: 一部廃止。決定 2（`dead` の代理送出）は [ADR 0009](0009-success-criterion-and-two-sided-reference.md) が廃止。他は生きている
 - 関連: [ADR 0001](0001-tool-first-readiness-gate.md)、[ADR 0002](0002-extension-b-surface-in-v01.md)
 
 ## 経緯

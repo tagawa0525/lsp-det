@@ -263,6 +263,39 @@ mod tests {
     }
 
     #[test]
+    fn gopls_successful_reload_after_a_failed_load_restores_ok() {
+        // フォルダ追加などで再ロードが成功したら、観測できた成功に基づいて
+        // health を ok に戻す (Copilot の指摘)。
+        let mut adapter = GoplsAdapter::new();
+        gopls_interpret(&mut adapter, &setup_begin("1"));
+        let failed = gopls_interpret(&mut adapter, &setup_end("1", "Error loading packages: x"))
+            .expect("end is a signal");
+        assert_eq!(failed.health, Health::Error);
+
+        gopls_interpret(&mut adapter, &setup_begin("2"));
+        let state = gopls_interpret(&mut adapter, &setup_end("2", "Finished loading packages."))
+            .expect("end is a signal");
+        assert_eq!(state.readiness, Readiness::Ready);
+        assert_eq!(state.health, Health::Ok, "再ロードの成功で ok に戻る");
+        assert_eq!(state.message, None);
+    }
+
+    #[test]
+    fn gopls_a_round_with_one_failed_folder_stays_error() {
+        // 同じロードの中で 1 フォルダでも失敗していれば、後のフォルダが
+        // 成功しても error のまま (結果は信頼できない)。
+        let mut adapter = GoplsAdapter::new();
+        gopls_interpret(&mut adapter, &setup_begin("a"));
+        gopls_interpret(&mut adapter, &setup_begin("b"));
+        gopls_interpret(&mut adapter, &setup_end("a", "Error loading packages: x"));
+        let state = gopls_interpret(&mut adapter, &setup_end("b", "Finished loading packages."))
+            .expect("last end is a signal");
+        assert_eq!(state.readiness, Readiness::Ready);
+        assert_eq!(state.health, Health::Error);
+        assert_eq!(state.message.as_deref(), Some("Error loading packages: x"));
+    }
+
+    #[test]
     fn gopls_end_of_an_unknown_token_is_ignored() {
         // トークンは begin で覚えたものだけ。他の progress の end で ready にしない。
         let mut adapter = GoplsAdapter::new();

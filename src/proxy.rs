@@ -558,15 +558,26 @@ mod tests {
     }
 
     #[test]
-    fn leaves_the_initialize_alone_when_no_adapter_is_selected() {
+    fn injects_the_capabilities_of_every_known_mapping_before_knowing_the_upstream() {
+        // 設計 4.2: serverInfo は initialize の応答で分かるので、注入は
+        // 上流が誰か分かる前に、既知の写像ぶんを無条件に行う。
         let (mut client_in, mut client_out, handle) = spawn_with_cat(None);
 
-        let original =
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#;
-        send(&mut client_in, original);
+        send(
+            &mut client_in,
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#,
+        );
 
         let forwarded = framing::read_message(&mut client_out).unwrap().unwrap();
-        assert_eq!(forwarded.body, original.as_bytes());
+        let value: serde_json::Value = serde_json::from_slice(&forwarded.body).unwrap();
+        assert_eq!(
+            value["params"]["capabilities"]["experimental"]["serverStatusNotification"],
+            serde_json::Value::Bool(true)
+        );
+        assert_eq!(
+            value["params"]["capabilities"]["window"]["workDoneProgress"],
+            serde_json::Value::Bool(true)
+        );
 
         drop(client_in);
         handle.join().unwrap();

@@ -30,37 +30,33 @@ pub struct ServerUnderTest {
 }
 
 impl ServerUnderTest {
-    /// lsp-det（rust-analyzer アダプタ）+ 偽上流。CI で決定的に動く既定の被験者。
+    /// lsp-det + rust-analyzer と名乗る偽上流。CI で決定的に動く既定の被験者。
+    /// lsp-det は `serverInfo.name` で rust-analyzer の写像を選ぶ (設計 4.2)。
     pub fn lsp_det_with_fake_upstream() -> Self {
         Self::lsp_det_with_fake_upstream_flags(&[])
     }
 
-    /// アダプタなしの lsp-det + 偽上流。両軸 `unknown` を報告する被験者
-    /// （仕様 8.2 の 3、8.4 の 1）。
+    /// 既知の写像がない名前 (`fake-lsp-server`) を名乗る偽上流 + lsp-det。
+    /// 両軸 `unknown` を報告する被験者（仕様 8.2 の 3、8.4 の 1）。
     pub fn lsp_det_without_adapter() -> Self {
         Self::lsp_det_without_adapter_flags(&[])
     }
 
     pub fn lsp_det_without_adapter_flags(upstream_flags: &[&str]) -> Self {
-        let mut args = vec![
-            "--".to_string(),
-            fake_upstream_binary().to_string_lossy().into_owned(),
-        ];
-        args.extend(upstream_flags.iter().map(|flag| flag.to_string()));
-        ServerUnderTest {
-            program: lsp_det_binary(),
-            args,
-            root: repo_root(),
-        }
+        Self::lsp_det_with_upstream("fake-lsp-server", upstream_flags)
     }
 
     /// 偽上流に起動フラグを渡す版（handshake 前後の境界を再現する）。
     pub fn lsp_det_with_fake_upstream_flags(upstream_flags: &[&str]) -> Self {
+        Self::lsp_det_with_upstream("rust-analyzer", upstream_flags)
+    }
+
+    fn lsp_det_with_upstream(server_name: &str, upstream_flags: &[&str]) -> Self {
         let mut args = vec![
-            "--adapter".to_string(),
-            "rust-analyzer".to_string(),
             "--".to_string(),
             fake_upstream_binary().to_string_lossy().into_owned(),
+            "--server-name".to_string(),
+            server_name.to_string(),
         ];
         args.extend(upstream_flags.iter().map(|flag| flag.to_string()));
         ServerUnderTest {
@@ -154,6 +150,17 @@ impl ConformanceClient {
         if declare_server_state {
             capabilities["experimental"] = json!({"serverState": true});
         }
+        self.initialize_with_capabilities(capabilities)
+    }
+
+    /// 任意の `ClientCapabilities` で `initialize` → `initialized` を済ませる。
+    pub fn initialize_with_capabilities(&mut self, capabilities: Value) -> Value {
+        let result = self.initialize_raw_with_capabilities(capabilities);
+        self.notify("initialized", json!({}));
+        result
+    }
+
+    pub fn initialize_raw_with_capabilities(&mut self, capabilities: Value) -> Value {
         self.request(
             "initialize",
             json!({
@@ -380,8 +387,7 @@ impl ConformanceClient {
 
     /// 偽上流が受信した method の一覧。転送の有無を確かめるのに使う。
     pub fn upstream_methods_seen(&mut self) -> Vec<String> {
-        let response = self.request("$/fake/report", json!(null));
-        response["result"]["methodsSeen"]
+        self.upstream_report()["methodsSeen"]
             .as_array()
             .map(|items| {
                 items
@@ -390,6 +396,20 @@ impl ConformanceClient {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    /// 偽上流が `initialize` で受け取った `ClientCapabilities`。
+    pub fn upstream_client_capabilities(&mut self) -> Value {
+        self.upstream_report()["initializeParams"]["capabilities"].clone()
+    }
+
+    /// 偽上流が送った `window/workDoneProgress/create` に応答が返ったか。
+    pub fn upstream_progress_create_answered(&mut self) -> bool {
+        self.upstream_report()["progressCreateAnswered"] == json!(true)
+    }
+
+    fn upstream_report(&mut self) -> Value {
+        self.request("$/fake/report", json!(null))["result"].clone()
     }
 
     pub fn shutdown(&mut self) {

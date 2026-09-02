@@ -161,6 +161,24 @@ mod tests {
     }
 
     #[test]
+    fn rejects_the_removed_flags() {
+        // ADR 0009 決定 D-11: CLI は `lsp-det -- <上流コマンド>` のみ。
+        // 写像は上流の serverInfo.name で選び (D-2)、時間の非常口も
+        // ゲートの切り替えも持たない (D-10、D-1)。
+        for argv in [
+            &["--adapter", "rust-analyzer", "--", "rust-analyzer"][..],
+            &["--gate-timeout", "300", "--", "gopls"][..],
+            &["--gate-mode", "error", "--", "gopls"][..],
+            &["--no-gate", "--", "gopls"][..],
+        ] {
+            assert!(
+                parse_args(&s(argv)).is_err(),
+                "削除済みのフラグを受理した: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
     fn errors_when_separator_is_missing() {
         assert!(parse_args(&s(&["rust-analyzer"])).is_err());
     }

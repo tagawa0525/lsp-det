@@ -20,7 +20,7 @@ use support::{ConformanceClient, ServerUnderTest};
 const NEGATIVE_WINDOW: Duration = Duration::from_millis(750);
 
 /// 境界の上の状態を動かす手段が違う 2 種類の被験者。
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Subject {
     /// 準拠した偽上流 + lsp-det（上流側は恒等写像）。
     ConformantUpstream,
@@ -75,16 +75,6 @@ fn saw_upstream(client: &mut ConformanceClient, method: &str) -> bool {
 /// 送らせた通知は lsp-det が処理済みである。
 fn sync_with_upstream(client: &mut ConformanceClient) {
     let _ = client.upstream_methods_seen();
-}
-
-impl PartialEq for Subject {
-    fn eq(&self, other: &Self) -> bool {
-        matches!(
-            (self, other),
-            (Subject::ConformantUpstream, Subject::ConformantUpstream)
-                | (Subject::MappedUpstream, Subject::MappedUpstream)
-        )
-    }
 }
 
 // ---------------------------------------------------------------------------

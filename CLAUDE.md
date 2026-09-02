@@ -4,7 +4,7 @@ LSP 拡張「Server State（拡張 S）」の参照実装となる透過プロ�
 
 ## 文書の読む順序と優先度
 
-1. `docs/spec/extension-s-server-state.md` — 拡張 S の**規範**。食い違いはすべてここが正
+1. `docs/spec/server-state.md` — 拡張 S の**規範**。食い違いはすべてここが正
 2. `docs/v0.1-design.md` — 実装スコープ（ゲート・アダプタ・実行モデル・マイルストーン）
 3. `docs/adr/` — 決定の経緯と却下案。**採用しなかったもの**（tokio 等）の理由は ADR 0005
 4. `docs/vision.md` — 長期構想（拡張 A / C は凍結中）

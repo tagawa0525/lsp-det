@@ -1,4 +1,4 @@
-//! 拡張 S の準拠テストスイート（docs/spec/extension-s-server-state.md 7 章）。
+//! 拡張 S の準拠テストスイート（docs/spec/server-state.md 7 章）。
 //!
 //! M2 の中心成果物。仕様 7 節の準拠要件を実行可能にしたもので、被験者は
 //! 「stdio で LSP を話すコマンド」であればなんでもよい。lsp-det は最初の

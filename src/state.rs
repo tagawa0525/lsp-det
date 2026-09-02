@@ -1,4 +1,4 @@
-//! 拡張 S の `ServerState` (docs/spec/extension-s-server-state.md 3 章)。
+//! 拡張 S の `ServerState` (docs/spec/server-state.md 3 章)。
 //!
 //! `health` と `readiness` は独立の 2 軸。`message` は人間向けの補足であり
 //! 機械判定に使ってはならない。ワイヤ形式は仕様が規範なので、本モジュールの

@@ -7,7 +7,7 @@
 
 ## 本文書の位置づけ
 
-本文書は 3 拡張（宣言範囲・サーバー状態・起動マニフェスト）の仕様化と標準化に関する**長期構想**である。拡張 S（サーバー状態）の規範は [spec/extension-s-server-state.md](spec/extension-s-server-state.md)、現在の実装スコープは [v0.1-design.md](v0.1-design.md) に定義する。本文書のうち、5 章（上流への提案経路）と 6.7 の標準化用調査タスクは凍結中であり、v0.1 が安定稼働した後に再開を判断する。スコープ選定の理由は [adr/0001-tool-first-readiness-gate.md](adr/0001-tool-first-readiness-gate.md) と [adr/0003-extension-s-zero-based.md](adr/0003-extension-s-zero-based.md) を参照。
+本文書は 3 拡張（宣言範囲・サーバー状態・起動マニフェスト）の仕様化と標準化に関する**長期構想**である。拡張 S（サーバー状態）の規範は [spec/server-state.md](spec/server-state.md)、現在の実装スコープは [v0.1-design.md](v0.1-design.md) に定義する。本文書のうち、5 章（上流への提案経路）と 6.7 の標準化用調査タスクは凍結中であり、v0.1 が安定稼働した後に再開を判断する。スコープ選定の理由は [adr/0001-tool-first-readiness-gate.md](adr/0001-tool-first-readiness-gate.md) と [adr/0003-extension-s-zero-based.md](adr/0003-extension-s-zero-based.md) を参照。
 
 ---
 
@@ -159,7 +159,7 @@ interface ServerCapabilities {
 
 ### 2.2 規定
 
-規範は [spec/extension-s-server-state.md](spec/extension-s-server-state.md) を正とする。要点:
+規範は [spec/server-state.md](spec/server-state.md) を正とする。要点:
 
 - `workspace/serverState` リクエストと `workspace/serverStateChanged` 通知で `ServerState` を返す
 - `ServerState` は `health`（`ok | warning | error | dead | unknown`）と `readiness`（`initializing | indexing | ready | unknown`）の 2 軸。`dead` と `unknown` は観測者（中継層）だけが出せる値

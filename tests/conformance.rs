@@ -1,19 +1,15 @@
-//! サーバー状態プロトコルの準拠テストスイート（docs/spec/server-state.md）。
+//! サーバー状態プロトコルの上流側の準拠テストスイート
+//! （docs/spec/server-state.md 7 章と 8.4）。
 //!
-//! 注意: 本スイートは ADR 0009 以前の仕様に基づいており、`dead` の検証と
-//! 旧章番号（6.1 等）の参照を含む。改訂後の仕様（7 章のサーバー要件、
-//! 8.4 の観測者要件、9.1 のクライアント要件）への追従は ADR 0009 E-2 の
-//! 実装 PR で行う。
-//!
-//! M2 の中心成果物。仕様 7 節の準拠要件を実行可能にしたもので、被験者は
-//! 「stdio で LSP を話すコマンド」であればなんでもよい。lsp-det は最初の
-//! 被験者に過ぎない（v0.1-design.md 6 章）。
+//! 仕様 7 章（サーバーの義務）と 8.4（観測者の準拠要件）を実行可能にした
+//! もので、被験者は「stdio で LSP を話すコマンド」であればなんでもよい。
+//! lsp-det は最初の被験者に過ぎない（v0.1-design.md 6 章）。
 //!
 //! 各テスト名は仕様の条番号に対応させてある。仕様が変わったらここが落ちる。
 //!
 //! 7.2（completeness）と 7.3（freshness）は、被験者が保証を宣言している
-//! ときだけ意味を持つ。lsp-det については、ゲート（設計 4.2）が入る M2 の
-//! 次の PR で追加する。
+//! ときだけ意味を持つ。lsp-det + 偽上流で回すのは下流側（M3）の後。
+//! 下流側の準拠要件（仕様 9.1）は別のスイートで扱う。
 
 mod support;
 
@@ -26,10 +22,10 @@ use support::{ConformanceClient, ServerUnderTest};
 /// 「届かないこと」を確かめるときの観測窓。
 const NEGATIVE_WINDOW: Duration = Duration::from_millis(750);
 
-fn client(declare_extension_s: bool) -> (ConformanceClient, Value) {
+fn client(declare_server_state: bool) -> (ConformanceClient, Value) {
     let server = ServerUnderTest::lsp_det_with_fake_upstream();
     let mut client = ConformanceClient::start(&server);
-    let result = client.initialize(declare_extension_s);
+    let result = client.initialize(declare_server_state);
     (client, result)
 }
 
@@ -64,18 +60,18 @@ fn spec_5_keeps_the_upstream_capabilities_intact() {
 }
 
 // ---------------------------------------------------------------------------
-// 7.1 基本グレード
+// 7.1 保証なしの宣言
 // ---------------------------------------------------------------------------
 
 #[test]
-fn spec_7_1_1_answers_server_state_right_after_initialize_and_is_not_ready() {
+fn spec_7_1_1_answers_server_state_right_after_initialize() {
+    // 偽上流はまだ信号を出していないので、上流側は「initialize 直後」に
+    // 対応する initializing を報告する (仕様 8.2 の 2)。ready でないことは
+    // 仕様の要件ではなく (7 章の前提条件)、この被験者の事実である。
     let (mut client, _) = client(true);
     let state = client.server_state();
-    assert_ne!(
-        state.readiness,
-        Readiness::Ready,
-        "initialize 直後に ready を名乗ってはならない"
-    );
+    assert_eq!(state.readiness, Readiness::Initializing);
+    assert_eq!(state.health, Health::Unknown);
     client.shutdown();
 }
 
@@ -84,7 +80,7 @@ fn spec_7_1_1_answers_server_state_even_without_the_client_declaration() {
     // 仕様 5.2: リクエストは宣言の有無によらず応答する。
     let (mut client, _) = client(false);
     let state = client.server_state();
-    assert_ne!(state.readiness, Readiness::Ready);
+    assert_eq!(state.readiness, Readiness::Initializing);
     client.shutdown();
 }
 
@@ -148,7 +144,7 @@ fn spec_4_2_does_not_repeat_a_notification_for_an_unchanged_state() {
 
 #[test]
 fn spec_4_1_does_not_forward_the_state_request_upstream() {
-    // 中継層が自ら答えるメソッドであり、上流は拡張 S を知らない。
+    // 上流側が自ら答えるメソッドであり、上流は本プロトコルを知らない。
     let (mut client, _) = client(true);
     client.server_state();
     let seen = client.upstream_methods_seen();
@@ -160,16 +156,19 @@ fn spec_4_1_does_not_forward_the_state_request_upstream() {
 }
 
 #[test]
-fn spec_6_1_reports_dead_when_the_upstream_disappears() {
-    // 中継層だけが出せる値。プロセス消失の観測に基づく。
+fn spec_8_2_7_closes_the_connection_without_a_notification_when_the_upstream_disappears() {
+    // 仕様 8.2 の 7: プロセスの消失は本プロトコルの値ではない。中継層は
+    // 未応答のリクエストにエラーを応答したうえで接続を閉じ、下流には
+    // EOF が伝わる。「死んだ」を表す通知は送らない。
     let (mut client, _) = client(true);
     client.make_upstream_emit_status("ok", true);
     client.await_state_changed();
 
-    // 偽上流は exit 通知で終了する。lsp-det はその消失を観測するはず。
     client.notify("exit", json!(null));
-    let state = client.await_state_changed();
-    assert_eq!(state.health, Health::Dead);
+    assert!(
+        client.expect_silence_until_closed("experimental/serverStateChanged"),
+        "上流の消失を serverStateChanged で通知した (仕様 8.2 の 7 違反)"
+    );
 }
 
 #[test]
@@ -184,33 +183,31 @@ fn spec_7_1_4_reports_an_index_failure_as_health_error() {
 }
 
 // ---------------------------------------------------------------------------
-// アダプタなし (v0.1-design.md 4.1、ADR 0008)
+// 写像なし (仕様 8.2 の 3、8.4 の 1)
 //
-// readiness を観測する手段がないので両軸 unknown。それでもプロセスの消失は
-// 観測できるため dead は出す。これが中継層の固有価値をアダプタのない
-// サーバーに届ける経路。
+// readiness を観測する手段がないので両軸 unknown を正直に報告する。
 // ---------------------------------------------------------------------------
 
-fn client_without_adapter(declare_extension_s: bool) -> (ConformanceClient, Value) {
+fn client_without_adapter(declare_server_state: bool) -> (ConformanceClient, Value) {
     let server = ServerUnderTest::lsp_det_without_adapter();
     let mut client = ConformanceClient::start(&server);
-    let result = client.initialize(declare_extension_s);
+    let result = client.initialize(declare_server_state);
     (client, result)
 }
 
 #[test]
-fn spec_5_declares_the_basic_grade_without_an_adapter() {
+fn spec_5_declares_without_guarantees_when_there_is_no_adapter() {
     let (mut client, result) = client_without_adapter(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!(true),
-        "アダプタなしは基本グレード (true) を宣言する: {result}"
+        "写像なしは保証のない宣言 (true) をする: {result}"
     );
     client.shutdown();
 }
 
 #[test]
-fn spec_7_1_1_reports_unknown_on_both_axes_without_an_adapter() {
+fn spec_8_4_1_reports_unknown_on_both_axes_without_an_adapter() {
     let (mut client, _) = client_without_adapter(true);
     let state = client.server_state();
     assert_eq!(state.readiness, Readiness::Unknown);
@@ -233,17 +230,6 @@ fn does_not_interpret_the_upstream_status_without_an_adapter() {
 }
 
 #[test]
-fn spec_7_1_2_dead_stays_silent_without_an_adapter_when_the_client_did_not_declare() {
-    // 仕様 5.2: 宣言していないクライアントには dead も通知しない。
-    let (mut client, _) = client_without_adapter(false);
-    client.notify("exit", json!(null));
-    assert!(
-        client.expect_silence_until_closed("experimental/serverStateChanged"),
-        "宣言していないクライアントへ dead を通知した"
-    );
-}
-
-#[test]
 fn an_upstream_that_dies_before_answering_initialize_does_not_hang_the_client_without_an_adapter() {
     // アダプタなしでも handshake 中の死は隠さない。
     let server =
@@ -257,33 +243,31 @@ fn an_upstream_that_dies_before_answering_initialize_does_not_hang_the_client_wi
 }
 
 #[test]
-fn spec_6_1_reports_dead_without_an_adapter() {
+fn spec_8_2_7_closes_the_connection_without_a_notification_without_an_adapter() {
+    // 写像がなくても同じ。dead を出す代わりに、接続を閉じて EOF で伝える。
     let (mut client, _) = client_without_adapter(true);
     client.notify("exit", json!(null));
-    let state = client.await_state_changed();
-    assert_eq!(state.health, Health::Dead);
-    assert_eq!(
-        state.readiness,
-        Readiness::Unknown,
-        "dead になっても readiness は観測していないまま"
+    assert!(
+        client.expect_silence_until_closed("experimental/serverStateChanged"),
+        "上流の消失を serverStateChanged で通知した (仕様 8.2 の 7 違反)"
     );
 }
 
 // ---------------------------------------------------------------------------
-// 上流自身が拡張 S に準拠している場合 (ADR 0008 追補 D)
+// 上流自身が宣言している場合 (仕様 8.2 の 6、8.4 の 2)
 //
-// 中継層は拡張 S について透過する。宣言を足さず、リクエストを転送し、
-// 自前の通知を出さない。同一接続に送信者の異なる 2 系統が流れるのを避ける。
+// 上流側は恒等写像になる。宣言を足さず、リクエストを転送し、自前の通知を
+// 出さない。同一接続に送信者の異なる 2 系統が流れるのを避ける。
 // ---------------------------------------------------------------------------
 
 #[test]
-fn defers_to_a_conformant_upstream_without_an_adapter() {
+fn spec_8_4_2_defers_to_a_conformant_upstream_without_an_adapter() {
     let server =
         ServerUnderTest::lsp_det_without_adapter_flags(&["--declare-server-state-provider"]);
     let mut client = ConformanceClient::start(&server);
     let result = client.initialize(true);
 
-    // 上流の宣言をそのまま通す (基本グレードで上書きしない)。
+    // 上流の宣言をそのまま通す (保証なしの宣言で上書きしない)。
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"freshness": true}),
@@ -301,18 +285,18 @@ fn defers_to_a_conformant_upstream_without_an_adapter() {
         "experimental/serverState を上流へ転送していない"
     );
 
-    // 中継層は自前の dead を出さない (上流が拡張 S の送信者)。
+    // 上流側は自前の通知を出さない (上流が送信者)。
     client.notify("exit", json!(null));
     assert!(
         client.expect_silence_until_closed("experimental/serverStateChanged"),
-        "透過しているのに中継層が通知を出した"
+        "恒等写像のはずの上流側が通知を出した"
     );
 }
 
 #[test]
 fn a_false_upstream_declaration_is_not_a_declaration() {
-    // `serverStateProvider: false` は「提供しない」。透過に切り替えては
-    // ならず、中継層は自分の宣言を置いて自分で答える。
+    // `serverStateProvider: false` は「提供しない」。恒等写像に切り替えては
+    // ならず、上流側は自分の宣言を置いて自分で答える。
     let server =
         ServerUnderTest::lsp_det_without_adapter_flags(&["--declare-server-state-provider-false"]);
     let mut client = ConformanceClient::start(&server);
@@ -320,7 +304,7 @@ fn a_false_upstream_declaration_is_not_a_declaration() {
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!(true),
-        "false を宣言とみなして透過に切り替えた: {result}"
+        "false を宣言とみなして恒等写像に切り替えた: {result}"
     );
     assert_eq!(client.server_state().readiness, Readiness::Unknown);
     client.shutdown();
@@ -328,8 +312,8 @@ fn a_false_upstream_declaration_is_not_a_declaration() {
 
 #[test]
 fn does_not_emit_its_own_notifications_under_deferral_with_an_adapter() {
-    // 透過中に自前の serverStateChanged を出すと、上流の通知と 2 系統に
-    // なる (ADR 0008 追補 D-1)。アダプタが生きた遷移を読んでも出さない。
+    // 恒等写像中に自前の serverStateChanged を出すと、上流の通知と 2 系統に
+    // なる (仕様 8.2 の 6)。写像が生きた遷移を読んでも出さない。
     let server =
         ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--declare-server-state-provider"]);
     let mut client = ConformanceClient::start(&server);
@@ -337,14 +321,14 @@ fn does_not_emit_its_own_notifications_under_deferral_with_an_adapter() {
     client.make_upstream_emit_status("ok", true);
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "透過中に中継層が自前の通知を出した"
+        "恒等写像中に上流側が自前の通知を出した"
     );
     client.shutdown();
 }
 
 #[test]
 fn drops_a_pre_handshake_transition_under_deferral() {
-    // handshake 前に溜めた遷移も、透過に切り替わったら流さない。
+    // handshake 前に溜めた遷移も、恒等写像に切り替わったら流さない。
     let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
         "--status-before-initialize-result",
         "--declare-server-state-provider",
@@ -353,15 +337,15 @@ fn drops_a_pre_handshake_transition_under_deferral() {
     client.initialize(true);
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "透過に切り替わった後に、溜めていた遷移を流した"
+        "恒等写像に切り替わった後に、溜めていた遷移を流した"
     );
     client.shutdown();
 }
 
 #[test]
-fn defers_to_a_conformant_upstream_even_with_an_adapter() {
-    // アダプタは上流の語彙を補うためのもの。上流が拡張 S を話すなら不要で、
-    // 中継層の宣言で上流の宣言を隠してはならない。
+fn spec_8_4_2_defers_to_a_conformant_upstream_even_with_an_adapter() {
+    // 写像は上流の語彙を補うためのもの。上流が本プロトコルを話すなら不要で、
+    // 上流側の宣言で上流の宣言を隠してはならない。
     let server =
         ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--declare-server-state-provider"]);
     let mut client = ConformanceClient::start(&server);
@@ -381,7 +365,7 @@ fn defers_to_a_conformant_upstream_even_with_an_adapter() {
 // handshake 前後の境界
 //
 // LSP は `InitializeResult` より前のサーバー発通知を許さない。しかし
-// 「送れないから捨てる」と、その遷移は永久に失われる。沈黙は本拡張が
+// 「送れないから捨てる」と、その遷移は永久に失われる。沈黙は本プロトコルが
 // 消そうとしているものそのものなので、境界の扱いを明示的に縛る。
 // ---------------------------------------------------------------------------
 
@@ -423,7 +407,7 @@ fn an_initialize_error_does_not_end_the_handshake() {
 #[test]
 fn death_during_a_retried_initialize_is_still_closed_with_an_error() {
     // 1 回目はエラー、2 回目に答えず消える。2 回目も宙に浮かせない
-    // (ADR 0008 追補 D-4)。
+    // (仕様 8.2 の 7)。
     let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
         "--fail-first-initialize",
         "--exit-before-initialize-result",
@@ -440,14 +424,36 @@ fn death_during_a_retried_initialize_is_still_closed_with_an_error() {
 }
 
 #[test]
+fn an_answered_initialize_is_not_answered_again_when_the_upstream_dies() {
+    // initialize にエラー応答が返った時点で、その id は宙に浮いていない。
+    // その後に上流が消えても、同じ id に二重に応答してはならない
+    // (JSON-RPC は 1 リクエスト 1 応答)。
+    let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
+        "--fail-first-initialize",
+        "--exit-after-initialize-error",
+    ]);
+    let mut client = ConformanceClient::start(&server);
+    let first = client.initialize_raw(true);
+    assert!(
+        first.get("error").is_some(),
+        "偽上流は 1 回目を失敗させるはず"
+    );
+    assert!(
+        client.expect_no_response_until_closed(),
+        "応答済みの initialize に、上流消失時にもう一度応答した"
+    );
+}
+
+#[test]
 fn an_upstream_that_dies_before_answering_initialize_does_not_hang_the_client() {
-    // 起動時クラッシュ。仕様 6.1 の dead が最も効くはずの場面。
+    // 起動時クラッシュ。仕様 8.2 の 7: 未応答のリクエストにエラーを応答して
+    // から接続を閉じる。
     let server =
         ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--exit-before-initialize-result"]);
     let mut client = ConformanceClient::start(&server);
 
-    // handshake 前なので通知は送れない。ならば宙に浮いた initialize を
-    // エラーで閉じるしかない。沈黙して EOF だけ返すのは無言の嘘である。
+    // 宙に浮いた initialize をエラーで閉じる。沈黙して EOF だけ返すと
+    // クライアントは応答を永久に待つ。
     let response = client.initialize_raw(true);
     assert!(
         response.get("error").is_some(),
@@ -459,7 +465,7 @@ fn an_upstream_that_dies_before_answering_initialize_does_not_hang_the_client() 
 // 実サーバー結合（ローカル専用。CI に入れない — v0.1-design.md 6 章）
 // ---------------------------------------------------------------------------
 
-/// 負の対照。生の rust-analyzer は拡張 S を実装していないので、スイートは
+/// 負の対照。生の rust-analyzer は本プロトコルを実装していないので、スイートは
 /// これを非準拠と判定しなければならない。全部通るスイートは何も測っていない
 /// のと同じなので、「落ちるべきものが落ちる」ことを確かめておく。
 #[test]
@@ -475,7 +481,7 @@ fn a_server_without_the_extension_is_detected_as_non_conforming() {
 
     assert!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null(),
-        "生の rust-analyzer が拡張 S を宣言している。上流が拡張を実装したか、\
+        "生の rust-analyzer が serverStateProvider を宣言している。上流が実装したか、\
          被験者の取り違えである: {result}"
     );
 }

@@ -1,8 +1,4 @@
-//! サーバー状態プロトコルの `ServerState`（docs/spec/server-state.md）。
-//!
-//! 注意: 本モジュールは ADR 0009 以前の仕様に基づいており、`Dead` を持つ。
-//! 改訂後の仕様（`dead` の削除、`unknown` の 8 章への移動）への追従は
-//! ADR 0009 E-2 の実装 PR で行う。
+//! サーバー状態プロトコルの `ServerState`（docs/spec/server-state.md 3 章・8.1）。
 //!
 //! `health` と `readiness` は独立の 2 軸。`message` は人間向けの補足であり
 //! 機械判定に使ってはならない。ワイヤ形式は仕様が規範なので、本モジュールの
@@ -19,16 +15,18 @@ pub const SERVER_STATE_METHOD: &str = "experimental/serverState";
 /// 状態変化の通知 (仕様 4.2)。
 pub const SERVER_STATE_CHANGED_METHOD: &str = "experimental/serverStateChanged";
 
-/// サーバーが機能しているか。`dead` は中継層だけが送出できる (仕様 6.1)。
+/// サーバーが機能しているか (仕様 3 章)。
+///
+/// サーバーの死を表す値はない。プロセスの消失は接続の終了 (EOF) で伝える
+/// (仕様 8.2 の 7、ADR 0009 決定 C-3)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Health {
     Ok,
     Warning,
     Error,
-    Dead,
     /// health を観測する手段がない、またはまだ観測していない (最初の信号が
-    /// 届く前)。中継層のみが送出する (仕様 6.1、ADR 0008 追補 C-1・E)。
+    /// 届く前)。観測者のみが送出する (仕様 8.1、8.2 の 2)。
     Unknown,
 }
 
@@ -39,7 +37,7 @@ pub enum Readiness {
     Initializing,
     Indexing,
     Ready,
-    /// readiness を観測する手段がない。中継層のみが送出する (仕様 6.1、ADR 0008)。
+    /// readiness を観測する手段がない。観測者のみが送出する (仕様 8.1)。
     Unknown,
 }
 
@@ -59,9 +57,9 @@ pub struct ServerState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ServerStateProvider {
-    /// 基本グレード。状態の通知そのものだけを保証する。
+    /// 保証なしの宣言。状態の通知そのものだけを保証する。
     Basic(bool),
-    Graded(Guarantees),
+    WithGuarantees(Guarantees),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -75,7 +73,7 @@ pub struct Guarantees {
 impl ServerStateProvider {
     /// `completeness` のみを宣言する。
     pub fn complete() -> Self {
-        ServerStateProvider::Graded(Guarantees {
+        ServerStateProvider::WithGuarantees(Guarantees {
             completeness: Some(true),
             freshness: None,
         })
@@ -83,7 +81,7 @@ impl ServerStateProvider {
 
     /// `completeness` と `freshness` の両方を宣言する。
     pub fn complete_and_fresh() -> Self {
-        ServerStateProvider::Graded(Guarantees {
+        ServerStateProvider::WithGuarantees(Guarantees {
             completeness: Some(true),
             freshness: Some(true),
         })
@@ -104,10 +102,9 @@ impl ServerState {
         }
     }
 
-    /// どちらの軸も観測できない状態。アダプタなしの中継層はここから始まり、
-    /// プロセス消失で `health` だけが `dead` になる (v0.1-design.md 4.1)。
-    /// `initializing` や `ok` から始めないのは、追跡していないものを
-    /// 追跡しているように見せないため。
+    /// どちらの軸も観測できない状態。写像のない上流側はここから動かない
+    /// (仕様 8.2 の 3)。`initializing` や `ok` から始めないのは、追跡して
+    /// いないものを追跡しているように見せないため。
     pub fn unobserved() -> Self {
         ServerState {
             health: Health::Unknown,
@@ -160,7 +157,6 @@ mod tests {
             (Health::Ok, "ok"),
             (Health::Warning, "warning"),
             (Health::Error, "error"),
-            (Health::Dead, "dead"),
             (Health::Unknown, "unknown"),
         ] {
             assert_eq!(
@@ -183,6 +179,13 @@ mod tests {
                 format!("\"{expected}\"")
             );
         }
+    }
+
+    #[test]
+    fn dead_is_not_a_health_value() {
+        // 仕様 3 章 (ADR 0009 決定 C-3): サーバーの死は値ではなく接続の終了で
+        // 伝える。ワイヤに "dead" が現れたら、それは本仕様の値ではない。
+        assert!(serde_json::from_str::<Health>("\"dead\"").is_err());
     }
 
     #[test]
@@ -247,8 +250,6 @@ mod tests {
         assert_eq!(state.health, Health::Unknown);
         assert_eq!(state.readiness, Readiness::Unknown);
         assert_eq!(state.message, None);
-        // 仕様 7.1 の 1 を unknown でも満たす。
-        assert_ne!(state.readiness, Readiness::Ready);
     }
 
     #[test]
@@ -271,7 +272,7 @@ mod tests {
 
     #[test]
     fn a_grade_serializes_both_guarantees_when_claimed() {
-        let both = ServerStateProvider::Graded(Guarantees {
+        let both = ServerStateProvider::WithGuarantees(Guarantees {
             completeness: Some(true),
             freshness: Some(true),
         });

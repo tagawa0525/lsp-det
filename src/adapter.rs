@@ -1,8 +1,8 @@
-//! ready 判定アダプタ (v0.1-design.md 5 章)。M2 では rust-analyzer のみ。
+//! 写像 (アダプタ、v0.1-design.md 5 章)。M2 では rust-analyzer のみ。
 //!
-//! アダプタの役割は**上流メッセージの解釈**だけである。状態の保持・重複
-//! 抑止・`dead` は [`crate::tracker::Tracker`] が持つ。分けるのは、アダプタが
-//! なくてもプロセスの消失は観測でき、`dead` を出せるからである (ADR 0008)。
+//! アダプタの役割は**上流メッセージの解釈**だけである。状態の保持と重複
+//! 抑止は [`crate::tracker::Tracker`] が持つ。分けるのは、アダプタがなくても
+//! 上流側は存在し、両軸 `unknown` を報告するからである (仕様 8.2 の 3)。
 //!
 //! rust-analyzer は `experimental/serverStatus` 通知で
 //! `{health, quiescent, message}` を送る (`lsp/ext.rs`)。`quiescent` の実体は
@@ -19,7 +19,7 @@
 //! `{health: error, quiescent: true}` (`current_status()`)。仕様 6 章 5 項の
 //! とおり `readiness` ではなく `health` に写す。
 //!
-//! gopls アダプタは M3。共通の trait はそのとき 2 つ目の実装を見てから
+//! gopls アダプタは M4。共通の trait はそのとき 2 つ目の実装を見てから
 //! 導入する (現在の要件に対する最小限の実装)。
 
 use serde::Deserialize;
@@ -32,9 +32,9 @@ pub const SERVER_STATUS_METHOD: &str = "experimental/serverStatus";
 
 /// `experimental/serverStatus` の params。
 ///
-/// `health` を `state::Health` ではなく専用の enum で受けるのは、仕様 6.1 が
-/// 「サーバーは `dead` / `unknown` を送出してはならない」と定めているため。
-/// 上流がそれらを送ってきてもパースに失敗し、状態は変わらない。
+/// `health` を `state::Health` ではなく専用の enum で受けるのは、仕様 8.1 が
+/// 「サーバーは `unknown` を送出してはならない」と定めているため。上流が
+/// それを送ってきてもパースに失敗し、状態は変わらない。
 #[derive(Debug, Deserialize)]
 struct ServerStatusParams {
     health: UpstreamHealth,
@@ -88,7 +88,7 @@ impl RustAnalyzerAdapter {
         Self::REQUIRED_CLIENT_CAPABILITIES
     }
 
-    /// `InitializeResult` に宣言する保証グレード (仕様 5 章)。
+    /// `InitializeResult` に宣言する保証 (仕様 5 章)。
     ///
     /// rust-analyzer は両方の保証を満たす。準拠テストスイートの仕様 7.2
     /// (完全性) と 7.3 (クロスファイル鮮度) を実 rust-analyzer に当てて
@@ -232,7 +232,8 @@ mod tests {
 
     #[test]
     fn refuses_observer_only_health_values_claimed_by_the_upstream() {
-        // 仕様 6.1: サーバーは dead / unknown を送出してはならない。
+        // 仕様 8.1: サーバーは unknown を送出してはならない。dead は本プロトコルの
+        // 値ではない (仕様 3 章)。
         for claimed in ["dead", "unknown"] {
             let mut adapter = RustAnalyzerAdapter::new();
             let body = format!(

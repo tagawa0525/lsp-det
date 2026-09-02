@@ -19,13 +19,16 @@
 //!   応答せず終了する（起動時クラッシュ）
 //! - `--status-before-initialize-result`: `InitializeResult` より**前**に
 //!   `experimental/serverStatus` を送る
-//! - `--declare-server-state-provider`: 上流自身が拡張 S に準拠している
+//! - `--declare-server-state-provider`: 上流自身が本プロトコルに準拠している
 //!   ふりをする。`InitializeResult` に `serverStateProvider: {freshness: true}`
 //!   を宣言し、`experimental/serverState` に自分で答える
 //! - `--declare-server-state-provider-false`: `serverStateProvider: false` を
 //!   宣言する（`hoverProvider: false` と同じ「提供しない」の書き方）
 //! - `--fail-first-initialize`: 最初の `initialize` にエラーで応答する。
 //!   2 回目以降は通常どおり
+//! - `--exit-after-initialize-error`: `--fail-first-initialize` と併用し、
+//!   エラー応答を送った直後に終了する（応答済みの id に二重応答しないことを
+//!   確かめる）
 
 use std::io::{self, BufReader};
 
@@ -40,6 +43,7 @@ fn main() {
     let declare_server_state_provider = has("--declare-server-state-provider");
     let declare_server_state_provider_false = has("--declare-server-state-provider-false");
     let fail_first_initialize = has("--fail-first-initialize");
+    let exit_after_initialize_error = has("--exit-after-initialize-error");
     let mut initialize_failed_once = false;
 
     let stdin = io::stdin();
@@ -74,6 +78,9 @@ fn main() {
                             "error": {"code": -32603, "message": "first attempt fails", "data": {"retry": true}}
                         }),
                     );
+                    if exit_after_initialize_error {
+                        return;
+                    }
                     continue;
                 }
                 if exit_before_initialize_result {

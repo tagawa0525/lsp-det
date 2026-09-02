@@ -35,8 +35,8 @@ impl ServerUnderTest {
         Self::lsp_det_with_fake_upstream_flags(&[])
     }
 
-    /// アダプタなしの lsp-det + 偽上流。両軸 `unknown` と `dead` だけを出す
-    /// 被験者（v0.1-design.md 4.1、ADR 0008）。
+    /// アダプタなしの lsp-det + 偽上流。両軸 `unknown` を報告する被験者
+    /// （仕様 8.2 の 3、8.4 の 1）。
     pub fn lsp_det_without_adapter() -> Self {
         Self::lsp_det_without_adapter_flags(&[])
     }
@@ -102,7 +102,7 @@ enum Incoming {
     Closed,
 }
 
-/// 拡張 S の準拠を確かめる偽クライアント。
+/// 本プロトコルの準拠を確かめる偽クライアント。
 pub struct ConformanceClient {
     child: Child,
     stdin: ChildStdin,
@@ -139,19 +139,19 @@ impl ConformanceClient {
 
     /// `initialize` → `initialized` を済ませ、`InitializeResult` を返す。
     ///
-    /// `declare_extension_s` は仕様 5.2 のクライアント宣言
+    /// `declare_server_state` は仕様 5.2 のクライアント宣言
     /// （`experimental.serverState: true`）を送るかどうか。
-    pub fn initialize(&mut self, declare_extension_s: bool) -> Value {
-        let result = self.initialize_raw(declare_extension_s);
+    pub fn initialize(&mut self, declare_server_state: bool) -> Value {
+        let result = self.initialize_raw(declare_server_state);
         self.notify("initialized", json!({}));
         result
     }
 
     /// `initialized` を送らずに `initialize` の応答だけを受け取る。
     /// handshake が成立しない場合の検証に使う。
-    pub fn initialize_raw(&mut self, declare_extension_s: bool) -> Value {
+    pub fn initialize_raw(&mut self, declare_server_state: bool) -> Value {
         let mut capabilities = json!({"textDocument": {"hover": {}}});
-        if declare_extension_s {
+        if declare_server_state {
             capabilities["experimental"] = json!({"serverState": true});
         }
         self.request(
@@ -185,7 +185,7 @@ impl ConformanceClient {
         );
     }
 
-    /// 拡張 S の状態を問い合わせる（仕様 4.1）。
+    /// 本プロトコルの状態を問い合わせる（仕様 4.1）。
     pub fn server_state(&mut self) -> ServerState {
         let response = self.request("experimental/serverState", json!(null));
         let result = response.get("result").unwrap_or_else(|| {
@@ -260,16 +260,15 @@ impl ConformanceClient {
     /// `readiness` が `ready` になるまで `serverStateChanged` を待つ。
     /// 実サーバーは自分のペースで ready になるため、時間ではなく状態で待つ。
     ///
-    /// `health` が `error` / `dead` になったら待つのをやめて失敗する（仕様
-    /// 6 章 5 項。待ち続けるのは本 ADR 0008 が警告する永久待ちそのもの）。
+    /// `health` が `error` になったら待つのをやめて失敗する（仕様 6 章 5 項、
+    /// 9 章 2 項。待ち続けるのは ADR 0008 が警告する永久待ちそのもの）。
     /// `readiness` が `unknown` の被験者には使えない（永遠に来ない）。
     pub fn wait_until_ready(&mut self) {
         let mut state = self.server_state();
         loop {
-            // health を先に見る。{dead, unknown} は正常に出る組み合わせで、
-            // それを「unknown の被験者を待たせた」と誤診してはならない。
+            // health を先に見る (仕様 3 章の推奨解釈)。
             assert!(
-                !matches!(state.health, Health::Error | Health::Dead),
+                state.health != Health::Error,
                 "ready を待つ間に被験者が壊れた: {state:?}"
             );
             if state.readiness == Readiness::Ready {
@@ -320,6 +319,28 @@ impl ConformanceClient {
             "被験者が異常終了した ({status})。沈黙ではなく墜落である"
         );
         true
+    }
+
+    /// 被験者が接続を閉じるまで読み、その間に**応答**（id 付きで method の
+    /// ないメッセージ）が届かなかったことを確かめる。応答済みの id に
+    /// 二重応答しないことの検証に使う。
+    pub fn expect_no_response_until_closed(&mut self) -> bool {
+        let deadline = std::time::Instant::now() + DEFAULT_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.incoming.recv_timeout(remaining) {
+                Ok(Incoming::Message(message)) => {
+                    if message.get("id").is_some() && message.get("method").is_none() {
+                        return false;
+                    }
+                    self.stash(message);
+                }
+                Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => return true,
+                Err(RecvTimeoutError::Timeout) => {
+                    panic!("応答が来ないことを確かめている間、被験者が閉じなかった")
+                }
+            }
+        }
     }
 
     pub fn did_open(&mut self, path: &std::path::Path, language_id: &str) {

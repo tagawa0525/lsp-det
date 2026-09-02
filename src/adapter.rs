@@ -54,6 +54,29 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<RustAnalyzerAd
     }
 }
 
+/// gopls の写像 (設計 5.2)。`$/progress` から readiness と health を合成する。
+#[derive(Default)]
+pub struct GoplsAdapter {}
+
+impl GoplsAdapter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn initial_state(&self) -> ServerState {
+        ServerState::initializing()
+    }
+
+    pub fn guarantees(&self) -> ServerStateProvider {
+        ServerStateProvider::Basic(true)
+    }
+
+    pub fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
+        let _ = (view, body);
+        todo!("M4 GREEN")
+    }
+}
+
 /// `X.Y.Z` の 3 つ組。rust-analyzer の版文字列の先頭部分。
 pub type Version = (u32, u32, u32);
 
@@ -309,6 +332,155 @@ mod tests {
             interpret(&mut adapter, body).unwrap().health,
             Health::Warning
         );
+    }
+
+    // --- gopls ---------------------------------------------------------------
+
+    fn progress(token: &str, value: &str) -> String {
+        format!(
+            r#"{{"jsonrpc":"2.0","method":"$/progress","params":{{"token":"{token}","value":{value}}}}}"#
+        )
+    }
+
+    fn setup_begin(token: &str) -> String {
+        progress(
+            token,
+            r#"{"kind":"begin","title":"Setting up workspace","message":"Loading packages...","cancellable":false}"#,
+        )
+    }
+
+    fn setup_end(token: &str, message: &str) -> String {
+        progress(token, &format!(r#"{{"kind":"end","message":"{message}"}}"#))
+    }
+
+    fn gopls_interpret(adapter: &mut GoplsAdapter, body: &str) -> Option<ServerState> {
+        let view = peek(body.as_bytes()).expect("test bodies are valid JSON");
+        adapter.interpret(&view, body.as_bytes())
+    }
+
+    #[test]
+    fn gopls_begin_of_workspace_setup_means_indexing() {
+        let mut adapter = GoplsAdapter::new();
+        let state = gopls_interpret(&mut adapter, &setup_begin("1")).expect("begin is a signal");
+        assert_eq!(state.readiness, Readiness::Indexing);
+        assert_eq!(state.health, Health::Unknown, "begin は health を語らない");
+    }
+
+    #[test]
+    fn gopls_end_of_workspace_setup_means_ready_and_ok() {
+        let mut adapter = GoplsAdapter::new();
+        gopls_interpret(&mut adapter, &setup_begin("1"));
+        let state = gopls_interpret(&mut adapter, &setup_end("1", "Finished loading packages."))
+            .expect("end is a signal");
+        assert_eq!(state.readiness, Readiness::Ready);
+        assert_eq!(state.health, Health::Ok);
+    }
+
+    #[test]
+    fn gopls_waits_for_all_tokens() {
+        let mut adapter = GoplsAdapter::new();
+        gopls_interpret(&mut adapter, &setup_begin("a"));
+        gopls_interpret(&mut adapter, &setup_begin("b"));
+        let after_a = gopls_interpret(&mut adapter, &setup_end("a", "Finished loading packages."));
+        assert!(
+            after_a
+                .as_ref()
+                .is_none_or(|s| s.readiness == Readiness::Indexing),
+            "1 つ目の end で ready を名乗った: {after_a:?}"
+        );
+        let after_b = gopls_interpret(&mut adapter, &setup_end("b", "Finished loading packages."))
+            .expect("last end is a signal");
+        assert_eq!(after_b.readiness, Readiness::Ready);
+    }
+
+    #[test]
+    fn gopls_end_of_an_unknown_token_is_ignored() {
+        // トークンは begin で覚えたものだけ。他の progress の end で ready にしない。
+        let mut adapter = GoplsAdapter::new();
+        assert!(
+            gopls_interpret(
+                &mut adapter,
+                &setup_end("stray", "Finished loading packages.")
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn gopls_failed_load_is_ready_but_error() {
+        let mut adapter = GoplsAdapter::new();
+        gopls_interpret(&mut adapter, &setup_begin("1"));
+        let state = gopls_interpret(
+            &mut adapter,
+            &setup_end("1", "Error loading packages: no Go files"),
+        )
+        .expect("end is a signal");
+        assert_eq!(state.readiness, Readiness::Ready);
+        assert_eq!(state.health, Health::Error);
+        assert_eq!(
+            state.message.as_deref(),
+            Some("Error loading packages: no Go files")
+        );
+    }
+
+    #[test]
+    fn gopls_workspace_load_failure_progress_drives_health() {
+        let mut adapter = GoplsAdapter::new();
+        gopls_interpret(&mut adapter, &setup_begin("1"));
+        gopls_interpret(&mut adapter, &setup_end("1", "Finished loading packages."));
+
+        let begin = progress(
+            "e",
+            r#"{"kind":"begin","title":"Error loading workspace","message":"err: go.mod file not found","cancellable":false}"#,
+        );
+        let state = gopls_interpret(&mut adapter, &begin).expect("failure begin is a signal");
+        assert_eq!(state.health, Health::Error);
+        assert_eq!(state.message.as_deref(), Some("err: go.mod file not found"));
+        assert_eq!(state.readiness, Readiness::Ready, "readiness は変えない");
+
+        let report = progress("e", r#"{"kind":"report","message":"err: still broken"}"#);
+        let state = gopls_interpret(&mut adapter, &report).expect("report updates the message");
+        assert_eq!(state.health, Health::Error);
+        assert_eq!(state.message.as_deref(), Some("err: still broken"));
+
+        let end = progress("e", r#"{"kind":"end","message":"Done."}"#);
+        let state = gopls_interpret(&mut adapter, &end).expect("failure end is a signal");
+        assert_eq!(state.health, Health::Ok);
+    }
+
+    #[test]
+    fn gopls_ignores_other_progress_titles_and_other_methods() {
+        let mut adapter = GoplsAdapter::new();
+        let diag = progress(
+            "d",
+            r#"{"kind":"begin","title":"Calculating diagnostics","message":"..."}"#,
+        );
+        assert!(gopls_interpret(&mut adapter, &diag).is_none());
+        assert!(
+            gopls_interpret(
+                &mut adapter,
+                &progress("d", r#"{"kind":"end","message":"Done."}"#)
+            )
+            .is_none()
+        );
+        assert!(
+            gopls_interpret(&mut adapter, &status("ok", true)).is_none(),
+            "rust-analyzer の語彙は読まない"
+        );
+    }
+
+    #[test]
+    fn gopls_declares_no_guarantees_until_measured() {
+        // 設計 5.2: 7.2 / 7.3 を実 gopls に当てるまで宣言しない。
+        assert_eq!(
+            GoplsAdapter::new().guarantees(),
+            ServerStateProvider::Basic(true)
+        );
+    }
+
+    #[test]
+    fn selects_gopls_by_its_server_info_name() {
+        assert!(select("gopls", Some("v0.20.0")).is_some());
     }
 
     #[test]

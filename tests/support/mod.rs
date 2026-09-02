@@ -52,6 +52,11 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("rust-analyzer", upstream_flags)
     }
 
+    /// gopls と名乗る偽上流 + lsp-det。lsp-det は gopls の写像を選ぶ。
+    pub fn lsp_det_with_fake_gopls() -> Self {
+        Self::lsp_det_with_upstream("gopls", &[])
+    }
+
     /// 本プロトコルに準拠した偽上流 + lsp-det。上流側は恒等写像になり、
     /// 下流側は上流の状態を境界越しに読む（設計 4.1）。
     pub fn lsp_det_with_conformant_upstream_flags(upstream_flags: &[&str]) -> Self {
@@ -283,6 +288,28 @@ impl ConformanceClient {
             "$/fake/emitServerStatus",
             json!({"health": health, "quiescent": quiescent}),
         );
+    }
+
+    /// 偽上流に `$/progress` を送らせる（偽上流専用の制御）。gopls の
+    /// `{"token", "value": {"kind", "title", "message"}}` をそのまま渡す。
+    pub fn make_upstream_emit_progress(&mut self, params: Value) {
+        self.notify("$/fake/emitProgress", params);
+    }
+
+    /// gopls 風の "Setting up workspace" の begin。
+    pub fn make_upstream_begin_workspace_load(&mut self, token: &str) {
+        self.make_upstream_emit_progress(json!({
+            "token": token,
+            "value": {"kind": "begin", "title": "Setting up workspace", "message": "Loading packages...", "cancellable": false}
+        }));
+    }
+
+    /// gopls 風の "Setting up workspace" の end。
+    pub fn make_upstream_end_workspace_load(&mut self, token: &str, message: &str) {
+        self.make_upstream_emit_progress(json!({
+            "token": token,
+            "value": {"kind": "end", "message": message}
+        }));
     }
 
     /// `message` 付きで `experimental/serverStatus` を送らせる。

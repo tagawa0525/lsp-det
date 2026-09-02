@@ -306,6 +306,147 @@ fn forwards_work_done_progress_create_when_the_client_declared_it() {
 }
 
 // ---------------------------------------------------------------------------
+// gopls の写像 (設計 5.2)
+//
+// gopls は readiness の語彙を持たない。上流側は `$/progress` の
+// "Setting up workspace" の begin / end から readiness を、
+// "Error loading workspace" の begin / end から health を合成する。
+// ---------------------------------------------------------------------------
+
+fn gopls_client(declare_server_state: bool) -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_gopls();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(declare_server_state);
+    (client, result)
+}
+
+#[test]
+fn gopls_spec_5_declares_without_guarantees_until_measured() {
+    // 設計 5.2: 7.2 / 7.3 を実 gopls に当てるまで保証は宣言しない。
+    let (mut client, result) = gopls_client(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!(true),
+        "gopls に測っていない保証を宣言した: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn gopls_spec_7_1_1_starts_initializing_with_unknown_health() {
+    let (mut client, _) = gopls_client(true);
+    let state = client.server_state();
+    assert_eq!(state.readiness, Readiness::Initializing);
+    assert_eq!(state.health, Health::Unknown);
+    client.shutdown();
+}
+
+#[test]
+fn gopls_spec_7_1_2_becomes_ready_when_the_workspace_load_ends() {
+    let (mut client, _) = gopls_client(true);
+    client.make_upstream_begin_workspace_load("1234");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.make_upstream_end_workspace_load("1234", "Finished loading packages.");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(state.health, Health::Ok, "ロード成功で health は ok");
+    client.shutdown();
+}
+
+#[test]
+fn gopls_waits_for_every_workspace_folder() {
+    // フォルダごとに progress が 1 つ出る。全部終わるまで ready ではない。
+    let (mut client, _) = gopls_client(true);
+    client.make_upstream_begin_workspace_load("a");
+    client.make_upstream_begin_workspace_load("b");
+    client.await_state_changed();
+    client.make_upstream_end_workspace_load("a", "Finished loading packages.");
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "1 フォルダの終了で ready を名乗った"
+    );
+    client.make_upstream_end_workspace_load("b", "Finished loading packages.");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn gopls_spec_7_1_3_rearms_when_a_folder_is_added() {
+    // didChangeWorkspaceFolders で "Setting up workspace" が再発行される。
+    let (mut client, _) = gopls_client(true);
+    client.make_upstream_begin_workspace_load("1");
+    client.await_state_changed();
+    client.make_upstream_end_workspace_load("1", "Finished loading packages.");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+
+    client.make_upstream_begin_workspace_load("2");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.make_upstream_end_workspace_load("2", "Finished loading packages.");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn gopls_spec_7_1_4_reports_a_workspace_load_failure_as_health_error() {
+    let (mut client, _) = gopls_client(true);
+    client.make_upstream_begin_workspace_load("1");
+    client.await_state_changed();
+    client.make_upstream_emit_progress(json!({
+        "token": "err",
+        "value": {"kind": "begin", "title": "Error loading workspace", "message": "err: go.mod file not found", "cancellable": false}
+    }));
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Error);
+    assert_eq!(
+        state.message.as_deref(),
+        Some("err: go.mod file not found"),
+        "失敗の message を添える"
+    );
+
+    // 回復: "Done." で終わる。
+    client.make_upstream_emit_progress(json!({
+        "token": "err",
+        "value": {"kind": "end", "message": "Done."}
+    }));
+    assert_eq!(client.await_state_changed().health, Health::Ok);
+    client.shutdown();
+}
+
+#[test]
+fn gopls_reports_a_failed_load_as_health_error() {
+    // フォルダのロード失敗は "Error loading packages: ..." で end する。
+    // 試行は終わったので ready、結果は信頼できないので error (仕様 6 章 5 項)。
+    let (mut client, _) = gopls_client(true);
+    client.make_upstream_begin_workspace_load("1");
+    client.await_state_changed();
+    client.make_upstream_end_workspace_load("1", "Error loading packages: no Go files");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(state.health, Health::Error);
+    client.shutdown();
+}
+
+#[test]
+fn gopls_ignores_unrelated_progress() {
+    // 診断や govulncheck 等、他の title の progress は readiness に触れない。
+    let (mut client, _) = gopls_client(true);
+    client.make_upstream_emit_progress(json!({
+        "token": "diag",
+        "value": {"kind": "begin", "title": "Calculating diagnostics", "message": "..."}
+    }));
+    client.make_upstream_emit_progress(json!({
+        "token": "diag",
+        "value": {"kind": "end", "message": "Done."}
+    }));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "無関係な progress で状態が動いた"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
 // 写像なし (仕様 8.2 の 3、8.4 の 1)
 //
 // readiness を観測する手段がないので両軸 unknown を正直に報告する。

@@ -9,6 +9,8 @@
 //!
 //! - `$/fake/emitServerStatus`（通知）: params をそのまま
 //!   `experimental/serverStatus` の params として送出する
+//! - `$/fake/emitProgress`（通知）: params をそのまま `$/progress` の params
+//!   として送出する（gopls の "Setting up workspace" 等を再現する）
 //! - `$/fake/report`（リクエスト）: これまでに受信した method の一覧と、
 //!   `initialize` で受け取った params を返す。上流へ何が転送されたかを
 //!   テスト側から検証するために使う
@@ -162,6 +164,16 @@ fn main() {
                     &mut stdout,
                     id,
                     json!({"health": fake_health, "readiness": fake_readiness, "message": "answered by upstream"}),
+                );
+            }
+            "$/fake/emitProgress" => {
+                send(
+                    &mut stdout,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "method": "$/progress",
+                        "params": params
+                    }),
                 );
             }
             "$/fake/emitServerStateChanged" => {

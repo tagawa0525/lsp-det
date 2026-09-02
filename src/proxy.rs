@@ -445,11 +445,14 @@ impl UpstreamSide {
         }
 
         if is_state_changed {
+            // 先に状態を読み、流す必要があるときだけ元のメッセージを渡す
+            // (ボディを複製しない)。
+            let state = parse_state_notification(&msg.body);
             let mut outs = Vec::new();
             if self.client_declared {
-                outs.push(Out::ToClient(msg.clone()));
+                outs.push(Out::ToClient(msg));
             }
-            if let Some(state) = parse_state_notification(&msg.body) {
+            if let Some(state) = state {
                 outs.extend(self.adopt_identity_state(state, gate));
             }
             return outs;

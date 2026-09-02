@@ -173,6 +173,22 @@ fn spec_6_1_reports_dead_when_the_upstream_disappears() {
 }
 
 #[test]
+fn spec_8_2_7_closes_the_connection_without_a_notification_when_the_upstream_disappears() {
+    // 仕様 8.2 の 7: プロセスの消失は本プロトコルの値ではない。中継層は
+    // 未応答のリクエストにエラーを応答したうえで接続を閉じ、下流には
+    // EOF が伝わる。「死んだ」を表す通知は送らない。
+    let (mut client, _) = client(true);
+    client.make_upstream_emit_status("ok", true);
+    client.await_state_changed();
+
+    client.notify("exit", json!(null));
+    assert!(
+        client.expect_silence_until_closed("experimental/serverStateChanged"),
+        "上流の消失を serverStateChanged で通知した (仕様 8.2 の 7 違反)"
+    );
+}
+
+#[test]
 fn spec_7_1_4_reports_an_index_failure_as_health_error() {
     // 失敗は readiness ではなく health で表す (仕様 6 章 5 項)。rust-analyzer は
     // ワークスペースのロード失敗を {health: error, quiescent: true} で送る。
@@ -253,6 +269,17 @@ fn an_upstream_that_dies_before_answering_initialize_does_not_hang_the_client_wi
     assert!(
         response.get("error").is_some(),
         "上流が initialize に答えず消えたのに、エラーも返らなかった: {response}"
+    );
+}
+
+#[test]
+fn spec_8_2_7_closes_the_connection_without_a_notification_without_an_adapter() {
+    // 写像がなくても同じ。dead を出す代わりに、接続を閉じて EOF で伝える。
+    let (mut client, _) = client_without_adapter(true);
+    client.notify("exit", json!(null));
+    assert!(
+        client.expect_silence_until_closed("experimental/serverStateChanged"),
+        "上流の消失を serverStateChanged で通知した (仕様 8.2 の 7 違反)"
     );
 }
 

@@ -186,6 +186,13 @@ mod tests {
     }
 
     #[test]
+    fn dead_is_not_a_health_value() {
+        // 仕様 3 章 (ADR 0009 決定 C-3): サーバーの死は値ではなく接続の終了で
+        // 伝える。ワイヤに "dead" が現れたら、それは本仕様の値ではない。
+        assert!(serde_json::from_str::<Health>("\"dead\"").is_err());
+    }
+
+    #[test]
     fn round_trips_through_json() {
         // 準拠テストスイート (偽クライアント側) が読み戻せる必要がある。
         let state = ServerState {

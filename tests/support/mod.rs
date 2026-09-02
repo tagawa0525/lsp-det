@@ -65,6 +65,11 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("fake-lsp-server", &flags)
     }
 
+    /// 名乗る名前と偽上流のフラグを指定する版。
+    pub fn lsp_det_with_upstream_flags(server_name: &str, upstream_flags: &[&str]) -> Self {
+        Self::lsp_det_with_upstream(server_name, upstream_flags)
+    }
+
     fn lsp_det_with_upstream(server_name: &str, upstream_flags: &[&str]) -> Self {
         let mut args = vec![
             "--".to_string(),

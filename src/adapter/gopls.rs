@@ -35,6 +35,12 @@ const WORKSPACE_LOAD_FAILURE_TITLE: &str = "Error loading workspace";
 /// フォルダのロード失敗時の end メッセージの先頭 (`general.go`)。
 const FAILED_LOAD_PREFIX: &str = "Error loading packages";
 
+/// gopls の `serverInfo.version` から `X.Y.Z` を読む。
+pub fn parse_gopls_version(version: &str) -> Option<super::Version> {
+    let _ = version;
+    None
+}
+
 #[derive(Debug, Deserialize)]
 struct ProgressParams {
     token: Value,
@@ -71,6 +77,12 @@ impl GoplsAdapter {
             loading: Vec::new(),
             failure: None,
         }
+    }
+
+    /// `serverInfo.version` を見て、テスト済みの版なら保証を宣言する。
+    pub fn for_version(version: Option<&str>) -> Self {
+        let _ = version;
+        Self::new()
     }
 
     fn on_progress(&mut self, params: ProgressParams) -> Option<ServerState> {
@@ -297,12 +309,39 @@ mod tests {
         );
     }
 
+    /// nix ビルドの gopls v0.23.0 が名乗った文字列 (2026-09-03 実測)。
+    const GOPLS_VERSION_JSON: &str = r#"{"GoVersion":"go1.27.0","Path":"golang.org/x/tools/gopls","Main":{"Path":"golang.org/x/tools/gopls","Version":"(devel)"},"Deps":[{"Path":"golang.org/x/tools","Version":"v0.47.1-0.20260707181000-a299dadba899"}],"Settings":[{"Key":"GOOS","Value":"linux"}],"Version":"v0.23.0"}"#;
+
     #[test]
-    fn gopls_declares_no_guarantees_until_measured() {
-        // 設計 5.2: 7.2 / 7.3 を実 gopls に当てるまで宣言しない。
+    fn gopls_parses_the_version_out_of_the_build_info_json() {
+        // serverInfo.version はビルド情報の JSON。最上位の "Version" が版で、
+        // Main.Version は nix ビルドでは "(devel)"。
+        assert_eq!(parse_gopls_version(GOPLS_VERSION_JSON), Some((0, 23, 0)));
+        assert_eq!(parse_gopls_version("v0.23.0"), Some((0, 23, 0)));
+        assert_eq!(parse_gopls_version("0.23.0"), Some((0, 23, 0)));
+        assert_eq!(parse_gopls_version("(devel)"), None);
+        assert_eq!(parse_gopls_version(""), None);
+    }
+
+    #[test]
+    fn gopls_declares_guarantees_only_for_versions_the_conformance_suite_passed_on() {
+        // 仕様 8.2 の 5。7.2 / 7.3 を実 gopls v0.23.0 に当てて通した
+        // (tests/conformance.rs の gopls_* ignored)。それ以外には宣言しない。
         assert_eq!(
-            GoplsAdapter::new().guarantees(),
-            ServerStateProvider::Basic(true)
+            GoplsAdapter::for_version(Some(GOPLS_VERSION_JSON)).guarantees(),
+            ServerStateProvider::complete_and_fresh()
         );
+        for untested in [
+            Some("v0.22.0"),
+            Some("(devel)"),
+            Some("1.98.0 (fake)"),
+            None,
+        ] {
+            assert_eq!(
+                GoplsAdapter::for_version(untested).guarantees(),
+                ServerStateProvider::Basic(true),
+                "テストを当てていない版 {untested:?} に保証を宣言した"
+            );
+        }
     }
 }

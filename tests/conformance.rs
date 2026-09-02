@@ -321,13 +321,28 @@ fn gopls_client(declare_server_state: bool) -> (ConformanceClient, Value) {
 }
 
 #[test]
-fn gopls_spec_5_declares_without_guarantees_until_measured() {
-    // 設計 5.2: 7.2 / 7.3 を実 gopls に当てるまで保証は宣言しない。
+fn gopls_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
+    // 偽 gopls の既定の版 (1.98.0 (fake)) は gopls の版として読めない。
     let (mut client, result) = gopls_client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!(true),
         "gopls に測っていない保証を宣言した: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn gopls_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
+    // 7.2 / 7.3 を実 gopls v0.23.0 に当てて通した (gopls_* ignored)。
+    let server =
+        ServerUnderTest::lsp_det_with_upstream_flags("gopls", &["--server-version", "v0.23.0"]);
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版に保証を宣言していない: {result}"
     );
     client.shutdown();
 }
@@ -824,8 +839,8 @@ fn gopls_spec_7_1_through_lsp_det_with_real_gopls() {
     let result = client.initialize_with_root(true, &project.root);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!(true),
-        "gopls には保証を宣言しない: {result}"
+        json!({"completeness": true, "freshness": true}),
+        "測った版の実 gopls に保証が宣言されていない: {result}"
     );
     assert_ne!(client.server_state().readiness, Readiness::Ready);
     client.wait_until_ready();

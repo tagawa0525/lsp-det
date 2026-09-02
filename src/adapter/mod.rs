@@ -13,7 +13,9 @@ pub mod gopls;
 pub mod rust_analyzer;
 
 pub use gopls::{GoplsAdapter, TESTED_VERSIONS as GOPLS_TESTED_VERSIONS};
-pub use rust_analyzer::{RustAnalyzerAdapter, SERVER_STATUS_METHOD, TESTED_VERSIONS};
+pub use rust_analyzer::{
+    RustAnalyzerAdapter, SERVER_STATUS_METHOD, TESTED_VERSIONS as RUST_ANALYZER_TESTED_VERSIONS,
+};
 
 use crate::peek::MessageView;
 use crate::state::{ServerState, ServerStateProvider};

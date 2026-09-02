@@ -17,7 +17,7 @@
 
 use serde::Deserialize;
 
-use super::{Mapping, Version, parse_version};
+use super::Mapping;
 use crate::peek::MessageView;
 use crate::state::{Health, Readiness, ServerState, ServerStateProvider};
 
@@ -55,15 +55,26 @@ impl From<UpstreamHealth> for Health {
     }
 }
 
-/// 準拠テスト 7.2 / 7.3 を実 rust-analyzer に当てて通した版の範囲 (両端含む)。
+/// 準拠テスト 7.2 / 7.3 を実 rust-analyzer に当てて通した版。`serverInfo.version`
+/// の先頭トークン (空白の前) と完全一致で突き合わせる。
 ///
-/// lsp-det は rust-analyzer の内部を保証できず、テストに通ったという観測しか
-/// 持たない (仕様 8.2 の 5)。この範囲の外では保証を宣言しない。範囲を広げる
-/// ときは、その版で `cargo test --test conformance -- --ignored` を通してから
-/// 端を動かすこと。守れない保証の宣言は仕様 5.1 違反である。
+/// rustup の配布物は `1.98.0 (88d9e12 2026-08-18)`、nixpkgs のビルドは
+/// `2026-08-03` と名乗る。形式が違うので semver として解釈せず、名乗りを
+/// そのまま一覧に持つ。lsp-det は rust-analyzer の内部を保証できず、テストに
+/// 通ったという観測しか持たない (仕様 8.2 の 5)。一覧にない版には保証を
+/// 宣言しない。足すときは、その版で
+/// `cargo test --test conformance -- --ignored` を通してから (守れない保証の
+/// 宣言は仕様 5.1 違反)。
 ///
-/// 通した記録: 1.98.0 (88d9e12 2026-08-18)、2026-08-29 と 2026-09-03。
-pub const TESTED_VERSIONS: std::ops::RangeInclusive<Version> = (1, 98, 0)..=(1, 98, 0);
+/// 通した記録:
+/// - `1.98.0 (88d9e12 2026-08-18)` (rustup stable)、2026-08-29 と 2026-09-03
+/// - `2026-08-03` (nixpkgs、flake.nix の開発環境)、2026-09-03
+pub const TESTED_VERSIONS: &[&str] = &["1.98.0", "2026-08-03"];
+
+/// `serverInfo.version` の先頭トークン。ハッシュや日付の後置を捨てる。
+pub fn leading_token(version: &str) -> &str {
+    version.split(' ').next().unwrap_or("")
+}
 
 /// プロジェクトが 1 つも見つからないときに rust-analyzer が `warning` に
 /// 添えるメッセージ (`reload.rs` の `current_status()`)。判別材料はこれしか
@@ -86,9 +97,8 @@ impl RustAnalyzerAdapter {
 
     /// `serverInfo.version` を見て、テスト済みの版なら保証を宣言する。
     pub fn for_version(version: Option<&str>) -> Self {
-        let version_is_tested = version
-            .and_then(parse_version)
-            .is_some_and(|v| TESTED_VERSIONS.contains(&v));
+        let version_is_tested =
+            version.is_some_and(|v| TESTED_VERSIONS.contains(&leading_token(v)));
         RustAnalyzerAdapter {
             version_is_tested,
             warned_unparseable: false,

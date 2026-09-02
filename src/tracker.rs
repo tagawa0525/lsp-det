@@ -5,14 +5,14 @@
 //! 両軸 `unknown`。既知の名前なら写像に切り替え、そうでなければ
 //! `unknown` のまま正直に報告する (仕様 8.2 の 3)。
 
-use crate::adapter::{self, RustAnalyzerAdapter};
+use crate::adapter::{self, Mapping};
 use crate::initialize::ServerInfo;
 use crate::peek::MessageView;
 use crate::state::{ServerState, ServerStateProvider};
 
 pub struct Tracker {
     state: ServerState,
-    adapter: Option<RustAnalyzerAdapter>,
+    adapter: Option<Box<dyn Mapping>>,
 }
 
 impl Default for Tracker {
@@ -156,7 +156,7 @@ mod tests {
         // ok からも始めない。
         let mut tracker = Tracker::new();
         assert!(tracker.select_mapping(None).is_none());
-        assert!(tracker.select_mapping(Some(&info("gopls"))).is_none());
+        assert!(tracker.select_mapping(Some(&info("clangd"))).is_none());
         assert_eq!(tracker.state(), &ServerState::unobserved());
         assert!(!tracker.observes_upstream());
     }

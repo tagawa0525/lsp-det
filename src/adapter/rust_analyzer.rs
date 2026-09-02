@@ -1,8 +1,4 @@
-//! 写像 (アダプタ、v0.1-design.md 5 章)。M2 では rust-analyzer のみ。
-//!
-//! アダプタの役割は**上流メッセージの解釈**だけである。状態の保持と重複
-//! 抑止は [`crate::tracker::Tracker`] が持つ。分けるのは、アダプタがなくても
-//! 上流側は存在し、両軸 `unknown` を報告するからである (仕様 8.2 の 3)。
+//! rust-analyzer の写像 (v0.1-design.md 5.1)。
 //!
 //! rust-analyzer は `experimental/serverStatus` 通知で
 //! `{health, quiescent, message}` を送る (`lsp/ext.rs`)。`quiescent` の実体は
@@ -18,76 +14,15 @@
 //! 失敗は `health` で来る。ワークスペースのロード失敗は
 //! `{health: error, quiescent: true}` (`current_status()`)。仕様 6 章 5 項の
 //! とおり `readiness` ではなく `health` に写す。
-//!
-//! gopls アダプタは M4。共通の trait はそのとき 2 つ目の実装を見てから
-//! 導入する (現在の要件に対する最小限の実装)。
 
 use serde::Deserialize;
 
+use super::{Mapping, Version, parse_version};
 use crate::peek::MessageView;
 use crate::state::{Health, Readiness, ServerState, ServerStateProvider};
 
 /// rust-analyzer が送る readiness 通知のメソッド名。
 pub const SERVER_STATUS_METHOD: &str = "experimental/serverStatus";
-
-/// 既知の写像すべてが必要とする client capability の和 (設計 4.2)。
-///
-/// 写像は `InitializeResult.serverInfo.name` で選ぶが、注入は上流へ
-/// `initialize` を送る前に要る。だから上流が誰であっても全部を注入する
-/// (ADR 0009 決定 D-3)。どちらも「通知を送ってよい」という許可にすぎない。
-///
-/// - `experimental.serverStatusNotification`: rust-analyzer。未宣言だと
-///   `experimental/serverStatus` は一切送られない
-/// - `window.workDoneProgress`: gopls (M4)。未宣言だと `$/progress` ではなく
-///   `window/showMessage` にフォールバックする
-pub const CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS: &[&str] = &[
-    "experimental.serverStatusNotification",
-    "window.workDoneProgress",
-];
-
-/// 上流が名乗った名前に対応する写像。既知でなければ `None`
-/// (上流側は両軸 `unknown` を報告する。仕様 8.2 の 3)。
-pub fn select(server_name: &str, version: Option<&str>) -> Option<RustAnalyzerAdapter> {
-    match server_name {
-        "rust-analyzer" => Some(RustAnalyzerAdapter::for_version(version)),
-        _ => None,
-    }
-}
-
-/// gopls の写像 (設計 5.2)。`$/progress` から readiness と health を合成する。
-#[derive(Default)]
-pub struct GoplsAdapter {}
-
-impl GoplsAdapter {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn initial_state(&self) -> ServerState {
-        ServerState::initializing()
-    }
-
-    pub fn guarantees(&self) -> ServerStateProvider {
-        ServerStateProvider::Basic(true)
-    }
-
-    pub fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
-        let _ = (view, body);
-        todo!("M4 GREEN")
-    }
-}
-
-/// `X.Y.Z` の 3 つ組。rust-analyzer の版文字列の先頭部分。
-pub type Version = (u32, u32, u32);
-
-/// rust-analyzer の版文字列 (`1.98.0 (88d9e12 2026-08-18)` 等) の先頭の
-/// `X.Y.Z` を読む。ハッシュや日付、`-standalone` 等の後置は捨てる。
-pub fn parse_version(version: &str) -> Option<Version> {
-    let leading = version.split([' ', '-']).next().unwrap_or("");
-    let mut parts = leading.split('.').map(|part| part.parse::<u32>().ok());
-    let (major, minor, patch) = (parts.next()??, parts.next()??, parts.next()??);
-    Some((major, minor, patch))
-}
 
 /// `experimental/serverStatus` の params。
 ///
@@ -164,10 +99,12 @@ impl RustAnalyzerAdapter {
     pub fn version_is_tested(&self) -> bool {
         self.version_is_tested
     }
+}
 
+impl Mapping for RustAnalyzerAdapter {
     /// 上流に接続した直後の状態。rust-analyzer は `initialize` 応答後に
     /// 最初の `serverStatus` を送るまで何も報告しない。
-    pub fn initial_state(&self) -> ServerState {
+    fn initial_state(&self) -> ServerState {
         ServerState::initializing()
     }
 
@@ -178,7 +115,7 @@ impl RustAnalyzerAdapter {
     /// 確認済み (tests/conformance.rs の #[ignore] 付き 2 件)。ただし宣言
     /// できるのはテストを当てた版 ([`TESTED_VERSIONS`]) に限る (仕様 8.2 の 5)。
     /// 範囲外の版には状態の通知だけを約束する。
-    pub fn guarantees(&self) -> ServerStateProvider {
+    fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
             ServerStateProvider::complete_and_fresh()
         } else {
@@ -189,7 +126,7 @@ impl RustAnalyzerAdapter {
     /// 上流→クライアント方向のメッセージから、上流が報告している状態を
     /// 読み取る。`experimental/serverStatus` 以外、および読めない status は
     /// `None` (状態を動かさない)。
-    pub fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
+    fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
         if !view.is_notification() || view.method() != Some(SERVER_STATUS_METHOD) {
             return None;
         }
@@ -266,44 +203,6 @@ mod tests {
     }
 
     #[test]
-    fn declares_guarantees_only_for_versions_the_conformance_suite_passed_on() {
-        // 仕様 8.2 の 5 (ADR 0009 決定 D-5): 観測者が宣言できる保証は、
-        // 準拠テスト 7.2 / 7.3 を当てて通った版の範囲に限る。lsp-det は
-        // rust-analyzer の内部を保証できず、テストに通ったという観測しか持たない。
-        let tested = select("rust-analyzer", Some("1.98.0 (88d9e12 2026-08-18)")).unwrap();
-        assert_eq!(
-            tested.guarantees(),
-            ServerStateProvider::complete_and_fresh()
-        );
-
-        for untested in [
-            Some("1.97.0 (abcdef1 2026-07-01)"),
-            Some("0.3.2600-standalone"),
-            Some("garbage"),
-            None,
-        ] {
-            let adapter = select("rust-analyzer", untested).unwrap();
-            assert_eq!(
-                adapter.guarantees(),
-                ServerStateProvider::Basic(true),
-                "テストを当てていない版 {untested:?} に保証を宣言した"
-            );
-        }
-    }
-
-    #[test]
-    fn parses_the_leading_semver_of_a_rust_analyzer_version_string() {
-        assert_eq!(
-            parse_version("1.98.0 (88d9e12 2026-08-18)"),
-            Some((1, 98, 0))
-        );
-        assert_eq!(parse_version("1.98.0"), Some((1, 98, 0)));
-        assert_eq!(parse_version("0.3.2600-standalone"), Some((0, 3, 2600)));
-        assert_eq!(parse_version("nightly"), None);
-        assert_eq!(parse_version(""), None);
-    }
-
-    #[test]
     fn maps_a_missing_workspace_warning_to_error() {
         // 設計 5.1: プロジェクトが 1 つも見つからないとき rust-analyzer は
         // warning と "Failed to discover workspace." を出す (reload.rs の
@@ -332,166 +231,6 @@ mod tests {
             interpret(&mut adapter, body).unwrap().health,
             Health::Warning
         );
-    }
-
-    // --- gopls ---------------------------------------------------------------
-
-    fn progress(token: &str, value: &str) -> String {
-        format!(
-            r#"{{"jsonrpc":"2.0","method":"$/progress","params":{{"token":"{token}","value":{value}}}}}"#
-        )
-    }
-
-    fn setup_begin(token: &str) -> String {
-        progress(
-            token,
-            r#"{"kind":"begin","title":"Setting up workspace","message":"Loading packages...","cancellable":false}"#,
-        )
-    }
-
-    fn setup_end(token: &str, message: &str) -> String {
-        progress(token, &format!(r#"{{"kind":"end","message":"{message}"}}"#))
-    }
-
-    fn gopls_interpret(adapter: &mut GoplsAdapter, body: &str) -> Option<ServerState> {
-        let view = peek(body.as_bytes()).expect("test bodies are valid JSON");
-        adapter.interpret(&view, body.as_bytes())
-    }
-
-    #[test]
-    fn gopls_begin_of_workspace_setup_means_indexing() {
-        let mut adapter = GoplsAdapter::new();
-        let state = gopls_interpret(&mut adapter, &setup_begin("1")).expect("begin is a signal");
-        assert_eq!(state.readiness, Readiness::Indexing);
-        assert_eq!(state.health, Health::Unknown, "begin は health を語らない");
-    }
-
-    #[test]
-    fn gopls_end_of_workspace_setup_means_ready_and_ok() {
-        let mut adapter = GoplsAdapter::new();
-        gopls_interpret(&mut adapter, &setup_begin("1"));
-        let state = gopls_interpret(&mut adapter, &setup_end("1", "Finished loading packages."))
-            .expect("end is a signal");
-        assert_eq!(state.readiness, Readiness::Ready);
-        assert_eq!(state.health, Health::Ok);
-    }
-
-    #[test]
-    fn gopls_waits_for_all_tokens() {
-        let mut adapter = GoplsAdapter::new();
-        gopls_interpret(&mut adapter, &setup_begin("a"));
-        gopls_interpret(&mut adapter, &setup_begin("b"));
-        let after_a = gopls_interpret(&mut adapter, &setup_end("a", "Finished loading packages."));
-        assert!(
-            after_a
-                .as_ref()
-                .is_none_or(|s| s.readiness == Readiness::Indexing),
-            "1 つ目の end で ready を名乗った: {after_a:?}"
-        );
-        let after_b = gopls_interpret(&mut adapter, &setup_end("b", "Finished loading packages."))
-            .expect("last end is a signal");
-        assert_eq!(after_b.readiness, Readiness::Ready);
-    }
-
-    #[test]
-    fn gopls_end_of_an_unknown_token_is_ignored() {
-        // トークンは begin で覚えたものだけ。他の progress の end で ready にしない。
-        let mut adapter = GoplsAdapter::new();
-        assert!(
-            gopls_interpret(
-                &mut adapter,
-                &setup_end("stray", "Finished loading packages.")
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn gopls_failed_load_is_ready_but_error() {
-        let mut adapter = GoplsAdapter::new();
-        gopls_interpret(&mut adapter, &setup_begin("1"));
-        let state = gopls_interpret(
-            &mut adapter,
-            &setup_end("1", "Error loading packages: no Go files"),
-        )
-        .expect("end is a signal");
-        assert_eq!(state.readiness, Readiness::Ready);
-        assert_eq!(state.health, Health::Error);
-        assert_eq!(
-            state.message.as_deref(),
-            Some("Error loading packages: no Go files")
-        );
-    }
-
-    #[test]
-    fn gopls_workspace_load_failure_progress_drives_health() {
-        let mut adapter = GoplsAdapter::new();
-        gopls_interpret(&mut adapter, &setup_begin("1"));
-        gopls_interpret(&mut adapter, &setup_end("1", "Finished loading packages."));
-
-        let begin = progress(
-            "e",
-            r#"{"kind":"begin","title":"Error loading workspace","message":"err: go.mod file not found","cancellable":false}"#,
-        );
-        let state = gopls_interpret(&mut adapter, &begin).expect("failure begin is a signal");
-        assert_eq!(state.health, Health::Error);
-        assert_eq!(state.message.as_deref(), Some("err: go.mod file not found"));
-        assert_eq!(state.readiness, Readiness::Ready, "readiness は変えない");
-
-        let report = progress("e", r#"{"kind":"report","message":"err: still broken"}"#);
-        let state = gopls_interpret(&mut adapter, &report).expect("report updates the message");
-        assert_eq!(state.health, Health::Error);
-        assert_eq!(state.message.as_deref(), Some("err: still broken"));
-
-        let end = progress("e", r#"{"kind":"end","message":"Done."}"#);
-        let state = gopls_interpret(&mut adapter, &end).expect("failure end is a signal");
-        assert_eq!(state.health, Health::Ok);
-    }
-
-    #[test]
-    fn gopls_ignores_other_progress_titles_and_other_methods() {
-        let mut adapter = GoplsAdapter::new();
-        let diag = progress(
-            "d",
-            r#"{"kind":"begin","title":"Calculating diagnostics","message":"..."}"#,
-        );
-        assert!(gopls_interpret(&mut adapter, &diag).is_none());
-        assert!(
-            gopls_interpret(
-                &mut adapter,
-                &progress("d", r#"{"kind":"end","message":"Done."}"#)
-            )
-            .is_none()
-        );
-        assert!(
-            gopls_interpret(&mut adapter, &status("ok", true)).is_none(),
-            "rust-analyzer の語彙は読まない"
-        );
-    }
-
-    #[test]
-    fn gopls_declares_no_guarantees_until_measured() {
-        // 設計 5.2: 7.2 / 7.3 を実 gopls に当てるまで宣言しない。
-        assert_eq!(
-            GoplsAdapter::new().guarantees(),
-            ServerStateProvider::Basic(true)
-        );
-    }
-
-    #[test]
-    fn selects_gopls_by_its_server_info_name() {
-        assert!(select("gopls", Some("v0.20.0")).is_some());
-    }
-
-    #[test]
-    fn selects_rust_analyzer_by_its_server_info_name() {
-        assert!(select("rust-analyzer", None).is_some());
-        for unknown in ["gopls", "fake-lsp-server", "", "Rust-Analyzer"] {
-            assert!(
-                select(unknown, None).is_none(),
-                "既知でない名前: {unknown:?}"
-            );
-        }
     }
 
     #[test]

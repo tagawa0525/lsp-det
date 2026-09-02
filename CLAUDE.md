@@ -34,7 +34,7 @@
 
 - **M1 完了**（2026-08-28）: 素通しプロキシ。フレーミング（`src/framing.rs`）・プロセス寿命（`src/process.rs`）・イベントループ（`src/proxy.rs`）・CLI（`src/cli.rs`）を TDD で実装。pdeathsig 2 経路を手動 smoke テストで検証済み
 - **M2 — 上流側（rust-analyzer）完了**（2026-09-03）: 覗き見（`src/peek.rs`）・状態の保持（`src/tracker.rs`）・rust-analyzer の写像（`src/adapter.rs`）・capability 注入と `serverInfo` の読み取り（`src/initialize.rs`）・`experimental/serverState` / `serverStateChanged`・保証の宣言・上流側の準拠テスト（`tests/conformance.rs`、偽上流は `examples/fake_lsp_server.rs`）。ADR 0009 の追従も完了: `dead` の削除、`serverInfo.name` による写像選択と無条件の capability 注入、`window/workDoneProgress/create` の自前応答、版の範囲（`adapter::TESTED_VERSIONS`。広げるときは実 rust-analyzer で `cargo test --test conformance -- --ignored` を通してから）、`warning` の補正（"Failed to discover workspace." → `error`）、CLI の縮小（`lsp-det -- <上流コマンド>` のみ）、準拠テストの仕様 8.4 への追従。7.2 / 7.3 は rust-analyzer 1.98.0 で確認済み
-- **M3 — 下流側**: 保留キュー・キャンセル・`shutdown` 時のエラー応答・`error` での即時エラー・再インデックス待機。判定表は v0.1-design 4.3 が正。下流側の準拠テスト（仕様 9.1）を先に書く（RED）。打ち切りタイマーは作らない
+- **M3 — 下流側 完了**（2026-09-03）: `src/gate.rs`（判定表・保留キュー・キャンセル・`shutdown` と上流消失での drain）と `src/proxy.rs` の配線。判定表は v0.1-design 4.3 が正。下流側の準拠テストは `tests/client_conformance.rs`（仕様 9.1。準拠した偽上流と rust-analyzer と名乗る偽上流の両方が被験者）。恒等写像のときは上流への `initialize` に `experimental.serverState` を注入し、初期状態を id `lsp-det:serverState` で自ら問い合わせる。打ち切りタイマーはない
 - **M4 — gopls の写像**: progress の title からの合成。go.mod 変更時の progress 再送を実測。7.2 / 7.3 を実 gopls に当てて保証を確定
 - **M5（v0.1 後）**: Serena 統合・宣言範囲の再評価・上流 PR
 

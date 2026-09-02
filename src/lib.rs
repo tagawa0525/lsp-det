@@ -10,6 +10,7 @@
 pub mod adapter;
 pub mod cli;
 pub mod framing;
+pub mod gate;
 pub mod initialize;
 pub mod peek;
 pub mod process;

@@ -1,7 +1,7 @@
 # ADR 0001: 仕様先行ではなくツール先行とし、v0.1 は readiness ゲートに絞る
 
 - 日付: 2026-08-28
-- 状態: 採用（決定 1 の「仕様文書は安定稼働後」は [ADR 0003](0003-extension-s-zero-based.md) 決定 7 が一部改訂。優先関係の裁定は [ADR 0006](0006-external-review-fixes.md) 決定 1）
+- 状態: 一部廃止。決定 1（成功基準）、決定 3 の非常口タイムアウトは [ADR 0009](0009-success-criterion-and-two-sided-reference.md) が廃止。決定 5 の選定理由と決定 6 の `--adapter` も同 ADR が置き換え。決定 2・4 と決定 6 の argv 完結は生きている（決定 1 の「仕様文書は安定稼働後」は [ADR 0003](0003-extension-s-zero-based.md) 決定 7 が一部改訂、裁定は [ADR 0006](0006-external-review-fixes.md) 決定 1）
 
 ## 経緯
 

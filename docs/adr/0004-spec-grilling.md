@@ -1,7 +1,7 @@
 # ADR 0004: 拡張 S 仕様の精査で確定した設計判断
 
 - 日付: 2026-08-29
-- 状態: 採用
+- 状態: 一部廃止。決定 2（`dead` を残す）と決定 6（`--gate-mode`）は [ADR 0009](0009-success-criterion-and-two-sided-reference.md) が廃止。決定 3 は「グレード」の語だけ廃止し、capability の構造は生きている。他は生きている
 - 関連: [ADR 0003](0003-extension-s-zero-based.md)
 
 ## 経緯

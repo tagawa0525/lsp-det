@@ -18,12 +18,12 @@
 //!   "Done." で end したら `ok` に戻る
 //!
 //! `completeness` / `freshness` は準拠テスト 7.2 / 7.3 を実 gopls に当てて
-//! 通すまで宣言しない (設計 5.2)。
+//! 通した版 ([`TESTED_VERSIONS`]) にだけ宣言する (設計 5.2、仕様 8.2 の 5)。
 
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::Mapping;
+use super::{Mapping, Version, parse_version};
 use crate::peek::MessageView;
 use crate::state::{Health, Readiness, ServerState, ServerStateProvider};
 
@@ -35,10 +35,25 @@ const WORKSPACE_LOAD_FAILURE_TITLE: &str = "Error loading workspace";
 /// フォルダのロード失敗時の end メッセージの先頭 (`general.go`)。
 const FAILED_LOAD_PREFIX: &str = "Error loading packages";
 
+/// 準拠テスト 7.2 / 7.3 を実 gopls に当てて通した版の範囲 (両端含む)。
+///
+/// 範囲を広げるときは、その版で `cargo test --test conformance -- --ignored gopls_`
+/// を通してから端を動かすこと (守れない保証の宣言は仕様 5.1 違反)。
+///
+/// 通した記録: v0.23.0 (nix ビルド、go1.26.7)、2026-09-03、5 回連続。
+pub const TESTED_VERSIONS: std::ops::RangeInclusive<Version> = (0, 23, 0)..=(0, 23, 0);
+
 /// gopls の `serverInfo.version` から `X.Y.Z` を読む。
-pub fn parse_gopls_version(version: &str) -> Option<super::Version> {
-    let _ = version;
-    None
+///
+/// gopls はビルド情報 (`debug.BuildInfo`) を JSON にした文字列を名乗る。
+/// 版はその最上位の `"Version"` (`v0.23.0`)。`Main.Version` は nix ビルド
+/// では `(devel)` なので使えない。JSON でなければ文字列そのものを版とみなす。
+pub fn parse_gopls_version(version: &str) -> Option<Version> {
+    let raw = match serde_json::from_str::<Value>(version) {
+        Ok(Value::Object(info)) => info.get("Version")?.as_str()?.to_string(),
+        _ => version.to_string(),
+    };
+    parse_version(raw.strip_prefix('v').unwrap_or(&raw))
 }
 
 #[derive(Debug, Deserialize)]
@@ -57,6 +72,8 @@ struct ProgressValue {
 }
 
 pub struct GoplsAdapter {
+    /// 名乗った版が [`TESTED_VERSIONS`] に入っているか。保証を宣言する条件。
+    version_is_tested: bool,
     state: ServerState,
     /// begin を見て end を待っている "Setting up workspace" のトークン。
     loading: Vec<Value>,
@@ -71,18 +88,22 @@ impl Default for GoplsAdapter {
 }
 
 impl GoplsAdapter {
+    /// 版を名乗らない (または読めない) gopls 向け。保証は宣言しない。
     pub fn new() -> Self {
-        GoplsAdapter {
-            state: ServerState::initializing(),
-            loading: Vec::new(),
-            failure: None,
-        }
+        Self::for_version(None)
     }
 
     /// `serverInfo.version` を見て、テスト済みの版なら保証を宣言する。
     pub fn for_version(version: Option<&str>) -> Self {
-        let _ = version;
-        Self::new()
+        let version_is_tested = version
+            .and_then(parse_gopls_version)
+            .is_some_and(|v| TESTED_VERSIONS.contains(&v));
+        GoplsAdapter {
+            version_is_tested,
+            state: ServerState::initializing(),
+            loading: Vec::new(),
+            failure: None,
+        }
     }
 
     fn on_progress(&mut self, params: ProgressParams) -> Option<ServerState> {
@@ -146,8 +167,16 @@ impl Mapping for GoplsAdapter {
         ServerState::initializing()
     }
 
+    /// gopls はリクエストごとにスナップショットを取り、`didChange` の
+    /// オーバーレイを織り込む。準拠テスト 7.2 (完全性) と 7.3 (クロスファイル
+    /// 鮮度) を実 gopls に当てて確認済み (tests/conformance.rs の gopls_*
+    /// ignored)。宣言できるのはテストを当てた版だけ。
     fn guarantees(&self) -> ServerStateProvider {
-        ServerStateProvider::Basic(true)
+        if self.version_is_tested {
+            ServerStateProvider::complete_and_fresh()
+        } else {
+            ServerStateProvider::Basic(true)
+        }
     }
 
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {

@@ -12,7 +12,7 @@
 pub mod gopls;
 pub mod rust_analyzer;
 
-pub use gopls::GoplsAdapter;
+pub use gopls::{GoplsAdapter, TESTED_VERSIONS as GOPLS_TESTED_VERSIONS};
 pub use rust_analyzer::{RustAnalyzerAdapter, SERVER_STATUS_METHOD, TESTED_VERSIONS};
 
 use crate::peek::MessageView;
@@ -50,7 +50,7 @@ pub const CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS: &[&str] = &[
 pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mapping>> {
     match server_name {
         "rust-analyzer" => Some(Box::new(RustAnalyzerAdapter::for_version(version))),
-        "gopls" => Some(Box::new(GoplsAdapter::new())),
+        "gopls" => Some(Box::new(GoplsAdapter::for_version(version))),
         _ => None,
     }
 }

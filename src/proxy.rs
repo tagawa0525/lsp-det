@@ -358,7 +358,7 @@ impl UpstreamSide {
 
         if self.identity {
             let is_self_response = view.method().is_none()
-                && view.id == Some(RequestId::String(SELF_STATE_REQUEST_ID.to_string()));
+                && matches!(&view.id, Some(RequestId::String(id)) if id == SELF_STATE_REQUEST_ID);
             let is_state_changed =
                 view.is_notification() && view.method() == Some(state::SERVER_STATE_CHANGED_METHOD);
             return self.on_upstream_under_identity(msg, is_self_response, is_state_changed, gate);

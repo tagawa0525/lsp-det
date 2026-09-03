@@ -2,10 +2,7 @@ use std::env;
 use std::io;
 use std::process::ExitCode;
 
-use lsp_det::{cli, proxy};
-
-#[cfg(unix)]
-use lsp_det::process;
+use lsp_det::{cli, process, proxy};
 
 fn main() -> ExitCode {
     let argv: Vec<String> = env::args().skip(1).collect();
@@ -18,10 +15,9 @@ fn main() -> ExitCode {
         }
     };
 
-    // 親 (クライアント) が死んだらこのプロセスも終了する。
-    // main の最初、他の処理より先に設定する (v0.1-design.md 4.5)。
-    #[cfg(unix)]
-    process::set_self_pdeathsig();
+    // 親 (クライアント) が不意に死んだらこのプロセスも終了する。
+    // main の最初、他の処理より先に設定する (v0.1-design.md 4.5、ADR 0012)。
+    process::exit_with_parent();
 
     match proxy::run(io::stdin(), io::stdout(), &args.command, &args.command_args) {
         Ok(code) => exit_code_from(code),

@@ -50,16 +50,36 @@ fn via_lsp_det(command: &str, args: &[&str], root: std::path::PathBuf) -> Server
 fn which(command: &str) -> std::path::PathBuf {
     let path = std::env::var_os("PATH").expect("PATH がない");
     let found = std::env::split_paths(&path)
-        .map(|dir| dir.join(command))
+        .flat_map(|dir| candidates(&dir, command))
         .find(|candidate| is_executable(candidate))
         .unwrap_or_else(|| panic!("{command} が PATH にない"));
     eprintln!("upstream_dev: {command} -> {}", found.display());
     found
 }
 
+/// `dir` の中で `command` として実行されうるファイル名。Windows は拡張子を
+/// 補って探す (npm の起動子は `.cmd`)。
+fn candidates(dir: &std::path::Path, command: &str) -> Vec<std::path::PathBuf> {
+    let mut found = vec![dir.join(command)];
+    if cfg!(windows) {
+        found.extend(
+            ["exe", "cmd", "bat"]
+                .iter()
+                .map(|ext| dir.join(format!("{command}.{ext}"))),
+        );
+    }
+    found
+}
+
+#[cfg(unix)]
 fn is_executable(path: &std::path::Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(windows)]
+fn is_executable(path: &std::path::Path) -> bool {
+    path.is_file()
 }
 
 fn server_info_of(server: &ServerUnderTest) -> Value {

@@ -16,6 +16,8 @@ fn main() {
         eprintln!("usage: pseudo_client <command> [args...]");
         std::process::exit(2);
     };
+    // 子を wait しないのは意図的 (殺されるまで何もしない)。
+    #[allow(clippy::zombie_processes)]
     let child = Command::new(program)
         .args(rest)
         .stdin(Stdio::inherit())

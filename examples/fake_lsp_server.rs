@@ -78,6 +78,11 @@ fn main() {
     let exit_after_initialize_error = has("--exit-after-initialize-error");
     let request_progress_create = has("--request-progress-create");
     let references_depend_on_readiness = has("--references-depend-on-readiness");
+    // `workspace/didChangeWatchedFiles` を受けたら再インデックス (quiescent: false)
+    // を始め、変更の数だけ references の結果を増やす。終わりは
+    // `$/fake/emitServerStatus` で外から与える (仕様 7.3 の 2 の偽上流)。
+    let reindex_on_watched_files = has("--reindex-on-watched-files");
+    let mut watched_changes: usize = 0;
     let require_initialized_before_requests = has("--require-initialized-before-requests");
     let mut initialized_seen = false;
     let server_name = flags
@@ -276,11 +281,33 @@ fn main() {
             }
             "textDocument/references" if references_depend_on_readiness => {
                 let result = if fake_readiness == "ready" {
-                    json!([{"uri": "file:///fake/b.rs", "range": {"start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 10}}}])
+                    let mut locations = vec![
+                        json!({"uri": "file:///fake/b.rs", "range": {"start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 10}}}),
+                    ];
+                    // 再インデックスで取り込んだディスク上の変更のぶん。
+                    for i in 0..watched_changes {
+                        locations.push(json!({"uri": format!("file:///fake/c{i}.rs"), "range": {"start": {"line": 1, "character": 4}, "end": {"line": 1, "character": 10}}}));
+                    }
+                    Value::Array(locations)
                 } else {
                     json!([])
                 };
                 respond(&mut stdout, id, result);
+            }
+            "workspace/didChangeWatchedFiles" if reindex_on_watched_files => {
+                watched_changes += params
+                    .get("changes")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len);
+                fake_readiness = "indexing".to_string();
+                send(
+                    &mut stdout,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "method": "experimental/serverStatus",
+                        "params": {"health": "ok", "quiescent": false}
+                    }),
+                );
             }
             "$/fake/emitServerStatus" => {
                 if let Some(quiescent) = params.get("quiescent").and_then(Value::as_bool) {

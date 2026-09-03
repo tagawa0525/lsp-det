@@ -715,6 +715,19 @@ impl ConformanceClient {
     }
 
     /// 全文置換の `didChange`。仕様 6.2 の鮮度保証が対象とする通知。
+    /// `workspace/didChangeWatchedFiles`。`kind` は LSP の FileChangeType
+    /// (1 = Created, 2 = Changed, 3 = Deleted)。
+    pub fn did_change_watched_files(&mut self, changes: &[(&std::path::Path, u8)]) {
+        let changes: Vec<Value> = changes
+            .iter()
+            .map(|(path, kind)| json!({"uri": file_uri(path), "type": kind}))
+            .collect();
+        self.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes": changes}),
+        );
+    }
+
     pub fn did_change(&mut self, path: &std::path::Path, version: i64, text: &str) {
         self.notify(
             "textDocument/didChange",
@@ -1039,6 +1052,9 @@ pub const TS_A: &str = "export function target(): number {\n  return 1;\n}\n";
 pub const TS_B_WITH_CALL: &str =
     "import { target } from './a';\n\nexport function caller(): number {\n  return target();\n}\n";
 pub const TS_B_WITHOUT_CALL: &str = "export function caller(): number {\n  return 1;\n}\n";
+pub const TS_B_WITH_TWO_CALLS: &str = "import { target } from './a';\n\nexport function caller(): number {\n  target();\n  return target();\n}\n";
+pub const TS_C_WITH_CALL: &str =
+    "import { target } from './a';\n\nexport function other(): number {\n  return target();\n}\n";
 
 /// 一時的な Python プロジェクト。`a.py` の `target` を `b.py` の `caller` から呼ぶ。
 /// pyright は `initialize` の `workspaceFolders` をフォルダごとの service
@@ -1075,17 +1091,30 @@ pub const PY_A: &str = "def target():\n    return 1\n";
 /// 呼び出しは 5 行目 (0 起点で line 4)。1 行目の import も参照として数えられる。
 pub const PY_B_WITH_CALL: &str = "from a import target\n\n\ndef caller():\n    return target()\n";
 pub const PY_B_WITHOUT_CALL: &str = "def caller():\n    return 1\n";
+pub const PY_B_WITH_TWO_CALLS: &str =
+    "from a import target\n\n\ndef caller():\n    target()\n    return target()\n";
+pub const PY_C_WITH_CALL: &str = "import a\n\n\ndef other():\n    return a.target()\n";
 
 /// `Target` は 3 行目の 6 文字目 (0 起点で line 2, character 5) にある。
 pub const GO_A: &str = "package fixture\n\nfunc Target() {}\n";
 /// 呼び出しは 4 行目 (0 起点で line 3)。
 pub const GO_B_WITH_CALL: &str = "package fixture\n\nfunc Caller() {\n\tTarget()\n}\n";
 pub const GO_B_WITHOUT_CALL: &str = "package fixture\n\nfunc Caller() {}\n";
+pub const GO_B_WITH_TWO_CALLS: &str =
+    "package fixture\n\nfunc Caller() {\n\tTarget()\n\tTarget()\n}\n";
+pub const GO_C_WITH_CALL: &str = "package fixture\n\nfunc Other() {\n\tTarget()\n}\n";
 
 /// `target` は 1 行目の 8 文字目 (0 起点で line 0, character 7) にある。
 pub const A_RS: &str = "pub fn target() {}\n";
 pub const B_WITH_CALL: &str = "use crate::a::target;\n\npub fn caller() {\n    target();\n}\n";
 pub const B_WITHOUT_CALL: &str = "pub fn caller() {}\n";
+/// ディスク上の変更 (仕様 7.3 の 2): 呼び出しを 1 つ足す。
+pub const B_WITH_TWO_CALLS: &str =
+    "use crate::a::target;\n\npub fn caller() {\n    target();\n    target();\n}\n";
+/// 新規ファイル (仕様 7.3 の 2): 別のファイルからも呼ぶ。Rust では `mod` で
+/// 名指しされるまで crate に入らないので、lib.rs も変える。
+pub const C_RS_WITH_CALL: &str = "pub fn other() {\n    crate::a::target();\n}\n";
+pub const LIB_RS_WITH_C: &str = "pub mod a;\npub mod b;\npub mod c;\n";
 
 /// `write!` を使うため。
 pub fn flush<W: Write>(writer: &mut W) {

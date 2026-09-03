@@ -413,3 +413,39 @@ fn the_initial_state_of_a_conformant_upstream_is_read_by_asking_it() {
 /// 未使用警告を避ける（被験者ごとに使うヘルパーが異なる）。
 #[allow(dead_code)]
 fn _unused(_: Value) {}
+
+// ---------------------------------------------------------------------------
+// 9.1 の 1（ADR 0014）: 通知で始まった再インデックスの間も保留する
+// ---------------------------------------------------------------------------
+
+#[test]
+fn spec_9_1_1_holds_while_reindexing_after_watched_file_changes() {
+    let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
+        "--references-depend-on-readiness",
+        "--reindex-on-watched-files",
+    ]);
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(false);
+    client.make_upstream_emit_status("ok", true);
+    sync_with_upstream(&mut client);
+
+    let root = support::repo_root();
+    client.did_change_watched_files(&[(&root.join("src/c.rs"), 1)]);
+    sync_with_upstream(&mut client);
+
+    let id = client.send_references();
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "通知で始まった再インデックスの間に references が応答された"
+    );
+
+    client.make_upstream_emit_status("ok", true);
+    let response = client.await_response_to(id);
+    let locations = response["result"].as_array().cloned().unwrap_or_default();
+    assert_eq!(
+        locations.len(),
+        2,
+        "ready 後の応答が通知した変更を織り込んでいない: {response}"
+    );
+    client.shutdown();
+}

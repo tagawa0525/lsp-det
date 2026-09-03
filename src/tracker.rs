@@ -80,8 +80,12 @@ impl Tracker {
     /// `InitializeResult` に宣言する保証 (仕様 5 章)。
     /// 写像がなければ保証なしの宣言 (`true`)。
     pub fn provider(&self) -> ServerStateProvider {
-        self.adapter
+        // 保証は名乗り (名前と版) の関数 (仕様 8.2 の 5)。起動ログが版を省き、
+        // 後から `serverInfo` で版が分かったときも、写像 (と観測) は保ったまま
+        // 最新の名乗りで決める。
+        self.identity
             .as_ref()
+            .and_then(|identity| adapter::select(&identity.name, identity.version.as_deref()))
             .map_or(ServerStateProvider::Basic(true), |adapter| {
                 adapter.guarantees()
             })

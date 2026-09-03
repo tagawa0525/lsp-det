@@ -1,6 +1,6 @@
 # ドッグフーディング（Claude Code で lsp-det を使う）
 
-Claude Code に、rust-analyzer と gopls を lsp-det 経由で起動させるためのローカルプラグイン。稼働そのものは成功基準ではなく、準拠テストが見落とす実サーバーの挙動を拾う観測手段である（v0.1-design.md 1 章）。
+Claude Code に、rust-analyzer・gopls・pyright を lsp-det 経由で起動させるためのローカルプラグイン（公式の `pyright-lsp` と同じく `pyright-langserver --stdio` を上流にする）。稼働そのものは成功基準ではなく、準拠テストが見落とす実サーバーの挙動を拾う観測手段である（v0.1-design.md 1 章）。
 
 ## 手順
 
@@ -20,12 +20,12 @@ Claude Code に、rust-analyzer と gopls を lsp-det 経由で起動させる�
    claude --plugin-dir dogfood/claude-plugin
    ```
 
-   同じ拡張子を複数のプラグインが宣言したときは先に登録された定義が使われる。`--plugin-dir` のプラグインは公式マーケットプレイスのものより先に登録されるので、公式の `rust-analyzer-lsp` が有効なままでも lsp-det 側が使われる。確実にしたいときは `/plugin` で公式の `rust-analyzer-lsp` を無効にする
+   同じ拡張子を複数のプラグインが宣言したときは先に登録された定義が使われる。`--plugin-dir` のプラグインは公式マーケットプレイスのものより先に登録されるので、公式の `rust-analyzer-lsp` / `pyright-lsp` が有効なままでも lsp-det 側が使われる。確実にしたいときは `/plugin` で公式のものを無効にする
 
 3. 動いていることを確かめる
 
    - `/plugin` の Errors タブに起動失敗が出ていないこと（`Executable not found in $PATH` 等）
-   - `claude --debug` で起動すると LSP サーバーの stderr が見える。lsp-det は `lsp-det: upstream is "rust-analyzer" version ...; using its mapping, declaring {...}` と、状態遷移 `lsp-det: [0.000s] server state -> {...}` を stderr に出す
+   - `claude --debug` で起動すると LSP サーバーの stderr が見える。lsp-det は `lsp-det: upstream is "rust-analyzer" version ...; using its mapping, declaring {...}`（pyright は `serverInfo` を返さないので `upstream introduced itself in its startup log as "pyright" version ...`） と、状態遷移 `lsp-det: [0.000s] server state -> {...}` を stderr に出す
 
 ## 観測項目（v0.1-design.md 8 章）
 

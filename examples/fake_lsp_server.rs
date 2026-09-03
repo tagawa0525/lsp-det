@@ -29,7 +29,11 @@
 //!   宣言する（`hoverProvider: false` と同じ「提供しない」の書き方）
 //! - `--server-name <name>`: `InitializeResult.serverInfo.name` で名乗る名前。
 //!   既定は `fake-lsp-server`（既知の写像がない名前）。`rust-analyzer` と
-//!   名乗れば lsp-det は rust-analyzer の写像を選ぶ
+//!   名乗れば lsp-det は rust-analyzer の写像を選ぶ。`none` を渡すと
+//!   `serverInfo` そのものを省く（pyright はこれを返さない）
+//! - `--startup-log <message>`: 起動直後（`initialize` を読む前）に
+//!   `window/logMessage`（type 3）で `message` を送る。pyright 系の名乗り
+//!   "Pyright language server 1.1.412 starting" を再現する
 //! - `--server-version <version>`: `serverInfo.version` で名乗る版。既定は
 //!   `1.98.0 (fake)`（rust-analyzer の写像が準拠テストを通した版の範囲内）。
 //!   `none` を渡すと version を省く
@@ -40,6 +44,9 @@
 //! - `--request-progress-create`: `initialized` を受けたら
 //!   `window/workDoneProgress/create` リクエスト（id `"wdp-1"`）を送る。
 //!   応答が返ったかは `$/fake/report` の `progressCreateAnswered` で分かる
+//! - `$/fake/emitLogMessage`（通知。params は `{type, message}`）:
+//!   `window/logMessage` をそのまま送る（pyright の "Starting service
+//!   instance" / "Found N source files" 等を再現する）
 //! - `--fail-first-initialize`: 最初の `initialize` にエラーで応答する。
 //!   2 回目以降は通常どおり
 //! - `--exit-after-initialize-error`: `--fail-first-initialize` と併用し、
@@ -73,6 +80,11 @@ fn main() {
         .and_then(|i| flags.get(i + 1))
         .cloned()
         .unwrap_or_else(|| "1.98.0 (fake)".to_string());
+    let startup_log = flags
+        .iter()
+        .position(|flag| flag == "--startup-log")
+        .and_then(|i| flags.get(i + 1))
+        .cloned();
     let mut progress_create_answered = false;
     let mut fake_health = "ok".to_string();
     let mut fake_readiness = flags
@@ -89,6 +101,18 @@ fn main() {
 
     let mut methods_seen: Vec<String> = Vec::new();
     let mut initialize_params = Value::Null;
+
+    if let Some(message) = &startup_log {
+        // 実サーバーはコンストラクタで名乗る。initialize を読む前に送る。
+        send(
+            &mut stdout,
+            json!({
+                "jsonrpc": "2.0",
+                "method": "window/logMessage",
+                "params": {"type": 3, "message": message}
+            }),
+        );
+    }
 
     loop {
         let msg = match framing::read_message(&mut reader) {
@@ -142,22 +166,21 @@ fn main() {
                 if declare_server_state_provider_false {
                     experimental["serverStateProvider"] = json!(false);
                 }
-                respond(
-                    &mut stdout,
-                    id,
-                    json!({
-                        "capabilities": {
-                            "hoverProvider": true,
-                            "referencesProvider": true,
-                            "experimental": experimental
-                        },
-                        "serverInfo": if server_version == "none" {
-                            json!({"name": server_name})
-                        } else {
-                            json!({"name": server_name, "version": server_version})
-                        }
-                    }),
-                );
+                let mut result = json!({
+                    "capabilities": {
+                        "hoverProvider": true,
+                        "referencesProvider": true,
+                        "experimental": experimental
+                    }
+                });
+                if server_name != "none" {
+                    result["serverInfo"] = if server_version == "none" {
+                        json!({"name": server_name})
+                    } else {
+                        json!({"name": server_name, "version": server_version})
+                    };
+                }
+                respond(&mut stdout, id, result);
             }
             "experimental/serverState" if declare_server_state_provider => {
                 respond(
@@ -172,6 +195,16 @@ fn main() {
                     json!({
                         "jsonrpc": "2.0",
                         "method": "$/progress",
+                        "params": params
+                    }),
+                );
+            }
+            "$/fake/emitLogMessage" => {
+                send(
+                    &mut stdout,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "method": "window/logMessage",
                         "params": params
                     }),
                 );

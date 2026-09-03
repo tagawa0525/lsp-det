@@ -8,5 +8,10 @@
     "command": "lsp-det",
     "args": ["--", "gopls"],
     "extensionToLanguage": { ".go": "go" }
+  },
+  "pyright-via-lsp-det": {
+    "command": "lsp-det",
+    "args": ["--", "pyright-langserver", "--stdio"],
+    "extensionToLanguage": { ".py": "python", ".pyi": "python" }
   }
 }

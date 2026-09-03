@@ -463,6 +463,212 @@ fn gopls_ignores_unrelated_progress() {
 }
 
 // ---------------------------------------------------------------------------
+// pyright の写像 (ADR 0011、設計 5.3)
+//
+// pyright は readiness の語彙を持たず `serverInfo` も返さない。上流側は
+// 起動ログの名乗りで写像を選び、`window/logMessage` のファイル列挙完了
+// ("Found N source files" / "No source files found.") から readiness を
+// 合成する。health の信号はなく unknown のまま。
+// ---------------------------------------------------------------------------
+
+fn pyright_client(declare_server_state: bool) -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_pyright();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(declare_server_state);
+    (client, result)
+}
+
+#[test]
+fn pyright_is_identified_by_its_startup_log_when_server_info_is_absent() {
+    // serverInfo がないと写像なし (両軸 unknown) になるところ、起動ログの
+    // 名乗りで pyright の写像が選ばれ、開始状態 (initializing) にいる。
+    let (mut client, result) = pyright_client(true);
+    assert!(
+        !result["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null(),
+        "上流側の宣言がない: {result}"
+    );
+    assert!(
+        result["result"]["serverInfo"].is_null(),
+        "前提が崩れている。偽 pyright は serverInfo を返さないはず: {result}"
+    );
+    let state = client.server_state();
+    assert_eq!(
+        state.readiness,
+        Readiness::Initializing,
+        "写像が選ばれていない"
+    );
+    assert_eq!(state.health, Health::Unknown);
+    client.shutdown();
+}
+
+#[test]
+fn basedpyright_is_identified_by_its_server_info() {
+    // basedpyright は serverInfo を返す。起動ログがなくても同じ写像を選ぶ。
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "basedpyright",
+        &["--server-version", "1.39.8"],
+    );
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(true);
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+#[test]
+fn pyright_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
+    // 起動ログの版が pyright::TESTED_VERSIONS になければ保証は宣言しない。
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "none",
+        &["--startup-log", "Pyright language server 1.1.400 starting"],
+    );
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!(true),
+        "pyright に測っていない保証を宣言した: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn pyright_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
+    // 7.2 / 7.3 を実 pyright 1.1.412 に当てて通した (pyright_* ignored)。
+    // 版は起動ログから読む (serverInfo がない)。
+    let (mut client, result) = pyright_client(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版に保証を宣言していない: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn basedpyright_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
+    // 7.2 / 7.3 を実 basedpyright 1.39.8 に当てて通した。版は serverInfo から読む。
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "basedpyright",
+        &["--server-version", "1.39.8"],
+    );
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版に保証を宣言していない: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn pyright_spec_7_1_2_becomes_ready_when_enumeration_completes() {
+    let (mut client, _) = pyright_client(true);
+    client.make_upstream_start_service_instance("pyfix");
+    client.make_upstream_finish_enumeration("Found 2 source files");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(
+        state.health,
+        Health::Unknown,
+        "列挙の完了は health の観測ではない"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn pyright_no_source_files_is_also_a_completion() {
+    let (mut client, _) = pyright_client(true);
+    client.make_upstream_start_service_instance("empty");
+    client.make_upstream_finish_enumeration("No source files found.");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn pyright_waits_for_every_workspace_folder() {
+    // フォルダごとに "Starting service instance" と完了ログが 1 回ずつ出る。
+    let (mut client, _) = pyright_client(true);
+    client.make_upstream_start_service_instance("one");
+    client.make_upstream_start_service_instance("two");
+    client.make_upstream_finish_enumeration("Found 400 source files");
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "1 フォルダの完了で ready を名乗った"
+    );
+    client.make_upstream_finish_enumeration("Found 1200 source files");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn pyright_spec_7_1_3_rearms_when_a_folder_is_added() {
+    let (mut client, _) = pyright_client(true);
+    client.make_upstream_start_service_instance("one");
+    client.make_upstream_finish_enumeration("Found 1 source file");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+
+    client.make_upstream_start_service_instance("two");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.make_upstream_finish_enumeration("Found 3 source files");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn pyright_rearms_on_reenumeration_when_the_log_is_visible() {
+    // "Searching for source files" は log レベル (type 4)。既定では届かないが、
+    // 届いたときは再列挙の開始。
+    let (mut client, _) = pyright_client(true);
+    client.make_upstream_start_service_instance("one");
+    client.make_upstream_finish_enumeration("Found 1 source file");
+    client.await_state_changed();
+
+    client.make_upstream_emit_log_message(4, "Searching for source files");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.make_upstream_finish_enumeration("Found 2 source files");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn pyright_ignores_progress_and_other_logs() {
+    // 開いたファイルの解析の $/progress と他のログは readiness に触れない。
+    let (mut client, _) = pyright_client(true);
+    client.make_upstream_start_service_instance("one");
+    client.make_upstream_emit_log_message(3, "Assuming Python version 3.14.7.final.0");
+    client.make_upstream_emit_progress(json!({
+        "token": "t",
+        "value": {"kind": "begin", "title": ""}
+    }));
+    client.make_upstream_emit_progress(json!({
+        "token": "t",
+        "value": {"kind": "end"}
+    }));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "無関係なメッセージで状態が動いた"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+#[test]
+fn pyright_logs_are_forwarded_to_the_client_unchanged() {
+    // 写像が読むだけで、ログはクライアントにもそのまま届く (原文転送)。
+    let (mut client, _) = pyright_client(false);
+    client.make_upstream_start_service_instance("one");
+    client.make_upstream_finish_enumeration("Found 2 source files");
+    let found = client
+        .await_notification("window/logMessage")
+        .expect("ログが届かない");
+    assert!(
+        found["message"].as_str().is_some(),
+        "ログの形が変わった: {found}"
+    );
+    client.shutdown();
+}
+// ---------------------------------------------------------------------------
 // 写像なし (仕様 8.2 の 3、8.4 の 1)
 //
 // readiness を観測する手段がないので両軸 unknown を正直に報告する。
@@ -813,6 +1019,163 @@ fn spec_7_3_cross_file_freshness_through_lsp_det_with_real_rust_analyzer() {
         "ready を名乗りながら、消したはずの参照を返した（鮮度違反）: {after:#?}"
     );
 
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 実 pyright / basedpyright 結合（ローカル専用。CI に入れない — v0.1-design.md 6 章）
+//
+// pyright-langserver と basedpyright-langserver が PATH にあること (flake.nix)。
+// ---------------------------------------------------------------------------
+
+/// lsp-det 経由で実 pyright を起動する被験者。
+fn real_pyright(project: &support::TempPyProject, command: &str) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec!["--".to_string(), command.to_string(), "--stdio".to_string()],
+        root: project.root.clone(),
+    }
+}
+
+/// `a.py` の `target` への参照のうち、`file` を指すものだけを返す。
+fn py_references_in(
+    client: &mut ConformanceClient,
+    a: &std::path::Path,
+    file: &std::path::Path,
+) -> Vec<Value> {
+    let wanted = support::file_uri(file);
+    client
+        .references(a, 0, 4)
+        .into_iter()
+        .filter(|location| location["uri"] == Value::String(wanted.clone()))
+        .collect()
+}
+
+/// pyright 経由。起動ログで写像が選ばれ、列挙完了で ready になる (ADR 0011)。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn pyright_spec_7_1_through_lsp_det_with_real_pyright() {
+    let project = support::TempPyProject::with_cross_file_reference("readiness");
+    let mut client = ConformanceClient::start(&real_pyright(&project, "pyright-langserver"));
+    let result = client.initialize_with_root(true, &project.root);
+    assert!(
+        result["result"]["serverInfo"].is_null(),
+        "前提が崩れている。pyright が serverInfo を返すようになった: {result}"
+    );
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版の実 pyright に保証が宣言されていない: {result}"
+    );
+    let state = client.server_state();
+    assert_ne!(
+        state.readiness,
+        Readiness::Unknown,
+        "起動ログで写像が選ばれていない"
+    );
+    client.wait_until_ready();
+    assert_eq!(
+        client.server_state().health,
+        Health::Unknown,
+        "pyright に health の信号はない"
+    );
+    client.shutdown();
+}
+
+/// basedpyright 経由。serverInfo で同じ写像が選ばれる。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn pyright_spec_7_1_through_lsp_det_with_real_basedpyright() {
+    let project = support::TempPyProject::with_cross_file_reference("based");
+    let mut client = ConformanceClient::start(&real_pyright(&project, "basedpyright-langserver"));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["serverInfo"]["name"],
+        json!("basedpyright")
+    );
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版の実 basedpyright に保証が宣言されていない: {result}"
+    );
+    assert_ne!(client.server_state().readiness, Readiness::Unknown);
+    client.wait_until_ready();
+    client.shutdown();
+}
+
+/// 7.2 完全性を実 pyright で測る。宣言の根拠。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn pyright_spec_7_2_completeness_through_lsp_det_with_real_pyright() {
+    py_completeness_with("pyright-langserver", "completeness");
+}
+
+/// 7.2 完全性を実 basedpyright で測る。宣言の根拠。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn pyright_spec_7_2_completeness_through_lsp_det_with_real_basedpyright() {
+    py_completeness_with("basedpyright-langserver", "based-completeness");
+}
+
+fn py_completeness_with(command: &str, tag: &str) {
+    let project = support::TempPyProject::with_cross_file_reference(tag);
+    let a = project.file("a.py");
+    let b = project.file("b.py");
+
+    let mut client = ConformanceClient::start(&real_pyright(&project, command));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    client.did_open(&a, "python");
+
+    let found = py_references_in(&mut client, &a, &b);
+    assert!(
+        found
+            .iter()
+            .any(|location| location["range"]["start"]["line"] == 4),
+        "ready を名乗りながら b.py の呼び出しを取りこぼした (完全性違反): {found:#?}"
+    );
+    client.shutdown();
+}
+
+/// 7.3 鮮度を実 pyright で測る (クロスファイル)。宣言の根拠。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn pyright_spec_7_3_cross_file_freshness_through_lsp_det_with_real_pyright() {
+    py_freshness_with("pyright-langserver", "freshness");
+}
+
+/// 7.3 鮮度を実 basedpyright で測る。宣言の根拠。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn pyright_spec_7_3_cross_file_freshness_through_lsp_det_with_real_basedpyright() {
+    py_freshness_with("basedpyright-langserver", "based-freshness");
+}
+
+fn py_freshness_with(command: &str, tag: &str) {
+    let project = support::TempPyProject::with_cross_file_reference(tag);
+    let a = project.file("a.py");
+    let b = project.file("b.py");
+
+    let mut client = ConformanceClient::start(&real_pyright(&project, command));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    client.did_open(&a, "python");
+    client.did_open(&b, "python");
+
+    let before = py_references_in(&mut client, &a, &b);
+    assert!(
+        !before.is_empty(),
+        "前提が崩れている。b.py からの参照が見えるはず"
+    );
+
+    client.did_change(&b, 2, support::PY_B_WITHOUT_CALL);
+    assert_eq!(client.server_state().readiness, Readiness::Ready);
+
+    let after = py_references_in(&mut client, &a, &b);
+    assert!(
+        after.is_empty(),
+        "ready を名乗りながら、消したはずの参照を返した (鮮度違反): {after:#?}"
+    );
     client.shutdown();
 }
 

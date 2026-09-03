@@ -1099,12 +1099,35 @@ fn typescript_language_server_is_identified_even_when_the_client_declares_progre
 }
 
 #[test]
-fn typescript_language_server_spec_8_2_5_declares_no_guarantees_until_measured() {
-    let (mut client, result) = tsls_client(true);
+fn typescript_language_server_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "none",
+        &[
+            "--startup-log",
+            r#"Using Typescript version (fake) 5.9.2 from path "/fake/tsserver.js""#,
+            "--startup-typescript-version",
+            "5.9.2",
+        ],
+    );
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!(true),
         "測っていない保証を宣言した: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn typescript_language_server_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
+    // 7.2 / 7.3 を実サーバー (TypeScript 5.9.3) に当てて通した。版は起動ログから
+    // 読むので initialize 応答に間に合う。
+    let (mut client, result) = tsls_client(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版に保証を宣言していない: {result}"
     );
     client.shutdown();
 }
@@ -1381,6 +1404,11 @@ fn typescript_language_server_spec_7_1_through_lsp_det_with_real_server() {
     assert!(
         result["result"]["serverInfo"].is_null(),
         "前提が崩れている。typescript-language-server が serverInfo を返すようになった: {result}"
+    );
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版の実サーバーに保証が宣言されていない: {result}"
     );
     client.did_open(&project.file("a.ts"), "typescript");
     client.wait_until_ready();

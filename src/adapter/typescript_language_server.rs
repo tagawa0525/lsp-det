@@ -422,8 +422,14 @@ mod tests {
     // --- 保証 ------------------------------------------------------------------
 
     #[test]
-    fn declares_no_guarantees_until_the_conformance_suite_passed_on_a_version() {
-        for version in [Some("5.9.3"), Some("5.3.0"), None] {
+    fn declares_guarantees_only_for_typescript_versions_the_conformance_suite_passed_on() {
+        // 7.2 / 7.3 を typescript-language-server 5.3.0 + TypeScript 5.9.3 に
+        // 当てて通した。名乗りに出るのは TypeScript の版だけ。
+        assert_eq!(
+            TypescriptLanguageServerAdapter::for_version(Some("5.9.3")).guarantees(),
+            ServerStateProvider::complete_and_fresh()
+        );
+        for version in [Some("5.9.2"), Some("5.3.0"), Some("garbage"), None] {
             assert_eq!(
                 TypescriptLanguageServerAdapter::for_version(version).guarantees(),
                 ServerStateProvider::Basic(true),

@@ -829,11 +829,12 @@ pub fn kill_descendants_matching(pid: u32, needle: &str) -> Vec<u32> {
     let mut killed = Vec::new();
     let mut frontier = vec![pid];
     while let Some(parent) = frontier.pop() {
+        // pgrep が失敗しても (その親が消えていても) 残りの探索は続ける。
         let Ok(out) = std::process::Command::new("pgrep")
             .args(["-P", &parent.to_string()])
             .output()
         else {
-            break;
+            continue;
         };
         for child in String::from_utf8_lossy(&out.stdout)
             .split_whitespace()
@@ -843,10 +844,11 @@ pub fn kill_descendants_matching(pid: u32, needle: &str) -> Vec<u32> {
             let cmdline = std::fs::read(format!("/proc/{child}/cmdline")).unwrap_or_default();
             if String::from_utf8_lossy(&cmdline).contains(needle) {
                 // SAFETY: 自分が起動した被験者の子孫にだけ送る。
-                unsafe {
-                    libc::kill(child as i32, libc::SIGKILL);
+                let sent = unsafe { libc::kill(child as i32, libc::SIGKILL) };
+                // 送れたときだけ「殺した」と数える (既に消えていれば失敗する)。
+                if sent == 0 {
+                    killed.push(child);
                 }
-                killed.push(child);
             }
         }
     }

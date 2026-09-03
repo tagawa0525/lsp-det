@@ -92,6 +92,25 @@ CC は終了時の `shutdown` リクエストに `params: {}` を付ける。rus
 - CC が `$/cancelRequest` を送る条件
 - gopls で health が `error` になる場合（"Error loading workspace"）の CC の見せ方
 
+## 第 4 回（2026-09-04）: CC が送る通知の全数と `initialize` の capability
+
+`--debug` のログ 29 本（LSP 通信のある 6 本）を全数で確認し、さらに `tee` で stdin を記録するラッパーを言語サーバーの位置に置いて、入れ子の非対話 CC（2.1.259）の `initialize` を原文で取った。実測の本体は [disk-edit-propagation-measurement.md](disk-edit-propagation-measurement.md)。
+
+### 結論
+
+| 項目                       | 観測                                                                                                                                                                                                                  |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CC が送る通知              | `initialized`・`textDocument/didOpen`・`exit` の 3 種だけ。`didChange`・`didSave`・`didClose`・`workspace/didChangeWatchedFiles`・`$/cancelRequest` は 29 本のログに一度も出ない                                      |
+| Write の後                 | 書き込み（一時ファイルを書いて rename）の 1ms 後に、同じファイルへ `didOpen` を送り直す（新しい本文、閉じない）。サーバーのある言語だけ。引き金は diagnostics の経路で、LSP ツールの呼び出しではない                  |
+| Bash の編集の後            | 何も送らない（377 回の Bash 呼び出しに LSP の行が伴わない）                                                                                                                                                           |
+| `initialize` の capability | `workspace` は `{configuration: false, workspaceFolders: false}` だけで **`didChangeWatchedFiles` がない**。`textDocument.synchronization` は `didSave: true` を宣言するが送らない。`window` と `experimental` はない |
+| サーバーからのリクエスト   | `workspace/diagnostic/refresh` に `-32601 Unhandled method` で答える                                                                                                                                                  |
+
+### 設計への含意
+
+- gopls と pyright は自前でファイルを監視しないので、CC の Bash 編集はセッションの間ずっと見えない。rust-analyzer は監視の宣言がないときの自前の notify で拾う。tsls は 2 度目の `didOpen` を拒み、古いバッファが残る（disk-edit-propagation-measurement.md）。ADR 0015 の代行 2 つの根拠
+- CC への報告の材料（`docs/upstream-submissions.md`）
+
 ## 一般化してはならない点
 
 - 「最初の LSP ツール呼び出しで起動」「`initialize` の直後に横断リクエストを投げる」は CC のこの版での観測。CC の版が変われば変わり得る

@@ -24,10 +24,21 @@
 //! `completeness` / `freshness` は準拠テスト 7.2 / 7.3 を実サーバーに当てて
 //! 通した版 ([`TESTED_VERSIONS`]) にだけ宣言する (ADR 0009 決定 D-5)。
 
+use serde::Deserialize;
+use serde_json::Value;
+
 use super::Mapping;
 use crate::initialize::ServerInfo;
 use crate::peek::MessageView;
-use crate::state::{ServerState, ServerStateProvider};
+use crate::state::{Health, Readiness, ServerState, ServerStateProvider};
+
+const PROGRESS_METHOD: &str = "$/progress";
+const LOG_MESSAGE_METHOD: &str = "window/logMessage";
+/// プロジェクトのロード (`ts-client.ts` の `ServerInitializingIndicator`)。
+const PROJECT_LOAD_TITLE: &str = "Initializing JS/TS language features…";
+/// tsserver の終了 (`ts-client.ts` の `onExit`)。前に "[lspserver] [tsclient] "
+/// のタグが付く。
+const TSSERVER_EXITED: &str = "[tsserver] Exited. Code:";
 
 /// `serverInfo` の代わりに名乗りとして使う名前。
 pub const SERVER_NAME: &str = "typescript-language-server";
@@ -42,15 +53,44 @@ pub const SERVER_NAME: &str = "typescript-language-server";
 pub const TESTED_VERSIONS: &[&str] = &[];
 
 /// `$/typescriptVersion` の params から名乗りを読む。
-pub fn identity_from_typescript_version(params: &serde_json::Value) -> Option<ServerInfo> {
-    let _ = params;
-    todo!("M6 GREEN")
+pub fn identity_from_typescript_version(params: &Value) -> Option<ServerInfo> {
+    let params = params.as_object()?;
+    let version = params
+        .get("version")
+        .and_then(Value::as_str)
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
+    Some(ServerInfo {
+        name: SERVER_NAME.to_string(),
+        version,
+    })
+}
+
+#[derive(Deserialize)]
+struct ProgressParams {
+    token: Value,
+    value: ProgressValue,
+}
+
+#[derive(Deserialize)]
+struct ProgressValue {
+    kind: String,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct LogMessageParams {
+    message: String,
 }
 
 /// typescript-language-server の写像。
 pub struct TypescriptLanguageServerAdapter {
     /// 名乗った版が [`TESTED_VERSIONS`] に入っているか。保証を宣言する条件。
     version_is_tested: bool,
+    state: ServerState,
+    /// begin を見て end を待っているプロジェクトロードのトークン。
+    loading: Vec<Value>,
 }
 
 impl Default for TypescriptLanguageServerAdapter {
@@ -68,7 +108,45 @@ impl TypescriptLanguageServerAdapter {
     /// 名乗った版 (TypeScript の版) を見て、テスト済みなら保証を宣言する。
     pub fn for_version(version: Option<&str>) -> Self {
         let version_is_tested = version.is_some_and(|v| TESTED_VERSIONS.contains(&v.trim()));
-        TypescriptLanguageServerAdapter { version_is_tested }
+        TypescriptLanguageServerAdapter {
+            version_is_tested,
+            state: ServerState::initializing(),
+            loading: Vec::new(),
+        }
+    }
+
+    fn on_progress(&mut self, params: ProgressParams) -> Option<ServerState> {
+        let ProgressParams { token, value } = params;
+        match value.kind.as_str() {
+            "begin" if value.title.as_deref() == Some(PROJECT_LOAD_TITLE) => {
+                self.loading.push(token);
+                self.state.readiness = Readiness::Indexing;
+            }
+            "end" => {
+                let index = self.loading.iter().position(|t| *t == token)?;
+                self.loading.remove(index);
+                if !self.loading.is_empty() {
+                    return None;
+                }
+                self.state.readiness = Readiness::Ready;
+                // ロードの成功を観測した。ただし tsserver が落ちた後の end
+                // (indicator の reset) は成功ではない。再起動はないので戻さない。
+                if self.state.health != Health::Error {
+                    self.state.health = Health::Ok;
+                }
+            }
+            _ => return None,
+        }
+        Some(self.state.clone())
+    }
+
+    fn on_log(&mut self, message: &str) -> Option<ServerState> {
+        if !message.contains(TSSERVER_EXITED) {
+            return None;
+        }
+        self.state.health = Health::Error;
+        self.state.message = Some(message.to_string());
+        Some(self.state.clone())
     }
 }
 
@@ -86,8 +164,28 @@ impl Mapping for TypescriptLanguageServerAdapter {
     }
 
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
-        let _ = (view, body);
-        todo!("M6 GREEN")
+        if !view.is_notification() {
+            return None;
+        }
+        match view.method() {
+            Some(PROGRESS_METHOD) => {
+                #[derive(Deserialize)]
+                struct Envelope {
+                    params: ProgressParams,
+                }
+                let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
+                self.on_progress(envelope.params)
+            }
+            Some(LOG_MESSAGE_METHOD) => {
+                #[derive(Deserialize)]
+                struct Envelope {
+                    params: LogMessageParams,
+                }
+                let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
+                self.on_log(&envelope.params.message)
+            }
+            _ => None,
+        }
     }
 }
 

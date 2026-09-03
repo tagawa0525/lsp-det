@@ -75,23 +75,37 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
 /// `serverInfo` を返さない上流の名乗り (ADR 0011 決定 A-2)。
 ///
 /// 上流→クライアント方向の通知から、上流が起動時に自ら送る名乗りを読む。
-/// 今のところ pyright 系の `window/logMessage`
-/// ("Pyright language server 1.1.412 starting") だけ。名乗りでなければ `None`。
-/// 汎用の認識機構は作らない (必要になった写像が自分の認識を足す)。
+/// pyright 系の `window/logMessage` ("Pyright language server 1.1.412
+/// starting") と、typescript-language-server 固有の `$/typescriptVersion`。
+/// 名乗りでなければ `None`。汎用の認識機構は作らない (必要になった写像が
+/// 自分の認識を足す)。
 pub fn identity_from_notification(view: &MessageView, body: &[u8]) -> Option<ServerInfo> {
-    if !view.is_notification() || view.method() != Some("window/logMessage") {
+    if !view.is_notification() {
         return None;
     }
-    #[derive(serde::Deserialize)]
-    struct Envelope {
-        params: LogMessage,
+    match view.method() {
+        Some("window/logMessage") => {
+            #[derive(serde::Deserialize)]
+            struct Envelope {
+                params: LogMessage,
+            }
+            #[derive(serde::Deserialize)]
+            struct LogMessage {
+                message: String,
+            }
+            let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
+            pyright::startup_identity(&envelope.params.message)
+        }
+        Some("$/typescriptVersion") => {
+            #[derive(serde::Deserialize)]
+            struct Envelope {
+                params: serde_json::Value,
+            }
+            let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
+            typescript_language_server::identity_from_typescript_version(&envelope.params)
+        }
+        _ => None,
     }
-    #[derive(serde::Deserialize)]
-    struct LogMessage {
-        message: String,
-    }
-    let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
-    pyright::startup_identity(&envelope.params.message)
 }
 
 #[cfg(test)]

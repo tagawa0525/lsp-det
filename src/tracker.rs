@@ -16,6 +16,9 @@ pub struct Tracker {
     adapter: Option<Box<dyn Mapping>>,
     /// 写像を選ぶ根拠になった名乗り。
     identity: Option<ServerInfo>,
+    /// 上流が `serverInfo` で名乗ったが既知の写像がなかった。以後、上流の
+    /// 通知から名乗りを探す必要はない。
+    named_but_unknown: bool,
 }
 
 impl Default for Tracker {
@@ -31,7 +34,15 @@ impl Tracker {
             state: ServerState::unobserved(),
             adapter: None,
             identity: None,
+            named_but_unknown: false,
         }
+    }
+
+    /// 上流は名乗ったが既知の写像がない (両軸 `unknown` で確定)。透過経路は
+    /// 覗き見を省いてよい。名乗りがまだない間は省けない (名乗りは
+    /// `initialize` 応答の後に届くことがある)。
+    pub fn upstream_is_unmapped(&self) -> bool {
+        self.adapter.is_none() && self.named_but_unknown
     }
 
     /// 写像を選ぶ根拠になった名乗り (`serverInfo` または起動ログ)。
@@ -47,6 +58,9 @@ impl Tracker {
     /// 同一視すると、M4 で gopls を足したときに match を書き直すことになる。
     pub fn select_mapping(&mut self, server_info: Option<&ServerInfo>) -> Option<ServerState> {
         let server_info = server_info?;
+        if self.adapter.is_none() && adapter::select(&server_info.name, None).is_none() {
+            self.named_but_unknown = true;
+        }
         if let Some(current) = &self.identity
             && current.name == server_info.name
         {

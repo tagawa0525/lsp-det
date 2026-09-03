@@ -137,7 +137,13 @@ enum ClientKind {
     InitializeRequest(Option<RequestId>),
     ShutdownRequest,
     CancelRequest(RequestId),
-    Request { id: RequestId, method: String },
+    Request {
+        id: RequestId,
+        method: String,
+    },
+    /// クライアントの `initialized` 通知。恒等写像の初期状態の問い合わせは
+    /// これを流した後に送る。
+    Initialized,
     Other,
 }
 
@@ -220,6 +226,11 @@ struct UpstreamSide {
     /// 自身の問い合わせの応答で更新する。最初の応答が届くまでは
     /// 「initialize 直後」の `initializing` (下流側は待つ)。
     identity_state: ServerState,
+    /// 恒等写像になったが、初期状態の問い合わせをまだ送っていない。送るのは
+    /// クライアントの `initialized` を上流へ流した後 (LSP はサーバーが
+    /// `initialized` まで他のリクエストを受けないことを許し、rust-analyzer は
+    /// 規約違反として終了する)。
+    identity_query_pending: bool,
 }
 
 impl UpstreamSide {
@@ -232,6 +243,7 @@ impl UpstreamSide {
             handshake_done: false,
             identity: false,
             identity_state: ServerState::initializing(),
+            identity_query_pending: false,
         }
     }
 
@@ -256,6 +268,9 @@ impl UpstreamSide {
                 },
                 _ => ClientKind::Other,
             },
+            Ok(view) if view.is_notification() && view.method() == Some("initialized") => {
+                ClientKind::Initialized
+            }
             Ok(view) if view.is_notification() && view.method() == Some("$/cancelRequest") => {
                 match gate::cancel_target(&msg.body) {
                     Some(id) => ClientKind::CancelRequest(id),
@@ -313,6 +328,14 @@ impl UpstreamSide {
                     Decision::Held => Vec::new(),
                     Decision::Reject(response) => vec![Out::ToClient(response)],
                 }
+            }
+            ClientKind::Initialized => {
+                let mut outs = vec![Out::ToUpstream(msg)];
+                if self.identity_query_pending {
+                    self.identity_query_pending = false;
+                    outs.push(Out::ToUpstream(self_state_request()));
+                }
+                outs
             }
             ClientKind::Other => vec![Out::ToUpstream(msg)],
         }
@@ -401,8 +424,10 @@ impl UpstreamSide {
                     "lsp-det: the upstream declares serverStateProvider itself; \
                      the upstream side becomes an identity mapping"
                 );
-                // 上流の通知は変化のときにしか来ない。初期状態は自分で聞く。
-                vec![Out::ToClient(msg), Out::ToUpstream(self_state_request())]
+                // 上流の通知は変化のときにしか来ない。初期状態は自分で聞くが、
+                // クライアントの `initialized` を流してから。
+                self.identity_query_pending = true;
+                vec![Out::ToClient(msg)]
             }
             Unrewritable => {
                 // capabilities / experimental がオブジェクトでない。宣言

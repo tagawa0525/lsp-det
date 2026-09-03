@@ -32,6 +32,7 @@
           pyright # M5 の写像。serverInfo を返さないので、名乗りと版は起動時の window/logMessage から読む (ADR 0011)
           basedpyright # pyright の通知名を継承。写像を共有する
           nodejs # typescript-language-server の実行環境
+          pnpm # 上流 (pyright、typescript-language-server) をソースからビルドするとき (scripts/upstream/)
           typescript # tsserver 本体 (typescript-language-server が --tsserver-path なしで探す)
           typescript-language-server # M6 の写像
         ];

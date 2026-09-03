@@ -7,7 +7,7 @@
 //!
 //! 各テスト名は仕様の条番号に対応させてある。仕様が変わったらここが落ちる。
 //!
-//! 7.2（completeness）と 7.3（freshness）は、被験者が保証を宣言している
+//! 7.2（coverage）と 7.3（freshness）は、被験者が保証を宣言している
 //! ときだけ意味を持つ。lsp-det + 偽上流で回すのは下流側（M3）の後。
 //! 下流側の準拠要件（仕様 9.1）は別のスイートで扱う。
 
@@ -196,7 +196,7 @@ fn selects_the_mapping_from_the_server_info_name() {
     let (mut client, result) = client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"completeness": true, "freshness": true}),
+        json!({"coverage": true, "freshness": true}),
         "rust-analyzer と名乗った上流に rust-analyzer の写像が選ばれていない: {result}"
     );
     client.make_upstream_emit_status("ok", true);
@@ -342,7 +342,7 @@ fn gopls_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
     let result = client.initialize(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"completeness": true, "freshness": true}),
+        json!({"coverage": true, "freshness": true}),
         "測った版に保証を宣言していない: {result}"
     );
     client.shutdown();
@@ -538,7 +538,7 @@ fn pyright_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
     let (mut client, result) = pyright_client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"completeness": true, "freshness": true}),
+        json!({"coverage": true, "freshness": true}),
         "測った版に保証を宣言していない: {result}"
     );
     client.shutdown();
@@ -555,7 +555,7 @@ fn basedpyright_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
     let result = client.initialize(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"completeness": true, "freshness": true}),
+        json!({"coverage": true, "freshness": true}),
         "測った版に保証を宣言していない: {result}"
     );
     client.shutdown();
@@ -969,15 +969,15 @@ fn a_server_without_the_extension_is_detected_as_non_conforming() {
     );
 }
 
-/// 7.2 完全性（completeness）。実サーバーに対してのみ意味を持つ要件。
+/// 7.2 網羅（coverage）。実サーバーに対してのみ意味を持つ要件。
 ///
 /// `ready` を名乗った時点で、横断問い合わせが不完全（クロスファイルの
 /// 利用箇所を取りこぼす）であってはならない。インデックス未完了の空応答こそ
 /// 本プロジェクトが消そうとしている「無言の嘘」そのもの。
 #[test]
 #[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
-fn spec_7_2_completeness_through_lsp_det_with_real_rust_analyzer() {
-    let project = support::TempCargoProject::with_cross_file_reference("completeness");
+fn spec_7_2_coverage_through_lsp_det_with_real_rust_analyzer() {
+    let project = support::TempCargoProject::with_cross_file_reference("coverage");
     let a = project.file("a.rs");
     let b = project.file("b.rs");
 
@@ -1152,7 +1152,7 @@ fn typescript_language_server_spec_5_declares_the_measured_guarantees_for_a_test
     let (mut client, result) = tsls_client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"completeness": true, "freshness": true}),
+        json!({"coverage": true, "freshness": true}),
         "測った版に保証を宣言していない: {result}"
     );
     client.shutdown();
@@ -1272,7 +1272,7 @@ fn pyright_spec_7_1_through_lsp_det_with_real_pyright() {
     );
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"completeness": true, "freshness": true}),
+        json!({"coverage": true, "freshness": true}),
         "測った版の実 pyright に保証が宣言されていない: {result}"
     );
     let state = client.server_state();
@@ -1303,7 +1303,7 @@ fn pyright_spec_7_1_through_lsp_det_with_real_basedpyright() {
     );
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"completeness": true, "freshness": true}),
+        json!({"coverage": true, "freshness": true}),
         "測った版の実 basedpyright に保証が宣言されていない: {result}"
     );
     assert_ne!(client.server_state().readiness, Readiness::Unknown);
@@ -1314,18 +1314,18 @@ fn pyright_spec_7_1_through_lsp_det_with_real_basedpyright() {
 /// 7.2 完全性を実 pyright で測る。宣言の根拠。
 #[test]
 #[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
-fn pyright_spec_7_2_completeness_through_lsp_det_with_real_pyright() {
-    py_completeness_with("pyright-langserver", "completeness");
+fn pyright_spec_7_2_coverage_through_lsp_det_with_real_pyright() {
+    py_coverage_with("pyright-langserver", "coverage");
 }
 
 /// 7.2 完全性を実 basedpyright で測る。宣言の根拠。
 #[test]
 #[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
-fn pyright_spec_7_2_completeness_through_lsp_det_with_real_basedpyright() {
-    py_completeness_with("basedpyright-langserver", "based-completeness");
+fn pyright_spec_7_2_coverage_through_lsp_det_with_real_basedpyright() {
+    py_coverage_with("basedpyright-langserver", "based-coverage");
 }
 
-fn py_completeness_with(command: &str, tag: &str) {
+fn py_coverage_with(command: &str, tag: &str) {
     let project = support::TempPyProject::with_cross_file_reference(tag);
     let a = project.file("a.py");
     let b = project.file("b.py");
@@ -1433,7 +1433,7 @@ fn typescript_language_server_spec_7_1_through_lsp_det_with_real_server() {
     );
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"completeness": true, "freshness": true}),
+        json!({"coverage": true, "freshness": true}),
         "測った版の実サーバーに保証が宣言されていない: {result}"
     );
     client.did_open(&project.file("a.ts"), "typescript");
@@ -1445,8 +1445,8 @@ fn typescript_language_server_spec_7_1_through_lsp_det_with_real_server() {
 /// 7.2 完全性。宣言の根拠。
 #[test]
 #[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
-fn typescript_language_server_spec_7_2_completeness_through_lsp_det_with_real_server() {
-    let project = support::TempTsProject::with_cross_file_reference("completeness");
+fn typescript_language_server_spec_7_2_coverage_through_lsp_det_with_real_server() {
+    let project = support::TempTsProject::with_cross_file_reference("coverage");
     let a = project.file("a.ts");
     let b = project.file("b.ts");
 
@@ -1612,7 +1612,7 @@ fn gopls_spec_7_1_through_lsp_det_with_real_gopls() {
     let result = client.initialize_with_root(true, &project.root);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"completeness": true, "freshness": true}),
+        json!({"coverage": true, "freshness": true}),
         "測った版の実 gopls に保証が宣言されていない: {result}"
     );
     assert_ne!(client.server_state().readiness, Readiness::Ready);
@@ -1624,8 +1624,8 @@ fn gopls_spec_7_1_through_lsp_det_with_real_gopls() {
 /// 7.2 完全性を実 gopls で測る。宣言の根拠 (設計 5.2)。
 #[test]
 #[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
-fn gopls_spec_7_2_completeness_through_lsp_det_with_real_gopls() {
-    let project = support::TempGoProject::with_cross_file_reference("completeness");
+fn gopls_spec_7_2_coverage_through_lsp_det_with_real_gopls() {
+    let project = support::TempGoProject::with_cross_file_reference("coverage");
     let a = project.file("a.go");
     let b = project.file("b.go");
 

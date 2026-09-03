@@ -394,10 +394,10 @@ mod tests {
     #[test]
     fn adds_the_provider_to_an_initialize_result() {
         let body = r#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"hoverProvider":true}}}"#;
-        let out = declared(body, &ServerStateProvider::complete());
+        let out = declared(body, &ServerStateProvider::coverage());
         assert_eq!(
             out["result"]["capabilities"]["experimental"]["serverStateProvider"],
-            serde_json::json!({"completeness": true})
+            serde_json::json!({"coverage": true})
         );
         // 上流の宣言はそのまま残る。
         assert_eq!(

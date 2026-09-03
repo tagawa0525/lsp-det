@@ -17,7 +17,7 @@
 //!   begin したら `error` (message 付き)、report で message を更新、
 //!   "Done." で end したら `ok` に戻る
 //!
-//! `completeness` / `freshness` は準拠テスト 7.2 / 7.3 を実 gopls に当てて
+//! `coverage` / `freshness` は準拠テスト 7.2 / 7.3 を実 gopls に当てて
 //! 通した版 ([`TESTED_VERSIONS`]) にだけ宣言する (設計 5.2、仕様 8.2 の 5)。
 
 use serde::Deserialize;
@@ -198,7 +198,7 @@ impl Mapping for GoplsAdapter {
     /// ignored)。宣言できるのはテストを当てた版だけ。
     fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         } else {
             ServerStateProvider::Basic(true)
         }
@@ -418,7 +418,7 @@ mod tests {
         // (tests/conformance.rs の gopls_* ignored)。それ以外には宣言しない。
         assert_eq!(
             GoplsAdapter::for_version(Some(GOPLS_VERSION_JSON)).guarantees(),
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         );
         for untested in [
             Some("v0.22.0"),

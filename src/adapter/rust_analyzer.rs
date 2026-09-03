@@ -127,7 +127,7 @@ impl Mapping for RustAnalyzerAdapter {
     /// 範囲外の版には状態の通知だけを約束する。
     fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         } else {
             ServerStateProvider::Basic(true)
         }
@@ -220,7 +220,7 @@ mod tests {
         let tested = crate::adapter::select("rust-analyzer", Some("2026-08-03")).unwrap();
         assert_eq!(
             tested.guarantees(),
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         );
         let untested = crate::adapter::select("rust-analyzer", Some("2026-08-04")).unwrap();
         assert_eq!(untested.guarantees(), ServerStateProvider::Basic(true));

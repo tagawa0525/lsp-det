@@ -231,6 +231,30 @@ mod tests {
     }
 
     #[test]
+    fn server_info_updates_the_declared_guarantees_even_when_the_mapping_is_kept() {
+        // 起動ログが版を省いていても、serverInfo がテスト済みの版を名乗れば
+        // 保証を宣言する (Copilot の指摘)。保証は名乗り (名前と版) の関数で、
+        // 観測 (数えたフォルダ) は保つ。
+        let mut tracker = Tracker::new();
+        let unversioned = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"basedpyright language server starting"}}"#;
+        observe(&mut tracker, unversioned);
+        assert_eq!(tracker.provider(), ServerStateProvider::Basic(true));
+        observe(&mut tracker, PYRIGHT_STARTED);
+
+        tracker.select_mapping(Some(&ServerInfo {
+            name: "basedpyright".to_string(),
+            version: Some("1.39.8".to_string()),
+        }));
+        assert_eq!(
+            tracker.provider(),
+            ServerStateProvider::complete_and_fresh(),
+            "serverInfo の版で保証を宣言し直していない"
+        );
+        let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("観測は保たれている");
+        assert_eq!(ready.readiness, Readiness::Ready);
+    }
+
+    #[test]
     fn a_different_name_in_server_info_replaces_the_mapping() {
         // 名前が違えば serverInfo が強い。起動ログの写像は捨てて選び直す。
         let mut tracker = Tracker::new();

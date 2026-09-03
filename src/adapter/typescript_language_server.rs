@@ -54,7 +54,10 @@ pub const SERVER_NAME: &str = "typescript-language-server";
 /// 一覧にない版には保証を宣言しない。足すときは、その版で
 /// `cargo test --test conformance -- --ignored typescript_language_server_`
 /// を通してから (守れない保証の宣言は仕様 5.1 違反)。
-pub const TESTED_VERSIONS: &[&str] = &[];
+///
+/// 通した記録: TypeScript 5.9.3 (typescript-language-server 5.3.0、node
+/// 24.19.0、いずれも nixpkgs)、2026-09-03、5 回連続。
+pub const TESTED_VERSIONS: &[&str] = &["5.9.3"];
 
 /// `initialize` 応答より先に届く `window/logMessage` (info) の名乗りを読む。
 ///

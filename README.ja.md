@@ -154,7 +154,7 @@ cargo test --test conformance -- --ignored   # 実サーバー結合 19 件（�
 | [docs/v0.1-design.md](docs/v0.1-design.md)             | プロキシの実装スコープ（上流側・下流側・写像・実行モデル）                                                          |
 | [docs/adr/README.md](docs/adr/README.md)               | 設計判断の索引。生きている決定と却下した案                                                                          |
 | [docs/vision.md](docs/vision.md)                       | 長期構想（宣言範囲・起動方法の宣言は凍結中）                                                                        |
-| [docs/research/](docs/research/)                       | 調査と実測 19 本。各言語サーバーの readiness の実態、先行プロキシ、Serena / Claude Code / Zed / VS Code の LSP 統合 |
+| [docs/research/](docs/research/)                       | 調査と実測 20 本。各言語サーバーの readiness の実態、先行プロキシ、Serena / Claude Code / Zed / VS Code の LSP 統合 |
 
 ## 現在地
 

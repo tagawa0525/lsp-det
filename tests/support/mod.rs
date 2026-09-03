@@ -57,6 +57,15 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("gopls", &[])
     }
 
+    /// pyright を演じる偽上流 + lsp-det。pyright は `serverInfo` を返さないので
+    /// 名乗りは起動ログだけ (ADR 0011 決定 A-2)。lsp-det は pyright の写像を選ぶ。
+    pub fn lsp_det_with_fake_pyright() -> Self {
+        Self::lsp_det_with_upstream(
+            "none",
+            &["--startup-log", "Pyright language server 1.1.412 starting"],
+        )
+    }
+
     /// 本プロトコルに準拠した偽上流 + lsp-det。上流側は恒等写像になり、
     /// 下流側は上流の状態を境界越しに読む（設計 4.1）。
     pub fn lsp_det_with_conformant_upstream_flags(upstream_flags: &[&str]) -> Self {
@@ -353,6 +362,24 @@ impl ConformanceClient {
     /// `{"token", "value": {"kind", "title", "message"}}` をそのまま渡す。
     pub fn make_upstream_emit_progress(&mut self, params: Value) {
         self.notify("$/fake/emitProgress", params);
+    }
+
+    /// 偽上流に `window/logMessage` を送らせる。
+    pub fn make_upstream_emit_log_message(&mut self, kind: u8, message: &str) {
+        self.notify(
+            "$/fake/emitLogMessage",
+            json!({"type": kind, "message": message}),
+        );
+    }
+
+    /// pyright 風の "Starting service instance" (フォルダごとに 1 回、info)。
+    pub fn make_upstream_start_service_instance(&mut self, folder: &str) {
+        self.make_upstream_emit_log_message(3, &format!("Starting service instance \"{folder}\""));
+    }
+
+    /// pyright 風のファイル列挙完了 (info)。
+    pub fn make_upstream_finish_enumeration(&mut self, message: &str) {
+        self.make_upstream_emit_log_message(3, message);
     }
 
     /// gopls 風の "Setting up workspace" の begin。
@@ -759,6 +786,42 @@ impl Drop for TempGoProject {
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
+
+/// 一時的な Python プロジェクト。`a.py` の `target` を `b.py` の `caller` から呼ぶ。
+/// pyright は `initialize` の `workspaceFolders` をフォルダごとの service
+/// instance にし、そのフォルダ以下を列挙する。
+pub struct TempPyProject {
+    pub root: PathBuf,
+}
+
+impl TempPyProject {
+    pub fn with_cross_file_reference(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-py-{tag}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("一時プロジェクトを作れない");
+        std::fs::write(root.join("a.py"), PY_A).unwrap();
+        std::fs::write(root.join("b.py"), PY_B_WITH_CALL).unwrap();
+        TempPyProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempPyProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// `target` は 1 行目の 5 文字目 (0 起点で line 0, character 4) にある。
+pub const PY_A: &str = "def target():\n    return 1\n";
+/// 呼び出しは 4 行目 (0 起点で line 3)。1 行目の import も参照として数えられる。
+pub const PY_B_WITH_CALL: &str = "from a import target\n\n\ndef caller():\n    return target()\n";
+pub const PY_B_WITHOUT_CALL: &str = "def caller():\n    return 1\n";
 
 /// `Target` は 3 行目の 6 文字目 (0 起点で line 2, character 5) にある。
 pub const GO_A: &str = "package fixture\n\nfunc Target() {}\n";

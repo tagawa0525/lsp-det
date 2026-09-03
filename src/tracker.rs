@@ -121,6 +121,76 @@ mod tests {
         tracker
     }
 
+    // --- 起動ログからの選択 (ADR 0011 決定 A) ----------------------------------
+
+    const PYRIGHT_STARTUP: &str = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Pyright language server 1.1.412 starting"}}"#;
+    const PYRIGHT_STARTED: &str = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Starting service instance \"pyfix\""}}"#;
+    const PYRIGHT_FOUND: &str = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Found 2 source files"}}"#;
+
+    #[test]
+    fn a_startup_log_selects_the_mapping_before_the_upstream_answers_initialize() {
+        // pyright は serverInfo を返さない。起動ログの名乗りで写像を選び、
+        // 開始状態 (initializing) に移る。unknown → initializing は通知を要する変化。
+        let mut tracker = Tracker::new();
+        let state = observe(&mut tracker, PYRIGHT_STARTUP).expect("名乗りで開始状態に移る");
+        assert_eq!(state.readiness, Readiness::Initializing);
+        assert_eq!(state.health, Health::Unknown);
+        assert!(tracker.observes_upstream());
+
+        // 写像はその後の通知を読む。
+        observe(&mut tracker, PYRIGHT_STARTED);
+        let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("列挙の完了で ready");
+        assert_eq!(ready.readiness, Readiness::Ready);
+    }
+
+    #[test]
+    fn an_initialize_result_without_server_info_keeps_the_mapping_from_the_startup_log() {
+        let mut tracker = Tracker::new();
+        observe(&mut tracker, PYRIGHT_STARTUP);
+        assert!(
+            tracker.select_mapping(None).is_none(),
+            "名乗りがなければ選び直さない"
+        );
+        assert!(tracker.observes_upstream());
+        assert_eq!(tracker.state().readiness, Readiness::Initializing);
+    }
+
+    #[test]
+    fn server_info_is_the_stronger_identity_and_reselects() {
+        // basedpyright は起動ログと serverInfo の両方を出す。serverInfo が来たら
+        // それで選び直す (同じ写像を指すので状態は開始状態のまま)。
+        let mut tracker = Tracker::new();
+        let based = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"basedpyright language server 1.39.8 starting"}}"#;
+        observe(&mut tracker, based);
+        let state = tracker
+            .select_mapping(Some(&ServerInfo {
+                name: "basedpyright".to_string(),
+                version: Some("1.39.8".to_string()),
+            }))
+            .expect("serverInfo で選び直す");
+        assert_eq!(state.readiness, Readiness::Initializing);
+        assert!(tracker.observes_upstream());
+    }
+
+    #[test]
+    fn ordinary_logs_do_not_select_a_mapping() {
+        let mut tracker = Tracker::new();
+        assert!(observe(&mut tracker, PYRIGHT_FOUND).is_none());
+        assert!(!tracker.observes_upstream());
+        assert_eq!(tracker.state(), &ServerState::unobserved());
+    }
+
+    #[test]
+    fn a_startup_log_does_not_replace_a_mapping_chosen_from_server_info() {
+        // 既に写像があるなら、起動ログの名乗りで選び直さない (serverInfo が強い)。
+        let mut tracker = with_adapter();
+        assert!(observe(&mut tracker, PYRIGHT_STARTUP).is_none());
+        assert!(
+            observe(&mut tracker, &status("ok", true)).is_some(),
+            "rust-analyzer の写像のまま"
+        );
+    }
+
     // --- 開始状態 -----------------------------------------------------------
 
     #[test]

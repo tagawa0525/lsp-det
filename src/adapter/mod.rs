@@ -121,11 +121,18 @@ mod tests {
 
     #[test]
     fn selects_pyright_and_basedpyright_by_their_server_info_names() {
-        // basedpyright は serverInfo を返す。pyright は返さないが、名乗りの
-        // 鍵は同じ "pyright" に揃える (identity_from_notification)。
+        // basedpyright は serverInfo で "basedpyright" と名乗る。pyright に
+        // serverInfo を足す上流の変更は productName ("Pyright") を名乗るので、
+        // 名前の大文字小文字は区別しない (serverInfo.name は表示用の自由な
+        // 文字列で、LSP は比較の規則を定めていない)。
         assert!(select("basedpyright", Some("1.39.8")).is_some());
         assert!(select("pyright", None).is_some());
-        assert!(select("Pyright", None).is_none(), "鍵は小文字に揃える");
+        assert!(
+            select("Pyright", None).is_some(),
+            "大文字小文字は区別しない"
+        );
+        assert!(select("Rust-Analyzer", None).is_some());
+        assert!(select("GOPLS", None).is_some());
     }
 
     #[test]
@@ -182,7 +189,7 @@ mod tests {
     #[test]
     fn selects_rust_analyzer_by_its_server_info_name() {
         assert!(select("rust-analyzer", None).is_some());
-        for unknown in ["fake-lsp-server", "", "Rust-Analyzer", "clangd"] {
+        for unknown in ["fake-lsp-server", "", "clangd", "rust-analyzer-proxy"] {
             assert!(
                 select(unknown, None).is_none(),
                 "既知でない名前: {unknown:?}"

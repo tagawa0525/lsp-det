@@ -273,6 +273,25 @@ mod tests {
     }
 
     #[test]
+    fn the_same_name_in_another_case_keeps_the_mapping_too() {
+        // pyright に serverInfo を足す上流の変更は productName "Pyright" を名乗る。
+        // 起動ログで "pyright" と読んだ写像と同じものなので、選び直さず観測を保つ。
+        let mut tracker = Tracker::new();
+        observe(&mut tracker, PYRIGHT_STARTUP);
+        observe(&mut tracker, PYRIGHT_STARTED);
+        tracker.select_mapping(Some(&ServerInfo {
+            name: "Pyright".to_string(),
+            version: Some("1.1.412".to_string()),
+        }));
+        assert_eq!(
+            tracker.provider(),
+            ServerStateProvider::complete_and_fresh()
+        );
+        let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("数えたフォルダの完了で ready");
+        assert_eq!(ready.readiness, Readiness::Ready);
+    }
+
+    #[test]
     fn a_different_name_in_server_info_replaces_the_mapping() {
         // 名前が違えば serverInfo が強い。起動ログの写像は捨てて選び直す。
         let mut tracker = Tracker::new();

@@ -448,6 +448,35 @@ mod tests {
     // --- 保証 ------------------------------------------------------------------
 
     #[test]
+    fn a_typescript_version_notification_without_a_version_keeps_the_guarantee_basis() {
+        // 起動ログでテスト済みの版を確定した後、$/typescriptVersion が版を欠いて
+        // 届いても根拠を捨てない (Copilot の指摘)。版があればそれで更新する。
+        let mut adapter = TypescriptLanguageServerAdapter::for_version(Some("5.9.3"));
+        assert_eq!(
+            adapter.guarantees(),
+            ServerStateProvider::complete_and_fresh()
+        );
+        interpret(
+            &mut adapter,
+            r#"{"jsonrpc":"2.0","method":"$/typescriptVersion","params":{"source":"bundled"}}"#,
+        );
+        assert_eq!(
+            adapter.guarantees(),
+            ServerStateProvider::complete_and_fresh(),
+            "版のない通知で根拠を捨てた"
+        );
+        interpret(
+            &mut adapter,
+            r#"{"jsonrpc":"2.0","method":"$/typescriptVersion","params":{"version":"5.9.2","source":"bundled"}}"#,
+        );
+        assert_eq!(
+            adapter.guarantees(),
+            ServerStateProvider::Basic(true),
+            "版のある通知は根拠を更新する"
+        );
+    }
+
+    #[test]
     fn declares_guarantees_only_for_typescript_versions_the_conformance_suite_passed_on() {
         // 7.2 / 7.3 を typescript-language-server 5.3.0 + TypeScript 5.9.3 に
         // 当てて通した。名乗りに出るのは TypeScript の版だけ。

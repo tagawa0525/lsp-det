@@ -94,7 +94,9 @@ pub fn identity_from_notification(view: &MessageView, body: &[u8]) -> Option<Ser
                 message: String,
             }
             let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
-            pyright::startup_identity(&envelope.params.message)
+            let message = &envelope.params.message;
+            pyright::startup_identity(message)
+                .or_else(|| typescript_language_server::startup_identity(message))
         }
         Some("$/typescriptVersion") => {
             #[derive(serde::Deserialize)]

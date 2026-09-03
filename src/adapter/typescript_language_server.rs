@@ -39,6 +39,10 @@ const PROJECT_LOAD_TITLE: &str = "Initializing JS/TS language features…";
 /// tsserver の終了 (`ts-client.ts` の `onExit`)。前に "[lspserver] [tsclient] "
 /// のタグが付く。
 const TSSERVER_EXITED: &str = "[tsserver] Exited. Code:";
+/// 起動ログの定型句 (`lsp-server.ts` の `initialize`)。
+const STARTUP_PREFIX: &str = "Using Typescript version (";
+const STARTUP_INFIX: &str = ") ";
+const STARTUP_SUFFIX_START: &str = " from path ";
 
 /// `serverInfo` の代わりに名乗りとして使う名前。
 pub const SERVER_NAME: &str = "typescript-language-server";
@@ -60,8 +64,17 @@ pub const TESTED_VERSIONS: &[&str] = &[];
 /// に保証を宣言するにはこちらで先に選ぶ必要がある。文言は
 /// typescript-language-server 固有。他の文言には `None`。
 pub fn startup_identity(message: &str) -> Option<ServerInfo> {
-    let _ = message;
-    todo!("M6 GREEN (startup log)")
+    let rest = message.strip_prefix(STARTUP_PREFIX)?;
+    let (_source, rest) = rest.split_once(STARTUP_INFIX)?;
+    let (version, _path) = rest.split_once(STARTUP_SUFFIX_START)?;
+    let version = version.trim();
+    if version.is_empty() || version.contains(' ') {
+        return None;
+    }
+    Some(ServerInfo {
+        name: SERVER_NAME.to_string(),
+        version: Some(version.to_string()),
+    })
 }
 
 /// `$/typescriptVersion` の params から名乗りを読む。

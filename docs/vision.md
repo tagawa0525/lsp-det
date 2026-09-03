@@ -163,7 +163,7 @@ interface ServerCapabilities {
 
 - `workspace/serverState` リクエストと `workspace/serverStateChanged` 通知で `ServerState` を返す
 - `ServerState` は `health`（`ok | warning | error`）と `readiness`（`initializing | indexing | ready`）の 2 軸。サーバーの外から観測する主体（プロキシ、クライアントライブラリ等）は両軸に `unknown` を足せる。サーバーの死は値ではなく接続の終了で伝える
-- `ready` は、`health` が `error` でない限り、宣言した保証（`completeness` / `freshness`）に応じて完全性（結果が後から増えない）と鮮度（受信済み didChange を織り込み済み）を保証する
+- `ready` は、`health` が `error` でない限り、宣言した保証（`coverage` / `freshness`）に応じて網羅（ワークスペース全体のインデックスに基づき、結果が後から増えない）と鮮度（受信済み didChange を織り込み済み）を保証する
 - 診断フェーズ・鮮度トークンは前方互換な将来拡張として予約
 
 旧称「拡張 B (Readiness)」は readiness のみを扱っていたが、health・鮮度と統合してサーバー状態に再定義した（[adr/0003](adr/0003-extension-s-zero-based.md)）。仕様の 2 層化と `dead` の削除は [adr/0009](adr/0009-success-criterion-and-two-sided-reference.md)。初期草案にあった `$partial` 注釈・`completeMethods` は、配列応答に付けられず無改造クライアントに効果がないため廃止した。

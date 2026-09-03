@@ -819,7 +819,7 @@ impl Drop for TempPyProject {
 
 /// `target` は 1 行目の 5 文字目 (0 起点で line 0, character 4) にある。
 pub const PY_A: &str = "def target():\n    return 1\n";
-/// 呼び出しは 4 行目 (0 起点で line 3)。1 行目の import も参照として数えられる。
+/// 呼び出しは 5 行目 (0 起点で line 4)。1 行目の import も参照として数えられる。
 pub const PY_B_WITH_CALL: &str = "from a import target\n\n\ndef caller():\n    return target()\n";
 pub const PY_B_WITHOUT_CALL: &str = "def caller():\n    return 1\n";
 

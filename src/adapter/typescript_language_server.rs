@@ -21,7 +21,7 @@
 //!   Signal: S" が出る。言語サーバー自身は生き残って空配列を成功として返す
 //!   ので、このログで `error` にする。再起動はないので戻らない
 //!
-//! `completeness` / `freshness` は準拠テスト 7.2 / 7.3 を実サーバーに当てて
+//! `coverage` / `freshness` は準拠テスト 7.2 / 7.3 を実サーバーに当てて
 //! 通した版 ([`TESTED_VERSIONS`]) にだけ宣言する (ADR 0009 決定 D-5)。
 
 use serde::Deserialize;
@@ -187,7 +187,7 @@ impl Mapping for TypescriptLanguageServerAdapter {
 
     fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         } else {
             ServerStateProvider::Basic(true)
         }
@@ -455,7 +455,7 @@ mod tests {
         let mut adapter = TypescriptLanguageServerAdapter::for_version(Some("5.9.3"));
         assert_eq!(
             adapter.guarantees(),
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         );
         interpret(
             &mut adapter,
@@ -463,7 +463,7 @@ mod tests {
         );
         assert_eq!(
             adapter.guarantees(),
-            ServerStateProvider::complete_and_fresh(),
+            ServerStateProvider::coverage_and_freshness(),
             "版のない通知で根拠を捨てた"
         );
         interpret(
@@ -483,7 +483,7 @@ mod tests {
         // 当てて通した。名乗りに出るのは TypeScript の版だけ。
         assert_eq!(
             TypescriptLanguageServerAdapter::for_version(Some("5.9.3")).guarantees(),
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         );
         for version in [Some("5.9.2"), Some("5.3.0"), Some("garbage"), None] {
             assert_eq!(

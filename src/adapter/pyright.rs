@@ -20,7 +20,7 @@
 //! - `$/progress` は開いたファイルの解析の進行であり、横断リクエストの完全性
 //!   とは別の事柄なので読まない (ADR 0011 決定 B-4)
 //!
-//! `completeness` / `freshness` は準拠テスト 7.2 / 7.3 を実 pyright に当てて
+//! `coverage` / `freshness` は準拠テスト 7.2 / 7.3 を実 pyright に当てて
 //! 通した版 ([`TESTED_VERSIONS`]) にだけ宣言する (ADR 0009 決定 D-5)。
 
 use serde::Deserialize;
@@ -188,7 +188,7 @@ impl Mapping for PyrightAdapter {
 
     fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         } else {
             ServerStateProvider::Basic(true)
         }
@@ -407,11 +407,11 @@ mod tests {
         // 製品ごとに別系列なので、一覧も製品ごとに持つ。
         assert_eq!(
             PyrightAdapter::for_identity("pyright", Some("1.1.412")).guarantees(),
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         );
         assert_eq!(
             PyrightAdapter::for_identity("basedpyright", Some("1.39.8")).guarantees(),
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         );
         for (name, version) in [
             ("pyright", Some("1.1.400")),

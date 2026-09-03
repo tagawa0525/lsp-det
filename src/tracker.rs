@@ -267,7 +267,7 @@ mod tests {
         }));
         assert_eq!(
             tracker.provider(),
-            ServerStateProvider::complete_and_fresh(),
+            ServerStateProvider::coverage_and_freshness(),
             "serverInfo の版で保証を宣言し直していない"
         );
         let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("観測は保たれている");
@@ -285,7 +285,7 @@ mod tests {
         observe(&mut tracker, startup);
         assert_eq!(
             tracker.provider(),
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         );
         tracker.select_mapping(Some(&ServerInfo {
             name: "typescript-language-server".to_string(),
@@ -293,7 +293,7 @@ mod tests {
         }));
         assert_eq!(
             tracker.provider(),
-            ServerStateProvider::complete_and_fresh(),
+            ServerStateProvider::coverage_and_freshness(),
             "包み紙の版で保証を落とした"
         );
     }
@@ -311,7 +311,7 @@ mod tests {
         }));
         assert_eq!(
             tracker.provider(),
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         );
         let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("数えたフォルダの完了で ready");
         assert_eq!(ready.readiness, Readiness::Ready);
@@ -399,7 +399,7 @@ mod tests {
     fn declares_the_adapter_guarantees_or_no_guarantees() {
         assert_eq!(
             with_adapter().provider(),
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         );
         assert_eq!(
             without_adapter().provider(),

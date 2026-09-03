@@ -51,9 +51,13 @@ pub struct ServerState {
 
 /// `ServerCapabilities.experimental.serverStateProvider` の値 (仕様 5 章)。
 ///
-/// `boolean | { completeness?, freshness? }`。`completeness` と `freshness` は
-/// 独立で順序関係を持たない (ADR 0004 決定 3)。実装は自分が守れる保証だけを
-/// 宣言する。守れない保証の宣言は仕様違反である (仕様 5.1)。
+/// `boolean | { coverage?, freshness? }`。`coverage` と `freshness` は
+/// 独立で順序関係を持たない (ADR 0004 決定 3。名前は ADR 0013)。実装は自分が
+/// 守れる保証だけを宣言する。守れない保証の宣言は仕様違反である (仕様 5.1)。
+///
+/// `coverage`: `ready` のとき保証対象メソッド (仕様 7.0 の 2) の応答が
+/// ワークスペース全体のインデックスに基づき、後から結果が増えない。
+/// `freshness`: `ready` のとき受信済みの変更をすべて織り込んでいる。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ServerStateProvider {
@@ -65,24 +69,24 @@ pub enum ServerStateProvider {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Guarantees {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub completeness: Option<bool>,
+    pub coverage: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub freshness: Option<bool>,
 }
 
 impl ServerStateProvider {
-    /// `completeness` のみを宣言する。
-    pub fn complete() -> Self {
+    /// `coverage` のみを宣言する。
+    pub fn coverage() -> Self {
         ServerStateProvider::WithGuarantees(Guarantees {
-            completeness: Some(true),
+            coverage: Some(true),
             freshness: None,
         })
     }
 
-    /// `completeness` と `freshness` の両方を宣言する。
-    pub fn complete_and_fresh() -> Self {
+    /// `coverage` と `freshness` の両方を宣言する。
+    pub fn coverage_and_freshness() -> Self {
         ServerStateProvider::WithGuarantees(Guarantees {
-            completeness: Some(true),
+            coverage: Some(true),
             freshness: Some(true),
         })
     }
@@ -265,7 +269,7 @@ mod tests {
     fn a_grade_omits_the_guarantees_it_does_not_claim() {
         // 守れない保証を宣言しないことが仕様 5.1 の要求。
         assert_eq!(
-            serde_json::to_string(&ServerStateProvider::complete()).unwrap(),
+            serde_json::to_string(&ServerStateProvider::coverage()).unwrap(),
             r#"{"coverage":true}"#
         );
     }
@@ -273,7 +277,7 @@ mod tests {
     #[test]
     fn a_grade_serializes_both_guarantees_when_claimed() {
         let both = ServerStateProvider::WithGuarantees(Guarantees {
-            completeness: Some(true),
+            coverage: Some(true),
             freshness: Some(true),
         });
         assert_eq!(

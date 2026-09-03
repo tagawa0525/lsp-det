@@ -216,7 +216,7 @@ mod tests {
         let tested = select("rust-analyzer", Some("1.98.0 (88d9e12 2026-08-18)")).unwrap();
         assert_eq!(
             tested.guarantees(),
-            ServerStateProvider::complete_and_fresh()
+            ServerStateProvider::coverage_and_freshness()
         );
 
         for untested in [

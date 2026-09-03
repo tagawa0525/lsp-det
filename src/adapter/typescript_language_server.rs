@@ -52,6 +52,18 @@ pub const SERVER_NAME: &str = "typescript-language-server";
 /// を通してから (守れない保証の宣言は仕様 5.1 違反)。
 pub const TESTED_VERSIONS: &[&str] = &[];
 
+/// `initialize` 応答より先に届く `window/logMessage` (info) の名乗りを読む。
+///
+/// `lsp-server.ts` の `initialize` は応答を返す前に
+/// `Using Typescript version (${source}) ${version} from path "${path}"` を
+/// info に出す。`$/typescriptVersion` は応答の後に届くので、`InitializeResult`
+/// に保証を宣言するにはこちらで先に選ぶ必要がある。文言は
+/// typescript-language-server 固有。他の文言には `None`。
+pub fn startup_identity(message: &str) -> Option<ServerInfo> {
+    let _ = message;
+    todo!("M6 GREEN (startup log)")
+}
+
 /// `$/typescriptVersion` の params から名乗りを読む。
 pub fn identity_from_typescript_version(params: &Value) -> Option<ServerInfo> {
     let params = params.as_object()?;
@@ -228,6 +240,37 @@ mod tests {
     }
 
     // --- 名乗り ----------------------------------------------------------------
+
+    #[test]
+    fn reads_the_startup_log_as_the_identity_before_initialize_completes() {
+        // 実測の文言そのもの。initialize 応答より先に届く唯一の名乗り。
+        let identity = startup_identity(
+            r#"Using Typescript version (user-setting) 5.9.3 from path "/nix/store/x/lib/tsserver.js""#,
+        )
+        .expect("起動ログは名乗り");
+        assert_eq!(identity.name, SERVER_NAME);
+        assert_eq!(identity.version.as_deref(), Some("5.9.3"));
+
+        let bundled = startup_identity(r#"Using Typescript version (bundled) 5.9.3 from path "x""#)
+            .expect("source が違っても名乗り");
+        assert_eq!(bundled.version.as_deref(), Some("5.9.3"));
+    }
+
+    #[test]
+    fn other_log_lines_are_not_identities() {
+        for other in [
+            "Pyright language server 1.1.412 starting",
+            "Using (workspace) TypeScript 5.9.3 instead - x",
+            "[lspserver] Killing TS Server",
+            "Using Typescript version",
+            "",
+        ] {
+            assert!(
+                startup_identity(other).is_none(),
+                "名乗りでない行: {other:?}"
+            );
+        }
+    }
 
     #[test]
     fn reads_the_typescript_version_as_the_identity() {

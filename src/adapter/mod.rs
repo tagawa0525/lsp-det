@@ -127,6 +127,16 @@ mod tests {
     }
 
     #[test]
+    fn identifies_typescript_language_server_by_its_startup_log() {
+        use crate::peek::peek;
+        let body = br#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Using Typescript version (user-setting) 5.9.3 from path \"/x/tsserver.js\""}}"#;
+        let view = peek(body).unwrap();
+        let identity = identity_from_notification(&view, body).expect("起動ログは名乗り");
+        assert_eq!(identity.name, "typescript-language-server");
+        assert_eq!(identity.version.as_deref(), Some("5.9.3"));
+    }
+
+    #[test]
     fn identifies_typescript_language_server_by_its_typescript_version_notification() {
         use crate::peek::peek;
         let body = br#"{"jsonrpc":"2.0","method":"$/typescriptVersion","params":{"version":"5.9.3","source":"user-setting"}}"#;

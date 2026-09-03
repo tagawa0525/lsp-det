@@ -69,7 +69,15 @@ impl ServerUnderTest {
     /// typescript-language-server を演じる偽上流 + lsp-det。`serverInfo` を
     /// 返さず、`initialize` 応答の直後に `$/typescriptVersion` を送る。
     pub fn lsp_det_with_fake_typescript_language_server() -> Self {
-        Self::lsp_det_with_upstream("none", &["--startup-typescript-version", "5.9.3"])
+        Self::lsp_det_with_upstream(
+            "none",
+            &[
+                "--startup-log",
+                r#"Using Typescript version (fake) 5.9.3 from path "/fake/tsserver.js""#,
+                "--startup-typescript-version",
+                "5.9.3",
+            ],
+        )
     }
 
     /// 本プロトコルに準拠した偽上流 + lsp-det。上流側は恒等写像になり、

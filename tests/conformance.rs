@@ -1053,6 +1053,37 @@ fn typescript_language_server_is_identified_by_its_typescript_version_notificati
 }
 
 #[test]
+fn typescript_language_server_is_identified_by_its_startup_log_before_initialize_completes() {
+    // "Using Typescript version …" は initialize 応答より先に届く。応答の時点で
+    // 写像が選ばれ、直後の状態問い合わせが initializing を返す。
+    let (mut client, result) = tsls_client(true);
+    assert!(
+        !result["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null(),
+        "上流側の宣言がない: {result}"
+    );
+    assert_eq!(
+        client.server_state().readiness,
+        Readiness::Initializing,
+        "応答の時点で写像が選ばれていない"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn typescript_language_server_is_identified_by_the_version_notification_alone() {
+    // 起動ログが (設定で) 出なくても、$/typescriptVersion だけで選べる。
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "none",
+        &["--startup-typescript-version", "5.9.3"],
+    );
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(true);
+    client.make_upstream_begin_project_load("1");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.shutdown();
+}
+
+#[test]
 fn typescript_language_server_is_identified_even_when_the_client_declares_progress() {
     // クライアントが window.workDoneProgress を宣言していると、上流側は
     // handshake 後の覗き見を省く経路に入る。写像が未選択の間は省いてはならない。

@@ -8,7 +8,7 @@ LSP gives a client no machine-readable way to learn whether the server can fully
 
 lsp-det consists of two things.
 
-- **The server state protocol** ([docs/spec/server-state.md](docs/spec/server-state.md), Japanese; an English translation is planned): a vocabulary that describes a server's state on two axes, `health` and `readiness`, plus capabilities that guarantee completeness and freshness of responses in that state. The end goal is a proposal to LSP itself
+- **The server state protocol** ([docs/spec/server-state.md](docs/spec/server-state.md), Japanese; an English translation is planned): a vocabulary that describes a server's state on two axes, `health` and `readiness`, plus capabilities that guarantee coverage (answers computed over the whole workspace index) and freshness of responses in that state. The end goal is a proposal to LSP itself
 - **The transparent proxy `lsp-det`** (Rust, single binary): sits between a client and a language server and provides the protocol to both sides. It maps the language server's own vocabulary onto the protocol, and on behalf of clients that do not speak the protocol, it holds cross-workspace requests until `ready`
 
 ## What changes
@@ -37,10 +37,10 @@ interface ServerState {
 | ----------------------------------- | ------------------ | --------------------------------------------------------------------------------------------- |
 | `experimental/serverState`          | Request            | Answers the `ServerState` at the moment of the query, without waiting                         |
 | `experimental/serverStateChanged`   | Notification       | Sent whenever `health` or `readiness` changes (only if the client declared the subscription)  |
-| `serverStateProvider` (server cap.) | `InitializeResult` | `boolean` or `{completeness?, freshness?}`                                                    |
+| `serverStateProvider` (server cap.) | `InitializeResult` | `boolean` or `{coverage?, freshness?}`                                                        |
 | `serverState` (client cap.)         | `InitializeParams` | Subscribes to notifications and declares "I read the state and decide whether to wait myself" |
 
-Guarantees apply when `readiness` is `ready` and `health` is not `error`. `completeness` means that the responses of the cross-workspace methods (the 11 methods `references`, `definition`, `implementation`, `workspace/symbol`, `rename`, call hierarchy and so on) are complete. `freshness` means that every `didChange` received so far has been incorporated. The two are independent, and an implementation declares only the guarantees it can keep.
+Guarantees apply when `readiness` is `ready` and `health` is not `error`. `coverage` means that the responses of the cross-workspace methods (`references`, `definition`, `implementation`, `rename`, call hierarchy and so on) are computed over the whole workspace index, so they will not grow later as indexing proceeds. `workspace/symbol` is held until `ready` but not covered by the guarantee: rust-analyzer and gopls cap its results (128 and 100) without saying so. `freshness` means that every `didChange` received so far has been incorporated. The two are independent, and an implementation declares only the guarantees it can keep.
 
 There is no `dead` in the protocol. A vanished process shows up as the end of the connection, and a surviving relay that returns successful-looking responses is `health: "error"`. An observer outside the server, such as a relay, reports `unknown` on an axis it cannot observe and never claims `ok` or `ready` without observation (chapter 8).
 
@@ -105,7 +105,7 @@ The real file for all four servers is [dogfood/claude-plugin/.lsp.json](dogfood/
 lsp-det logs the selected mapping and every state transition to stderr.
 
 ```text
-lsp-det: upstream is "rust-analyzer" version "2026-08-03"; using its mapping, declaring {"completeness":true,"freshness":true}
+lsp-det: upstream is "rust-analyzer" version "2026-08-03"; using its mapping, declaring {"coverage":true,"freshness":true}
 lsp-det: [0.041s] server state -> {"health":"unknown","readiness":"initializing"} (previous held 0.041s)
 lsp-det: [0.213s] server state -> {"health":"ok","readiness":"indexing"} (previous held 0.172s)
 lsp-det: [6.712s] server state -> {"health":"ok","readiness":"ready"} (previous held 6.499s)

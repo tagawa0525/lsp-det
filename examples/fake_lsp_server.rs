@@ -50,6 +50,10 @@
 //! - `$/fake/emitLogMessage`（通知。params は `{type, message}`）:
 //!   `window/logMessage` をそのまま送る（pyright の "Starting service
 //!   instance" / "Found N source files" 等を再現する）
+//! - `--require-initialized-before-requests`: `initialized` より前に
+//!   `initialize` 以外のリクエストが届いたら、rust-analyzer と同じく規約違反として
+//!   エラーを stderr に出して終了する（LSP: サーバーは `initialized` まで他の
+//!   リクエストを受けない）
 //! - `--fail-first-initialize`: 最初の `initialize` にエラーで応答する。
 //!   2 回目以降は通常どおり
 //! - `--exit-after-initialize-error`: `--fail-first-initialize` と併用し、
@@ -71,6 +75,8 @@ fn main() {
     let exit_after_initialize_error = has("--exit-after-initialize-error");
     let request_progress_create = has("--request-progress-create");
     let references_depend_on_readiness = has("--references-depend-on-readiness");
+    let require_initialized_before_requests = has("--require-initialized-before-requests");
+    let mut initialized_seen = false;
     let server_name = flags
         .iter()
         .position(|flag| flag == "--server-name")
@@ -145,6 +151,17 @@ fn main() {
             continue;
         }
         methods_seen.push(method.to_string());
+        if method == "initialized" {
+            initialized_seen = true;
+        }
+        if require_initialized_before_requests
+            && !initialized_seen
+            && id.is_some()
+            && method != "initialize"
+        {
+            eprintln!("fake-lsp-server: expected initialized notification, got request {method}");
+            return;
+        }
 
         match method {
             "initialize" => {

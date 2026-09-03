@@ -747,6 +747,32 @@ fn spec_8_2_7_closes_the_connection_without_a_notification_without_an_adapter() 
 // ---------------------------------------------------------------------------
 
 #[test]
+fn spec_8_4_2_asks_the_conformant_upstream_only_after_initialized() {
+    // 恒等写像のとき、上流側は初期状態を自分で問い合わせる（設計 4.2）。その
+    // 問い合わせはクライアントの `initialized` を流した後でなければならない。
+    // LSP はサーバーが `initialized` まで他のリクエストを受けないことを許し、
+    // rust-analyzer は実際に規約違反として終了する（上流のパッチで観測）。
+    let server = ServerUnderTest::lsp_det_without_adapter_flags(&[
+        "--declare-server-state-provider",
+        "--require-initialized-before-requests",
+    ]);
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"freshness": true}),
+        "上流の宣言を書き換えた: {result}"
+    );
+    let state = client.server_state();
+    assert_eq!(
+        state.message.as_deref(),
+        Some("answered by upstream"),
+        "initialized より前に問い合わせて上流を落とした"
+    );
+    client.shutdown();
+}
+
+#[test]
 fn spec_8_4_2_defers_to_a_conformant_upstream_without_an_adapter() {
     let server =
         ServerUnderTest::lsp_det_without_adapter_flags(&["--declare-server-state-provider"]);

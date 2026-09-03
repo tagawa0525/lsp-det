@@ -62,11 +62,15 @@ impl Tracker {
             self.named_but_unknown = true;
         }
         if let Some(current) = &self.identity
-            && current.name == server_info.name
+            && current.name.eq_ignore_ascii_case(&server_info.name)
         {
             // 起動ログで既に同じ写像を選んでいる (basedpyright は両方で名乗る)。
             // 選び直すと起動ログの後に読んだ観測 ("Starting service instance"
-            // の数) が消えるので、写像はそのまま名乗りだけ serverInfo に揃える。
+            // の数) が消えるので、写像はそのまま、新しい名乗りを写像に知らせる
+            // (保証の根拠にする版をどう更新するかは写像が決める)。
+            if let Some(adapter) = self.adapter.as_mut() {
+                adapter.learn_identity(server_info);
+            }
             self.identity = Some(server_info.clone());
             return Some(self.state.clone());
         }
@@ -94,12 +98,10 @@ impl Tracker {
     /// `InitializeResult` に宣言する保証 (仕様 5 章)。
     /// 写像がなければ保証なしの宣言 (`true`)。
     pub fn provider(&self) -> ServerStateProvider {
-        // 保証は名乗り (名前と版) の関数 (仕様 8.2 の 5)。起動ログが版を省き、
-        // 後から `serverInfo` で版が分かったときも、写像 (と観測) は保ったまま
-        // 最新の名乗りで決める。
-        self.identity
+        // 保証は写像に聞く (仕様 8.2 の 5)。どの名乗りのどの版を根拠にするかは
+        // 写像が決める (`Mapping::learn_identity`)。
+        self.adapter
             .as_ref()
-            .and_then(|identity| adapter::select(&identity.name, identity.version.as_deref()))
             .map_or(ServerStateProvider::Basic(true), |adapter| {
                 adapter.guarantees()
             })
@@ -269,6 +271,49 @@ mod tests {
             "serverInfo の版で保証を宣言し直していない"
         );
         let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("観測は保たれている");
+        assert_eq!(ready.readiness, Readiness::Ready);
+    }
+
+    #[test]
+    fn typescript_language_server_keeps_the_engine_version_as_the_guarantee_basis() {
+        // typescript-language-server に serverInfo を足す上流の変更は、包み紙自身の
+        // 版 (6.0.0) を名乗る。保証が依存するのは解析エンジン (TypeScript) の版で、
+        // それは起動ログと $/typescriptVersion に出る。serverInfo の版で保証の根拠を
+        // 置き換えない (どの版を根拠にするかは写像が決める)。
+        let mut tracker = Tracker::new();
+        let startup = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Using Typescript version (user-setting) 5.9.3 from path \"/x/tsserver.js\""}}"#;
+        observe(&mut tracker, startup);
+        assert_eq!(
+            tracker.provider(),
+            ServerStateProvider::complete_and_fresh()
+        );
+        tracker.select_mapping(Some(&ServerInfo {
+            name: "typescript-language-server".to_string(),
+            version: Some("6.0.0".to_string()),
+        }));
+        assert_eq!(
+            tracker.provider(),
+            ServerStateProvider::complete_and_fresh(),
+            "包み紙の版で保証を落とした"
+        );
+    }
+
+    #[test]
+    fn the_same_name_in_another_case_keeps_the_mapping_too() {
+        // pyright に serverInfo を足す上流の変更は productName "Pyright" を名乗る。
+        // 起動ログで "pyright" と読んだ写像と同じものなので、選び直さず観測を保つ。
+        let mut tracker = Tracker::new();
+        observe(&mut tracker, PYRIGHT_STARTUP);
+        observe(&mut tracker, PYRIGHT_STARTED);
+        tracker.select_mapping(Some(&ServerInfo {
+            name: "Pyright".to_string(),
+            version: Some("1.1.412".to_string()),
+        }));
+        assert_eq!(
+            tracker.provider(),
+            ServerStateProvider::complete_and_fresh()
+        );
+        let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("数えたフォルダの完了で ready");
         assert_eq!(ready.readiness, Readiness::Ready);
     }
 

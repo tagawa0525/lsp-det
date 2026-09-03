@@ -39,6 +39,14 @@ pub trait Mapping {
     /// 上流→クライアント方向のメッセージから、上流が報告している状態を
     /// 読み取る。読むものがなければ `None` (状態を動かさない)。
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState>;
+    /// 写像を選んだ後に、同じ上流の別の名乗り (`InitializeResult.serverInfo`)
+    /// が届いた。保証の根拠にする版をどう更新するかは写像が決める。pyright は
+    /// serverInfo の版がそのまま製品の版だが、typescript-language-server の
+    /// serverInfo の版は包み紙の版で、保証が依存する解析エンジン (TypeScript)
+    /// の版ではない。既定では何もしない。
+    fn learn_identity(&mut self, info: &ServerInfo) {
+        let _ = info;
+    }
 }
 
 /// 既知の写像すべてが必要とする client capability の和 (設計 4.2)。
@@ -58,13 +66,16 @@ pub const CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS: &[&str] = &[
 
 /// 上流が名乗った名前に対応する写像。既知でなければ `None`
 /// (上流側は両軸 `unknown` を報告する。仕様 8.2 の 3)。
+///
+/// 名前の大文字小文字は区別しない。`serverInfo.name` は表示用の自由な文字列で
+/// LSP は比較の規則を定めておらず、同じサーバーが "Pyright" (productName) と
+/// "pyright" (起動ログの鍵) の両方で現れる。
 pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mapping>> {
-    match server_name {
+    let key = server_name.to_ascii_lowercase();
+    match key.as_str() {
         "rust-analyzer" => Some(Box::new(RustAnalyzerAdapter::for_version(version))),
         "gopls" => Some(Box::new(GoplsAdapter::for_version(version))),
-        "pyright" | "basedpyright" => {
-            Some(Box::new(PyrightAdapter::for_identity(server_name, version)))
-        }
+        "pyright" | "basedpyright" => Some(Box::new(PyrightAdapter::for_identity(&key, version))),
         typescript_language_server::SERVER_NAME => Some(Box::new(
             TypescriptLanguageServerAdapter::for_version(version),
         )),
@@ -121,11 +132,18 @@ mod tests {
 
     #[test]
     fn selects_pyright_and_basedpyright_by_their_server_info_names() {
-        // basedpyright は serverInfo を返す。pyright は返さないが、名乗りの
-        // 鍵は同じ "pyright" に揃える (identity_from_notification)。
+        // basedpyright は serverInfo で "basedpyright" と名乗る。pyright に
+        // serverInfo を足す上流の変更は productName ("Pyright") を名乗るので、
+        // 名前の大文字小文字は区別しない (serverInfo.name は表示用の自由な
+        // 文字列で、LSP は比較の規則を定めていない)。
         assert!(select("basedpyright", Some("1.39.8")).is_some());
         assert!(select("pyright", None).is_some());
-        assert!(select("Pyright", None).is_none(), "鍵は小文字に揃える");
+        assert!(
+            select("Pyright", None).is_some(),
+            "大文字小文字は区別しない"
+        );
+        assert!(select("Rust-Analyzer", None).is_some());
+        assert!(select("GOPLS", None).is_some());
     }
 
     #[test]
@@ -182,7 +200,7 @@ mod tests {
     #[test]
     fn selects_rust_analyzer_by_its_server_info_name() {
         assert!(select("rust-analyzer", None).is_some());
-        for unknown in ["fake-lsp-server", "", "Rust-Analyzer", "clangd"] {
+        for unknown in ["fake-lsp-server", "", "clangd", "rust-analyzer-proxy"] {
             assert!(
                 select(unknown, None).is_none(),
                 "既知でない名前: {unknown:?}"

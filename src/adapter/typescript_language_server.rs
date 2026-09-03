@@ -34,6 +34,8 @@ use crate::state::{Health, Readiness, ServerState, ServerStateProvider};
 
 const PROGRESS_METHOD: &str = "$/progress";
 const LOG_MESSAGE_METHOD: &str = "window/logMessage";
+/// typescript-language-server 固有の通知。`initialize` 応答の後に届く。
+const TYPESCRIPT_VERSION_METHOD: &str = "$/typescriptVersion";
 /// プロジェクトのロード (`ts-client.ts` の `ServerInitializingIndicator`)。
 const PROJECT_LOAD_TITLE: &str = "Initializing JS/TS language features…";
 /// tsserver の終了 (`ts-client.ts` の `onExit`)。前に "[lspserver] [tsclient] "
@@ -191,11 +193,33 @@ impl Mapping for TypescriptLanguageServerAdapter {
         }
     }
 
+    /// serverInfo の版は包み紙 (typescript-language-server) の版で、保証が依存する
+    /// TypeScript の版ではない。根拠は起動ログと `$/typescriptVersion` から取る
+    /// ので、ここでは何もしない。
+    fn learn_identity(&mut self, info: &ServerInfo) {
+        let _ = info;
+    }
+
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
         if !view.is_notification() {
             return None;
         }
         match view.method() {
+            Some(TYPESCRIPT_VERSION_METHOD) => {
+                // 解析エンジンの版。起動ログが (設定で) 出なかったときの根拠。
+                // 版があるときだけ更新する (版のない通知で根拠を捨てない)。
+                #[derive(Deserialize)]
+                struct Envelope {
+                    params: Value,
+                }
+                if let Ok(envelope) = serde_json::from_slice::<Envelope>(body)
+                    && let Some(identity) = identity_from_typescript_version(&envelope.params)
+                    && let Some(version) = identity.version.as_deref()
+                {
+                    self.version_is_tested = Self::for_version(Some(version)).version_is_tested;
+                }
+                None
+            }
             Some(PROGRESS_METHOD) => {
                 #[derive(Deserialize)]
                 struct Envelope {
@@ -423,6 +447,35 @@ mod tests {
     }
 
     // --- 保証 ------------------------------------------------------------------
+
+    #[test]
+    fn a_typescript_version_notification_without_a_version_keeps_the_guarantee_basis() {
+        // 起動ログでテスト済みの版を確定した後、$/typescriptVersion が版を欠いて
+        // 届いても根拠を捨てない (Copilot の指摘)。版があればそれで更新する。
+        let mut adapter = TypescriptLanguageServerAdapter::for_version(Some("5.9.3"));
+        assert_eq!(
+            adapter.guarantees(),
+            ServerStateProvider::complete_and_fresh()
+        );
+        interpret(
+            &mut adapter,
+            r#"{"jsonrpc":"2.0","method":"$/typescriptVersion","params":{"source":"bundled"}}"#,
+        );
+        assert_eq!(
+            adapter.guarantees(),
+            ServerStateProvider::complete_and_fresh(),
+            "版のない通知で根拠を捨てた"
+        );
+        interpret(
+            &mut adapter,
+            r#"{"jsonrpc":"2.0","method":"$/typescriptVersion","params":{"version":"5.9.2","source":"bundled"}}"#,
+        );
+        assert_eq!(
+            adapter.guarantees(),
+            ServerStateProvider::Basic(true),
+            "版のある通知は根拠を更新する"
+        );
+    }
 
     #[test]
     fn declares_guarantees_only_for_typescript_versions_the_conformance_suite_passed_on() {

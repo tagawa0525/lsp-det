@@ -36,7 +36,16 @@ lsp-det の次段階は上流への働きかけである（ADR 0009 決定 A-3�
    PATH="$PWD/target/upstream/bin:$PATH" cargo test --test conformance -- --ignored
    ```
 
-   ソースビルドは配布版と違う版を名乗る（rust-analyzer は `0.0.0 (<sha> <date>)`、gopls は `v0.0.0-<date>-<sha>`、pyright は clone の版）。`TESTED_VERSIONS` にないので保証は宣言されず、「測った版に保証を宣言する」テストは失敗する。これは想定どおりで、それ以外（7.1 / 7.2 / 7.3、拒否、再発行）が通ればよい
+   ソースビルドは配布版と違う版を名乗る（rust-analyzer は `0.0.0 (<sha> <date>)`、gopls は `v0.0.0-<date>-<sha>`、pyright は clone の版）。`TESTED_VERSIONS` にないので保証は宣言されず、「測った版に保証を宣言する」テストは失敗する。これは想定どおりで、それ以外（7.1 / 7.2 / 7.3、拒否、再発行）が通ればよい。また `serverInfo` を足す変更を当てたビルドでは、現状の上流を記録した「前提が崩れている。… が serverInfo を返すようになった」の断言が失敗する。これも変更が効いている印で、上流に取り込まれたら準拠テスト側の前提を書き換える
+
+## 用意してある変更（fork のブランチ）
+
+| 上流                       | ブランチ                                                 | 内容                                                                                         | 受け入れ条件               |
+| -------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------- |
+| pyright                    | `tagawa0525/pyright` の `server-info`                    | `languageServerBase.ts` の `initialize()` に `serverInfo: {name: productName, version}`      | 通過                       |
+| typescript-language-server | `tagawa0525/typescript-language-server` の `server-info` | `src/version.ts` に版の読み取りをまとめ、`initialize` の結果に `serverInfo: {name, version}` | 通過（lint・build も通る） |
+
+lsp-det 側は、名前の大文字小文字を区別せず（pyright は "Pyright" と名乗る）、`serverInfo` の版で保証の根拠を置き換えるかを写像が決める（typescript-language-server の版は包み紙の版）ようにしてある
 
 ## Serena
 

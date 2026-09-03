@@ -26,7 +26,7 @@
 - 対応 OS は Linux・macOS・Windows（ADR 0012）。プロセス寿命の追従は `src/process/{linux,macos,windows}.rs` に分かれている。他 OS のコンパイルは `scripts/check-targets.sh`（rustup の stable でクロスターゲットの `cargo check`）で push の前に確かめ、挙動は GitHub Actions の CI（`.github/workflows/ci.yml`、3 OS で `cargo test`）が確かめる。`v*` のタグで `.github/workflows/release.yml` が各 OS のバイナリを Release に添付する
 - 言語サーバーの版は保証の宣言に直結する（`src/adapter/*/TESTED_VERSIONS`）。`flake.lock` を更新して版が変わったら `cargo test --test conformance -- --ignored` を通してから一覧を動かす
 - ドッグフーディングは `dogfood/README.md`（`cargo build --release` → `claude --plugin-dir dogfood/claude-plugin`）。Serena は `dogfood/serena/README.md`
-- 上流に出す変更は `scripts/upstream/README.md` の手順でローカルに確かめる（pyright・typescript-language-server・rust-analyzer・gopls の 4 つの上流に当てるパッチは fork のブランチに用意済み。上流への PR はユーザー確認のうえで出す）（`reference/` の clone をビルドして `target/upstream/bin` を PATH の先頭に置き、`tests/upstream_dev.rs` の受け入れ条件と準拠テストを当てる）。Serena 側は `scripts/serena/probe.py`
+- 上流に出す変更は `scripts/upstream/README.md` の手順でローカルに確かめる（pyright・typescript-language-server・rust-analyzer・gopls の 4 つの上流に当てるパッチは fork のブランチに用意済み。上流への PR はユーザー確認のうえで出す。出すものの一覧と順序は `docs/upstream-submissions.md`）（`reference/` の clone をビルドして `target/upstream/bin` を PATH の先頭に置き、`tests/upstream_dev.rs` の受け入れ条件と準拠テストを当てる）。Serena 側は `scripts/serena/probe.py`
 
 ## 開発プロセス
 

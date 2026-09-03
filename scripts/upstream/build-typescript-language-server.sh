@@ -9,5 +9,5 @@ require_clone typescript-language-server
   pnpm install --frozen-lockfile --ignore-scripts
   pnpm run build
 )
-install_launcher typescript-language-server "node $REFERENCE/typescript-language-server/lib/cli.mjs"
+install_launcher typescript-language-server node "$REFERENCE/typescript-language-server/lib/cli.mjs"
 echo "built: $("$BIN/typescript-language-server" --version)"

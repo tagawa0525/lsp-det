@@ -48,14 +48,18 @@ fn via_lsp_det(command: &str, args: &[&str], root: std::path::PathBuf) -> Server
 /// PATH からコマンドを探す。`ServerUnderTest.program` は絶対パスでも名前でも
 /// よいが、どのビルドが使われたかを失敗時に見せるために解決しておく。
 fn which(command: &str) -> std::path::PathBuf {
-    let out = std::process::Command::new("which")
-        .arg(command)
-        .output()
-        .expect("which を実行できない");
-    let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    assert!(!path.is_empty(), "{command} が PATH にない");
-    eprintln!("upstream_dev: {command} -> {path}");
-    std::path::PathBuf::from(path)
+    let path = std::env::var_os("PATH").expect("PATH がない");
+    let found = std::env::split_paths(&path)
+        .map(|dir| dir.join(command))
+        .find(|candidate| is_executable(candidate))
+        .unwrap_or_else(|| panic!("{command} が PATH にない"));
+    eprintln!("upstream_dev: {command} -> {}", found.display());
+    found
+}
+
+fn is_executable(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
 fn server_info_of(server: &ServerUnderTest) -> Value {

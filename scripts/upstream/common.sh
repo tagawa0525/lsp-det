@@ -12,15 +12,19 @@ REFERENCE="$ROOT/reference"
 BIN="$ROOT/target/upstream/bin"
 mkdir -p "$BIN"
 
-# $1: 起動子の名前、$2: 実行するコマンド (文字列。"$@" が付く)
+# $1: 起動子の名前、$2...: 実行するコマンドの argv (起動子の引数が後ろに付く)。
+# 各引数はシェル用に引用して書き出す (パスに空白や特殊文字があっても壊れない)。
 install_launcher() {
-  local name="$1" command="$2"
+  local name="$1"
+  shift
+  local quoted
+  quoted="$(printf '%q ' "$@")"
   cat > "$BIN/$name" <<LAUNCHER
 #!/usr/bin/env bash
-exec $command "\$@"
+exec ${quoted}"\$@"
 LAUNCHER
   chmod +x "$BIN/$name"
-  echo "installed: $BIN/$name -> $command"
+  echo "installed: $BIN/$name -> $*"
 }
 
 require_clone() {

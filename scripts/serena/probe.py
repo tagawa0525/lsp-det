@@ -16,12 +16,13 @@
 
 lsp-det と上流 (pyright-langserver / typescript-language-server) は PATH で
 解決される。target/upstream/bin を先頭に置けばソースビルドの上流を使う。
+CRASH=1 のプロセス探索は /proc と pgrep に依存する (Linux 専用。lsp-det 自体も
+Linux 専用。v0.1-design.md 2 章)。
 観測の記録は docs/research/serena-integration-measurement.md。
 """
 
 import logging
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -85,7 +86,21 @@ def main() -> None:
     ls_id = LanguageServerId(lang)
     upstream = UPSTREAM[lang]
     base_cmd = ["lsp-det", "--", *upstream] if via_lsp_det else upstream
-    tmp = tempfile.mkdtemp(prefix="serena-probe-")
+    # 一時ディレクトリは例外で抜けても消す。
+    with tempfile.TemporaryDirectory(prefix="serena-probe-") as tmp:
+        run(ls_id, base_cmd, tmp, repo, rel, line, col, crash)
+
+
+def run(
+    ls_id: LanguageServerId,
+    base_cmd: list[str],
+    tmp: str,
+    repo: str,
+    rel: str,
+    line: int,
+    col: int,
+    crash: bool,
+) -> None:
     settings = SolidLSPSettings(
         solidlsp_dir=tmp,
         project_data_path=os.path.join(repo, ".serena"),
@@ -120,7 +135,6 @@ def main() -> None:
             except SolidLSPException as e:
                 log(f"references after crash raised {type(e).__name__}: {str(e)[:900]}")
     log("done")
-    shutil.rmtree(tmp, ignore_errors=True)
 
 
 if __name__ == "__main__":

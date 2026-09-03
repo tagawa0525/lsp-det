@@ -9,5 +9,5 @@ require_clone pyright
   cd packages/pyright
   pnpm run build
 )
-install_launcher pyright-langserver "node $REFERENCE/pyright/packages/pyright/langserver.index.js"
+install_launcher pyright-langserver node "$REFERENCE/pyright/packages/pyright/langserver.index.js"
 echo "built: $(node "$REFERENCE/pyright/packages/pyright/index.js" --version)"

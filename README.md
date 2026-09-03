@@ -1,88 +1,89 @@
 # lsp-det
 
-[English](README.en.md)
+[日本語](README.ja.md)
 
-言語サーバーの「無言の嘘」を消す、サーバー状態プロトコルの参照実装。
+A reference implementation of the server state protocol, which removes the "silent lies" of language servers.
 
-LSP には、サーバーが要求に完全に答えられる状態かをクライアントが機械的に知る手段がない。その結果、インデックス未完了の空配列・壊れたサーバーの成功風の応答・編集を織り込まない結果を、クライアントは正当な答えとして受け取る。エディタでは人間の目とタイミング感覚がこれを補っていた。コーディングエージェントは補わない。`initialize` の直後に `textDocument/references` を投げ、空配列を「参照なし」と読み、そのままリネームや削除を実行する。
+LSP gives a client no machine-readable way to learn whether the server can fully answer a request. As a result, the client accepts an empty array from an unfinished index, a successful-looking response from a broken server, or a result that ignores recent edits, all as legitimate answers. In editors, human eyes and a sense of timing compensated for this. Coding agents do not compensate. They send `textDocument/references` right after `initialize`, read the empty array as "no references", and go ahead with the rename or the deletion.
 
-lsp-det は 2 つのものからなる。
+lsp-det consists of two things.
 
-- **サーバー状態プロトコル**（[docs/spec/server-state.md](docs/spec/server-state.md)）: サーバーの状態を `health` と `readiness` の 2 軸で表す語彙と、その状態のもとで応答の完全性と鮮度を保証する capability。最終目標は LSP 本体への提案
-- **透過プロキシ `lsp-det`**（Rust、単一バイナリ）: クライアントと言語サーバーの間に挟まり、上記のプロトコルを両側に提供する。言語サーバーの語彙をプロトコルに写し、プロトコルを話さないクライアントに代わって横断リクエストを `ready` まで保留する
+- **The server state protocol** ([docs/spec/server-state.md](docs/spec/server-state.md), Japanese; an English translation is planned): a vocabulary that describes a server's state on two axes, `health` and `readiness`, plus capabilities that guarantee completeness and freshness of responses in that state. The end goal is a proposal to LSP itself
+- **The transparent proxy `lsp-det`** (Rust, single binary): sits between a client and a language server and provides the protocol to both sides. It maps the language server's own vocabulary onto the protocol, and on behalf of clients that do not speak the protocol, it holds cross-workspace requests until `ready`
 
-## 何が起きるか
+## What changes
 
-Claude Code に rust-analyzer を lsp-det 経由で使わせた実測（[docs/research/claude-code-dogfooding.md](docs/research/claude-code-dogfooding.md)）:
+Measured with Claude Code driving rust-analyzer through lsp-det ([docs/research/claude-code-dogfooding.md](docs/research/claude-code-dogfooding.md)):
 
-| 場面                                                     | lsp-det なし                               | lsp-det あり                                                                |
-| -------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------- |
-| `initialize` 応答の 6ms 後に `references`                | インデックス中の空配列を成功として受け取る | `ready` まで保留し、完全な結果（2 ファイル 6 箇所）を返す                   |
-| Rust 1935 ファイルのワークスペースで 80 秒のインデックス | 同上                                       | 82 秒保留してから完全な結果。クライアント側のタイムアウトには掛からなかった |
-| tsserver がクラッシュし言語サーバーだけ生き残る          | 以後の `references` が空配列の成功応答     | `health: error` として理由付きのエラーを返す                                |
+| Situation                                              | Without lsp-det                                                | With lsp-det                                                                     |
+| ------------------------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `references` sent 6 ms after the `initialize` response | Receives the empty array of a mid-index server as success      | Held until `ready`, then the complete result (6 locations in 2 files)            |
+| An 80-second index of a 1935-file Rust workspace       | Same                                                           | Held for 82 seconds, then the complete result. The client's timeout did not fire |
+| tsserver crashes and only the language server survives | Every later `references` is an empty array reported as success | An error with the reason, as `health: error`                                     |
 
-保留に時間の上限はない。「一定時間で `ready` とみなす」合成は、消すはずの嘘を作るので持たない（仕様 6 章 6 項）。
+There is no upper bound on holding. Synthesizing "treat it as `ready` after some time" would create the very lie the protocol removes (spec chapter 6, item 6).
 
-## プロトコルの要点
+## The protocol in brief
 
 ```typescript
 interface ServerState {
-  health: "ok" | "warning" | "error";               // 機能しているか
-  readiness: "initializing" | "indexing" | "ready"; // インデックスが完了しているか
-  message?: string;                                 // 人間向け。機械判定に使わない
+  health: "ok" | "warning" | "error";               // is it functioning
+  readiness: "initializing" | "indexing" | "ready"; // is the index complete
+  message?: string;                                 // for humans; never for machine decisions
 }
 ```
 
-| 名前                                | 種別               | 内容                                                                               |
-| ----------------------------------- | ------------------ | ---------------------------------------------------------------------------------- |
-| `experimental/serverState`          | リクエスト         | 問い合わせ時点の `ServerState` を即答する                                          |
-| `experimental/serverStateChanged`   | 通知               | `health` か `readiness` が変わるたびに送る（クライアントが購読を宣言したときのみ） |
-| `serverStateProvider` (server cap.) | `InitializeResult` | `boolean` または `{completeness?, freshness?}`                                     |
-| `serverState` (client cap.)         | `InitializeParams` | 通知の購読と「待つか進むかは自分で判断する」という意思表示                         |
+| Name                                | Kind               | Content                                                                                       |
+| ----------------------------------- | ------------------ | --------------------------------------------------------------------------------------------- |
+| `experimental/serverState`          | Request            | Answers the `ServerState` at the moment of the query, without waiting                         |
+| `experimental/serverStateChanged`   | Notification       | Sent whenever `health` or `readiness` changes (only if the client declared the subscription)  |
+| `serverStateProvider` (server cap.) | `InitializeResult` | `boolean` or `{completeness?, freshness?}`                                                    |
+| `serverState` (client cap.)         | `InitializeParams` | Subscribes to notifications and declares "I read the state and decide whether to wait myself" |
 
-保証は `ready` かつ `health` が `error` でないときに効く。`completeness` はワークスペース横断メソッド（`references` / `definition` / `implementation` / `workspace/symbol` / `rename` / call hierarchy 等の 11 個）の応答が完全であること、`freshness` は受信済みの `didChange` をすべて織り込んでいること。両者は独立で、実装は守れる保証だけを宣言する。
+Guarantees apply when `readiness` is `ready` and `health` is not `error`. `completeness` means that the responses of the cross-workspace methods (the 11 methods `references`, `definition`, `implementation`, `workspace/symbol`, `rename`, call hierarchy and so on) are complete. `freshness` means that every `didChange` received so far has been incorporated. The two are independent, and an implementation declares only the guarantees it can keep.
 
-プロトコルの中に `dead` はない。プロセスの消失は接続の終了として伝わり、生き残った中継層が成功風の応答を返す状態は `health: "error"` で表す。中継層など外から観測する主体は、観測できない軸に `unknown` を使い、観測なしに `ok` や `ready` を名乗らない（8 章）。
+There is no `dead` in the protocol. A vanished process shows up as the end of the connection, and a surviving relay that returns successful-looking responses is `health: "error"`. An observer outside the server, such as a relay, reports `unknown` on an axis it cannot observe and never claims `ok` or `ready` without observation (chapter 8).
 
-既存の語彙との対応（rust-analyzer の `experimental/serverStatus`、gopls の `$/progress`、pyright の起動ログ、typescript-language-server の progress とクラッシュログ、jdtls の `language/status`、clangd の無信号）は仕様 10 章。
+Chapter 10 of the spec maps existing vocabularies onto the protocol: rust-analyzer's `experimental/serverStatus`, gopls's `$/progress`, pyright's startup log, typescript-language-server's progress and crash log, jdtls's `language/status`, and clangd's absence of any signal.
 
-## プロキシの動作
-
-```text
-クライアント ──[素の LSP]── 下流側 ──[LSP + サーバー状態プロトコル]── 上流側 ──[素の LSP]── 言語サーバー
-                            (代行)        lsp-det 内部の境界             (写像)
-```
-
-**上流側**は言語サーバーを代行する。上流が `InitializeResult.serverInfo`（なければ起動時のログ）で名乗る名前で写像を選び、上流の語彙を `ServerState` に写し、`serverStateProvider` を `InitializeResult` に足す。保証は準拠テスト 7.2 / 7.3 を通した版にだけ宣言する。上流が自らプロトコルを話していれば何も足さず、そのまま通す。
-
-| 言語サーバー               | readiness の信号                                             | health の信号                         | 保証を宣言する版                     |
-| -------------------------- | ------------------------------------------------------------ | ------------------------------------- | ------------------------------------ |
-| rust-analyzer              | `experimental/serverStatus` の `quiescent`                   | 同 `health`                           | 1.98.0、2026-08-03                   |
-| gopls                      | `$/progress` "Setting up workspace" の終了                   | "Error loading workspace" の progress | 0.23.0                               |
-| pyright / basedpyright     | `window/logMessage` のファイル列挙完了（フォルダ数ぶん待つ） | なし（`unknown`）                     | pyright 1.1.412、basedpyright 1.39.8 |
-| typescript-language-server | `$/progress` "Initializing JS/TS language features…"         | "[tsserver] Exited" のログ → `error`  | TypeScript 5.9.3                     |
-| その他                     | なし（両軸 `unknown`）                                       |                                       | 宣言しない                           |
-
-**下流側**はクライアントを代行する。クライアントが `experimental.serverState` を宣言していれば状態を転送するだけで待たない。宣言していなければ、仕様 9 章の推奨挙動を代わりに実行する。
-
-| `health` \ `readiness`       | `initializing` / `indexing` | `ready`      | `unknown`    |
-| ---------------------------- | --------------------------- | ------------ | ------------ |
-| `ok` / `warning` / `unknown` | 横断リクエストを保留        | 転送         | 転送         |
-| `error`                      | 即座にエラー                | 即座にエラー | 即座にエラー |
-
-通知・単一ファイルの問い合わせ（hover / completion / documentSymbol 等）・ライフサイクル・サーバーからクライアントへの方向はすべて素通しする。保留中に `$/cancelRequest` や `shutdown` を受けたら、保留分にエラーを応答してから流す。応答を返さない要求は作らない。
-
-メッセージのボディは原文バイトのまま転送する。写像に要る通知と `initialize` の往復だけをパースする。
-
-## 使い方
+## How the proxy works
 
 ```text
-lsp-det -- <言語サーバーの起動コマンド> [args...]
+client ──[plain LSP]── downstream side ──[LSP + server state protocol]── upstream side ──[plain LSP]── language server
+                        (stands in for       the boundary inside lsp-det       (maps the
+                         the client)                                            server's vocabulary)
 ```
 
-フラグはない。写像の選択は上流の名乗りで決まり、時間の非常口も保留の切り替えもない。起動指定はクライアント側の設定に常在させる。
+**The upstream side** stands in for the language server. It selects a mapping by the name the server gives in `InitializeResult.serverInfo` (or, failing that, in its startup log), maps the server's vocabulary onto `ServerState`, and adds `serverStateProvider` to the `InitializeResult`. Guarantees are declared only for versions that passed conformance tests 7.2 and 7.3. If the server speaks the protocol itself, nothing is added and everything passes through.
 
-Claude Code のプラグイン（`.lsp.json`）:
+| Language server            | Readiness signal                                                   | Health signal                          | Versions with guarantees             |
+| -------------------------- | ------------------------------------------------------------------ | -------------------------------------- | ------------------------------------ |
+| rust-analyzer              | `quiescent` in `experimental/serverStatus`                         | `health` in the same notification      | 1.98.0, 2026-08-03                   |
+| gopls                      | End of the `$/progress` "Setting up workspace"                     | The "Error loading workspace" progress | 0.23.0                               |
+| pyright / basedpyright     | File enumeration finished in `window/logMessage` (once per folder) | None (`unknown`)                       | pyright 1.1.412, basedpyright 1.39.8 |
+| typescript-language-server | `$/progress` "Initializing JS/TS language features…"               | The "[tsserver] Exited" log → `error`  | TypeScript 5.9.3                     |
+| Anything else              | None (`unknown` on both axes)                                      |                                        | Not declared                         |
+
+**The downstream side** stands in for the client. If the client declares `experimental.serverState`, the state is forwarded and nothing is held. Otherwise the recommended client behavior of spec chapter 9 is performed on its behalf.
+
+| `health` \ `readiness`       | `initializing` / `indexing`   | `ready`          | `unknown`        |
+| ---------------------------- | ----------------------------- | ---------------- | ---------------- |
+| `ok` / `warning` / `unknown` | Hold cross-workspace requests | Forward          | Forward          |
+| `error`                      | Fail immediately              | Fail immediately | Fail immediately |
+
+Notifications, single-file queries (hover, completion, documentSymbol and so on), lifecycle messages, and everything from server to client pass straight through. A `$/cancelRequest` or `shutdown` received while holding answers the held requests with an error before being forwarded. No request is left without a response.
+
+Message bodies are forwarded as the original bytes. Only the notifications a mapping needs and the `initialize` exchange are parsed.
+
+## Usage
+
+```text
+lsp-det -- <language server command> [args...]
+```
+
+There are no flags. The mapping is chosen by what the server calls itself, and there is neither a time-based escape hatch nor a switch for holding. The launch line lives in the client's configuration.
+
+A Claude Code plugin (`.lsp.json`):
 
 ```json
 {
@@ -99,9 +100,9 @@ Claude Code のプラグイン（`.lsp.json`）:
 }
 ```
 
-4 サーバーぶんの実物は [dogfood/claude-plugin/.lsp.json](dogfood/claude-plugin/.lsp.json)、手順は [dogfood/README.md](dogfood/README.md)。Serena は `.serena/project.yml` の `ls_specific_settings.<言語>.ls_base_cmd` に同じコマンドを書く（[dogfood/serena/README.md](dogfood/serena/README.md)）。
+The real file for all four servers is [dogfood/claude-plugin/.lsp.json](dogfood/claude-plugin/.lsp.json) and the procedure is [dogfood/README.md](dogfood/README.md). For Serena, put the same command in `ls_specific_settings.<language>.ls_base_cmd` of `.serena/project.yml` ([dogfood/serena/README.md](dogfood/serena/README.md)).
 
-lsp-det は stderr に写像の選択と状態遷移を出す。
+lsp-det logs the selected mapping and every state transition to stderr.
 
 ```text
 lsp-det: upstream is "rust-analyzer" version "2026-08-03"; using its mapping, declaring {"completeness":true,"freshness":true}
@@ -110,51 +111,53 @@ lsp-det: [0.213s] server state -> {"health":"ok","readiness":"indexing"} (previo
 lsp-det: [6.712s] server state -> {"health":"ok","readiness":"ready"} (previous held 6.499s)
 ```
 
-対応 OS は Linux のみ。プロセス寿命の管理が `PR_SET_PDEATHSIG` に依存する。
+Linux only. Process lifetime management depends on `PR_SET_PDEATHSIG`.
 
-## ビルドとテスト
+## Build and test
 
-依存は `serde` / `serde_json` / `thiserror` / `libc` だけで、非同期ランタイムは使わない。
+The only dependencies are `serde`, `serde_json`, `thiserror`, and `libc`. There is no async runtime.
 
 ```bash
-nix develop            # rustc、rust-analyzer、gopls、pyright、typescript-language-server を固定する
+nix develop            # pins rustc, rust-analyzer, gopls, pyright, and typescript-language-server
 cargo build --release  # target/release/lsp-det
-cargo test             # 偽の言語サーバー・偽のクライアントによる決定的なテスト
-cargo test --test conformance -- --ignored   # 実サーバー結合 19 件（ローカルのみ、CI では回さない）
+cargo test             # deterministic tests with a fake language server and a fake client
+cargo test --test conformance -- --ignored   # 19 real-server tests (local only, not in CI)
 ```
 
-テストは仕様をそのまま実行可能にしたもので、被験者を差し替えれば実サーバー・実クライアントにも当たる。
+The tests are the spec made executable. Swapping the subject applies them to real servers and real clients.
 
-| テスト                        | 仕様の章     | 被験者                                                                                               |
-| ----------------------------- | ------------ | ---------------------------------------------------------------------------------------------------- |
-| `tests/conformance.rs`        | 7 章、8.4    | lsp-det の上流側。偽の上流（`examples/fake_lsp_server.rs`）と実サーバー 4 種                         |
-| `tests/client_conformance.rs` | 9.1          | lsp-det の下流側。準拠した偽の上流と rust-analyzer を名乗る偽の上流                                  |
-| `tests/upstream_dev.rs`       | 上流への変更 | 上流の fork に当てたパッチの受け入れ条件（[scripts/upstream/README.md](scripts/upstream/README.md)） |
+| Test                          | Spec chapter         | Subject                                                                                                                        |
+| ----------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `tests/conformance.rs`        | 7, 8.4               | The upstream side of lsp-det, against a fake upstream (`examples/fake_lsp_server.rs`) and four real servers                    |
+| `tests/client_conformance.rs` | 9.1                  | The downstream side of lsp-det, against a conformant fake upstream and a fake upstream calling itself rust-analyzer            |
+| `tests/upstream_dev.rs`       | Changes to upstreams | Acceptance criteria for the patches on the upstream forks ([scripts/upstream/README.md](scripts/upstream/README.md), Japanese) |
 
-## 上流への働きかけ
+## Working with upstreams
 
-プロキシは一時的な置き場である。言語サーバーが自らプロトコルを話せば上流側の写像は恒等になり、クライアントが自ら状態を読めば下流側の代行は止まる。準拠する実装が増えるほど lsp-det は薄くなる。
+The proxy is a temporary home. Once a language server speaks the protocol itself, the upstream mapping becomes the identity. Once a client reads the state itself, the downstream stand-in stops. The more conformant implementations exist, the thinner lsp-det becomes.
 
-そのための変更を上流の fork に用意し、ローカルで受け入れ条件を通してある（上流への提出は未着手）。
+The changes for that are prepared on forks of the upstreams and pass their acceptance criteria locally. None has been submitted upstream yet.
 
-| 上流                       | 変更                                                                          |
-| -------------------------- | ----------------------------------------------------------------------------- |
-| pyright                    | `InitializeResult.serverInfo` を返す                                          |
-| typescript-language-server | 同上                                                                          |
-| rust-analyzer              | `experimental/serverStatus` の後継としてプロトコルを話す                      |
-| gopls                      | プロトコルを話す（フォルダごとの初期ロードとロード失敗）                      |
-| Serena                     | `experimental.serverState` を読み、自前の readiness 判定（約 285 行）を捨てる |
+| Upstream                   | Change                                                                                 |
+| -------------------------- | -------------------------------------------------------------------------------------- |
+| pyright                    | Return `InitializeResult.serverInfo`                                                   |
+| typescript-language-server | Same                                                                                   |
+| rust-analyzer              | Speak the protocol as the successor of `experimental/serverStatus`                     |
+| gopls                      | Speak the protocol (per-folder initial load and load failures)                         |
+| Serena                     | Read `experimental.serverState` and drop its own readiness detection (about 285 lines) |
 
-## 文書
+## Documents
 
-| 文書                                                   | 内容                                                                                                                |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| [docs/spec/server-state.md](docs/spec/server-state.md) | サーバー状態プロトコルの規範。他文書と食い違えばこれが正                                                            |
-| [docs/v0.1-design.md](docs/v0.1-design.md)             | プロキシの実装スコープ（上流側・下流側・写像・実行モデル）                                                          |
-| [docs/adr/README.md](docs/adr/README.md)               | 設計判断の索引。生きている決定と却下した案                                                                          |
-| [docs/vision.md](docs/vision.md)                       | 長期構想（宣言範囲・起動方法の宣言は凍結中）                                                                        |
-| [docs/research/](docs/research/)                       | 調査と実測 18 本。各言語サーバーの readiness の実態、先行プロキシ、Serena / Claude Code / Zed / VS Code の LSP 統合 |
+Documents other than this README are written in Japanese.
 
-## 現在地
+| Document                                               | Content                                                                                                                                                          |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [docs/spec/server-state.md](docs/spec/server-state.md) | The normative text of the server state protocol. Where other documents disagree, this one is right                                                               |
+| [docs/v0.1-design.md](docs/v0.1-design.md)             | The implementation scope of the proxy (upstream side, downstream side, mappings, execution model)                                                                |
+| [docs/adr/README.md](docs/adr/README.md)               | Index of design decisions, listing the ones still in force and the rejected alternatives                                                                         |
+| [docs/vision.md](docs/vision.md)                       | Long-term vision (declaration ranges and launch manifests are frozen)                                                                                            |
+| [docs/research/](docs/research/)                       | 18 investigations and measurements: how each language server signals readiness, prior proxies, and the LSP integrations of Serena, Claude Code, Zed, and VS Code |
 
-v0.1（rust-analyzer と gopls）と v0.2（pyright、typescript-language-server、Serena 統合）は完了している。次は上流への提出と、仕様の英訳。
+## Status
+
+v0.1 (rust-analyzer and gopls) and v0.2 (pyright, typescript-language-server, Serena integration) are complete. Next are the upstream submissions and an English translation of the spec.

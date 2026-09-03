@@ -1,0 +1,61 @@
+# v* のタグで各 OS のリリースビルドを作り、GitHub Release に添付する
+# （ADR 0012 決定 E）。バイナリの名前は lsp-det-<target>（Windows は .exe）。
+# テストは CI（main への push と PR）が 3 OS で回しているので、ここでは
+# ビルドだけを行う。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: cargo build --release --target ${{ matrix.target }}
+      - name: Name the binary after its target
+        shell: bash
+        run: |
+          mkdir -p dist
+          ext=""
+          case "${{ matrix.target }}" in *windows*) ext=".exe" ;; esac
+          cp "target/${{ matrix.target }}/release/lsp-det$ext" "dist/lsp-det-${{ matrix.target }}$ext"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lsp-det-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

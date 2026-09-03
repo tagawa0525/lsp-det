@@ -127,32 +127,43 @@ fn upstream_exits_when_lsp_det_dies_abruptly() {
 // 実サーバーが stdin の EOF で終了するか（ローカル専用）
 // ---------------------------------------------------------------------------
 
-/// `initialize` → `initialized` の後に stdin を閉じ、`window` 以内に終了するか。
-/// stdout は捨て続ける（パイプが詰まって終了できない状態を作らない）。
+/// `initialize` の応答を受け取り `initialized` を送った後に stdin を閉じ、
+/// `window` 以内に終了するか。応答を待つのは、起動に失敗して即終了した
+/// ものを「EOF で終了した」と数えないため。終了コードは問わない（EOF を
+/// 異常終了として 1 を返すサーバーがある）。stdout は応答の後も捨て続ける
+/// （パイプが詰まって終了できない状態を作らない）。
 fn exits_on_stdin_eof(mut child: Child, root: &std::path::Path, window: Duration) -> bool {
     let mut stdin = child.stdin.take().expect("stdin is piped");
-    let stdout = child.stdout.take().expect("stdout is piped");
-    std::thread::spawn(move || {
-        let _ = std::io::copy(&mut BufReader::new(stdout), &mut std::io::sink());
-    });
-    for message in [
-        json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-            "processId": std::process::id(),
-            "rootUri": support::file_uri(root),
-            "capabilities": {},
-        }}),
-        json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
-    ] {
-        let body = serde_json::to_vec(&message).unwrap();
-        write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
-        stdin.write_all(&body).unwrap();
-        stdin.flush().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
+    let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "processId": std::process::id(),
+        "rootUri": support::file_uri(root),
+        "capabilities": {},
+    }});
+    write_lsp(&mut stdin, &initialize);
+    loop {
+        let message = lsp_det::framing::read_message(&mut stdout)
+            .expect("stdout を読めない")
+            .expect("initialize に答える前に stdout が閉じた");
+        let value: serde_json::Value = serde_json::from_slice(&message.body).unwrap();
+        if value["id"] == json!(1) {
+            assert!(value["error"].is_null(), "initialize が失敗した: {value}");
+            break;
+        }
     }
+    write_lsp(
+        &mut stdin,
+        &json!({"jsonrpc": "2.0", "method": "initialized", "params": {}}),
+    );
     drop(stdin);
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+    });
 
     let deadline = std::time::Instant::now() + window;
     loop {
-        if child.try_wait().expect("try_wait").is_some() {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            eprintln!("exited on stdin EOF with {status}");
             return true;
         }
         if std::time::Instant::now() >= deadline {
@@ -162,6 +173,13 @@ fn exits_on_stdin_eof(mut child: Child, root: &std::path::Path, window: Duration
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn write_lsp(stdin: &mut impl Write, message: &serde_json::Value) {
+    let body = serde_json::to_vec(message).unwrap();
+    write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).unwrap();
+    stdin.write_all(&body).unwrap();
+    stdin.flush().unwrap();
 }
 
 fn spawn_direct(program: &str, args: &[&str], root: &std::path::Path) -> Child {

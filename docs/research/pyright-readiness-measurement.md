@@ -32,9 +32,22 @@ M5（pyright の写像、ADR 0010）の前提を実サーバーで確かめた�
 | 0.272s | references #1 の応答: **0 件**。同じ瞬間に "Found 3001 source files"。references #2 を送る        |
 | 0.481s | references #2 の応答: 6000 件                                                                     |
 
+## M5 の結果（2026-09-03、写像実装後）
+
+lsp-det 経由（`lsp-det -- pyright-langserver --stdio` / `lsp-det -- basedpyright-langserver --stdio`）で `tests/conformance.rs` の `pyright_*` ignored 6 件を 5 回連続で通した。
+
+| 項目                   | pyright 1.1.412                                                  | basedpyright 1.39.8                                 |
+| ---------------------- | ---------------------------------------------------------------- | --------------------------------------------------- |
+| 写像の選択             | 起動ログ（`serverInfo` なし）                                    | 起動ログ → `serverInfo`（同じ写像なので観測を保つ） |
+| 7.1 遷移               | `initializing` → `ready`（列挙完了）。health は `unknown`        | 同じ                                                |
+| 7.2 完全性             | 通過（`ready` 後の references が `b.py` の呼び出しを返す）       | 通過                                                |
+| 7.3 クロスファイル鮮度 | 通過（`b.py` の `didChange` が `a.py` 起点の references に反映） | 通過                                                |
+
+basedpyright で 1 度失敗した原因は写像側にあった。起動ログ → "Starting service instance" → `serverInfo` 付きの `initialize` 応答の順に届くので、`serverInfo` で写像を作り直すと数えたフォルダが消え、完了ログが数える相手を失う。同じ名前なら写像を保つように直した（`Tracker::select_mapping`）。
+
 ## 一般化してはならない点
 
 - 0 件になる窓（約 0.2 秒）は fixture の規模と本機の速さでの値。列挙はタイマーで分割実行されるので（`maxAnalysisTime.noOpenFilesTimeInMs`）、大規模ワークスペースでは長くなる
 - 単一スレッドで 1 バイトずつ読む計測スクリプトでは最後のフォルダの完了ログが届かないように見えた。スレッド化した読み手では全フォルダ分が届いたので、前者は計測側の問題である。複数フォルダの規則（ADR 0011）はスレッド化した読み手の結果に基づく
-- 7.2 / 7.3 の通過は本文書では測っていない。M5 の準拠テスト（`tests/conformance.rs` の `pyright_*` ignored）で測り、通った版だけ `TESTED_VERSIONS` に載せる
+- 7.2 / 7.3 は 2 ファイルの fixture で測った。大規模ワークスペースで列挙完了後の references が完全かどうかは、pyright が一覧を走査する構造上は同じだが、本文書の測定範囲外
 - クライアントが `logLevel` を Warning 以上に設定すると "Found" も届かない。Claude Code の公式プラグインは設定を送らず、Serena の `initializationOptions` にも `logLevel` はない（`pyright_server.py`）。他のクライアントでは要確認

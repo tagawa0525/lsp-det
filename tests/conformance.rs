@@ -1470,26 +1470,52 @@ fn typescript_language_server_rearms_on_tsconfig_change_with_real_server() {
     client.shutdown();
 }
 
+/// `experimental/serverState` を問い合わせ続けて条件を満たす状態を返す。
+/// 通知を受け取らないクライアント (宣言なし) 用。上限は実サーバーの起動と
+/// ロードを十分に覆う値で、被験者の判定には使わない。
+fn poll_state_until(
+    client: &mut ConformanceClient,
+    done: impl Fn(&lsp_det::state::ServerState) -> bool,
+) -> lsp_det::state::ServerState {
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    loop {
+        let state = client.server_state();
+        if done(&state) {
+            return state;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "20 秒待っても条件を満たさない: {state:?}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// tsserver を落とすと、言語サーバーは生き残って空応答を返す。上流側は
 /// "[tsserver] Exited. Code:" のログで error にし、下流側は references を拒否する。
 #[test]
 #[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
 fn typescript_language_server_tsserver_crash_becomes_health_error_with_real_server() {
+    // 下流側が代行するのは、本プロトコルを宣言しないクライアントに対して
+    // (ADR 0002 決定 3)。宣言しないので通知は来ず、状態は問い合わせで追う。
     let project = support::TempTsProject::with_cross_file_reference("crash");
     let a = project.file("a.ts");
     let mut client = ConformanceClient::start(&real_tsls(&project));
-    client.initialize_with_root(true, &project.root);
+    client.initialize_with_root(false, &project.root);
     client.did_open(&a, "typescript");
-    client.wait_until_ready();
+    let state = poll_state_until(&mut client, |s| s.readiness == Readiness::Ready);
+    assert_eq!(state.health, Health::Ok, "前提が崩れている: {state:?}");
 
     let killed = support::kill_descendants_matching(client.server_pid(), "tsserver");
     assert!(!killed.is_empty(), "tsserver の孫プロセスが見つからない");
 
-    let state = client.await_state_changed();
-    assert_eq!(
-        state.health,
-        Health::Error,
-        "クラッシュを health に写していない: {state:?}"
+    let state = poll_state_until(&mut client, |s| s.health == Health::Error);
+    assert!(
+        state
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("Exited. Code:")),
+        "クラッシュの理由を添えていない: {state:?}"
     );
 
     let id = client.send_request(

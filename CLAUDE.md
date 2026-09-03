@@ -25,7 +25,7 @@
 - `flake.nix` が Rust ツールチェーン・rust-analyzer・go・gopls を固定する（nixpkgs はシステム構成と同じ rev）。`nix develop` か direnv（`.envrc` は `use flake` + `PATH_add target/release`。グローバルの gitignore に負けるので `git add -f` で追跡している）で入る
 - 言語サーバーの版は保証の宣言に直結する（`src/adapter/*/TESTED_VERSIONS`）。`flake.lock` を更新して版が変わったら `cargo test --test conformance -- --ignored` を通してから一覧を動かす
 - ドッグフーディングは `dogfood/README.md`（`cargo build --release` → `claude --plugin-dir dogfood/claude-plugin`）。Serena は `dogfood/serena/README.md`
-- 上流に出す変更は `scripts/upstream/README.md` の手順でローカルに確かめる（`reference/` の clone をビルドして `target/upstream/bin` を PATH の先頭に置き、`tests/upstream_dev.rs` の受け入れ条件と準拠テストを当てる）。Serena 側は `scripts/serena/probe.py`
+- 上流に出す変更は `scripts/upstream/README.md` の手順でローカルに確かめる（pyright・typescript-language-server・rust-analyzer・gopls の 4 つの上流に当てるパッチは fork のブランチに用意済み。上流への PR はユーザー確認のうえで出す）（`reference/` の clone をビルドして `target/upstream/bin` を PATH の先頭に置き、`tests/upstream_dev.rs` の受け入れ条件と準拠テストを当てる）。Serena 側は `scripts/serena/probe.py`
 
 ## 開発プロセス
 

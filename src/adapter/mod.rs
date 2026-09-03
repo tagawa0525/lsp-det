@@ -39,6 +39,14 @@ pub trait Mapping {
     /// 上流→クライアント方向のメッセージから、上流が報告している状態を
     /// 読み取る。読むものがなければ `None` (状態を動かさない)。
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState>;
+    /// 写像を選んだ後に、同じ上流の別の名乗り (`InitializeResult.serverInfo`)
+    /// が届いた。保証の根拠にする版をどう更新するかは写像が決める。pyright は
+    /// serverInfo の版がそのまま製品の版だが、typescript-language-server の
+    /// serverInfo の版は包み紙の版で、保証が依存する解析エンジン (TypeScript)
+    /// の版ではない。既定では何もしない。
+    fn learn_identity(&mut self, info: &ServerInfo) {
+        let _ = info;
+    }
 }
 
 /// 既知の写像すべてが必要とする client capability の和 (設計 4.2)。

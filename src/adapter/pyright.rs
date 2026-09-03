@@ -194,6 +194,14 @@ impl Mapping for PyrightAdapter {
         }
     }
 
+    /// serverInfo の版は製品の版そのもの (起動ログが版を省いていても、
+    /// serverInfo がテスト済みの版を名乗れば保証を宣言する)。
+    fn learn_identity(&mut self, info: &ServerInfo) {
+        let refreshed =
+            PyrightAdapter::for_identity(&info.name.to_ascii_lowercase(), info.version.as_deref());
+        self.version_is_tested = refreshed.version_is_tested;
+    }
+
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
         if !view.is_notification() || view.method() != Some(LOG_MESSAGE_METHOD) {
             return None;

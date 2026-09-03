@@ -66,7 +66,11 @@ impl Tracker {
         {
             // 起動ログで既に同じ写像を選んでいる (basedpyright は両方で名乗る)。
             // 選び直すと起動ログの後に読んだ観測 ("Starting service instance"
-            // の数) が消えるので、写像はそのまま名乗りだけ serverInfo に揃える。
+            // の数) が消えるので、写像はそのまま、新しい名乗りを写像に知らせる
+            // (保証の根拠にする版をどう更新するかは写像が決める)。
+            if let Some(adapter) = self.adapter.as_mut() {
+                adapter.learn_identity(server_info);
+            }
             self.identity = Some(server_info.clone());
             return Some(self.state.clone());
         }
@@ -94,12 +98,10 @@ impl Tracker {
     /// `InitializeResult` に宣言する保証 (仕様 5 章)。
     /// 写像がなければ保証なしの宣言 (`true`)。
     pub fn provider(&self) -> ServerStateProvider {
-        // 保証は名乗り (名前と版) の関数 (仕様 8.2 の 5)。起動ログが版を省き、
-        // 後から `serverInfo` で版が分かったときも、写像 (と観測) は保ったまま
-        // 最新の名乗りで決める。
-        self.identity
+        // 保証は写像に聞く (仕様 8.2 の 5)。どの名乗りのどの版を根拠にするかは
+        // 写像が決める (`Mapping::learn_identity`)。
+        self.adapter
             .as_ref()
-            .and_then(|identity| adapter::select(&identity.name, identity.version.as_deref()))
             .map_or(ServerStateProvider::Basic(true), |adapter| {
                 adapter.guarantees()
             })

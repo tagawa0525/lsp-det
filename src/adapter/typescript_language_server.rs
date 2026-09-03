@@ -34,6 +34,8 @@ use crate::state::{Health, Readiness, ServerState, ServerStateProvider};
 
 const PROGRESS_METHOD: &str = "$/progress";
 const LOG_MESSAGE_METHOD: &str = "window/logMessage";
+/// typescript-language-server 固有の通知。`initialize` 応答の後に届く。
+const TYPESCRIPT_VERSION_METHOD: &str = "$/typescriptVersion";
 /// プロジェクトのロード (`ts-client.ts` の `ServerInitializingIndicator`)。
 const PROJECT_LOAD_TITLE: &str = "Initializing JS/TS language features…";
 /// tsserver の終了 (`ts-client.ts` の `onExit`)。前に "[lspserver] [tsclient] "
@@ -191,11 +193,32 @@ impl Mapping for TypescriptLanguageServerAdapter {
         }
     }
 
+    /// serverInfo の版は包み紙 (typescript-language-server) の版で、保証が依存する
+    /// TypeScript の版ではない。根拠は起動ログと `$/typescriptVersion` から取る
+    /// ので、ここでは何もしない。
+    fn learn_identity(&mut self, info: &ServerInfo) {
+        let _ = info;
+    }
+
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
         if !view.is_notification() {
             return None;
         }
         match view.method() {
+            Some(TYPESCRIPT_VERSION_METHOD) => {
+                // 解析エンジンの版。起動ログが (設定で) 出なかったときの根拠。
+                #[derive(Deserialize)]
+                struct Envelope {
+                    params: Value,
+                }
+                if let Ok(envelope) = serde_json::from_slice::<Envelope>(body)
+                    && let Some(identity) = identity_from_typescript_version(&envelope.params)
+                {
+                    self.version_is_tested =
+                        Self::for_version(identity.version.as_deref()).version_is_tested;
+                }
+                None
+            }
             Some(PROGRESS_METHOD) => {
                 #[derive(Deserialize)]
                 struct Envelope {

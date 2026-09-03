@@ -66,6 +66,9 @@ use lsp_det::framing::{self, RawMessage};
 use serde_json::{Value, json};
 
 fn main() {
+    // プロセス寿命のテスト (tests/process_lifetime.rs) が、lsp-det の
+    // stderr 中継越しに上流の pid を知るための名乗り。
+    eprintln!("fake-lsp-server: pid {}", std::process::id());
     let flags: Vec<String> = std::env::args().skip(1).collect();
     let has = |name: &str| flags.iter().any(|flag| flag == name);
     let exit_before_initialize_result = has("--exit-before-initialize-result");

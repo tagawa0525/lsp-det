@@ -135,6 +135,39 @@ pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// `target/<profile>/examples/pseudo_client`（プロセス寿命のテスト専用の
+/// 擬似クライアント）。探し方は `fake_upstream_binary` と同じ。
+pub fn pseudo_client_binary() -> PathBuf {
+    let mut path = fake_upstream_binary();
+    path.set_file_name("pseudo_client");
+    assert!(
+        path.exists(),
+        "擬似クライアント {} が無い。`cargo test` か `cargo build --examples` を先に実行すること",
+        path.display()
+    );
+    path
+}
+
+/// `pid` のプロセスが `window` 以内に消えたら true。10ms ごとに見る。
+/// 手元に `Child` がないプロセス（殺した親の子）の終了を確かめるためのもの。
+pub fn wait_until_exited(pid: u32, window: Duration) -> bool {
+    let deadline = std::time::Instant::now() + window;
+    while process_is_alive(pid) {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+/// `pid` のプロセスがまだ存在するか。シグナル 0 は届け先の存在確認だけをする。
+#[cfg(unix)]
+pub fn process_is_alive(pid: u32) -> bool {
+    // SAFETY: シグナル 0 は何も送らず、対象の存在と権限だけを確かめる。
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
 enum Incoming {
     Message(Value),
     Closed,

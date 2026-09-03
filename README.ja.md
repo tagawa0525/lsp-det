@@ -110,7 +110,7 @@ lsp-det: [0.213s] server state -> {"health":"ok","readiness":"indexing"} (previo
 lsp-det: [6.712s] server state -> {"health":"ok","readiness":"ready"} (previous held 6.499s)
 ```
 
-対応 OS は Linux のみ。プロセス寿命の管理が `PR_SET_PDEATHSIG` に依存する。
+対応 OS は Linux・macOS・Windows。クライアントがパイプを閉じずに死んだときは、lsp-det が終了して言語サーバーも道連れにする。その機構は OS ごとで、Linux は `PR_SET_PDEATHSIG`、macOS は `kqueue` のプロセスイベント、Windows は Job Object。各 OS のリリースバイナリは `v*` のタグから [GitHub Releases](https://github.com/tagawa0525/lsp-det/releases) に添付される。
 
 ## ビルドとテスト
 
@@ -129,6 +129,7 @@ cargo test --test conformance -- --ignored   # 実サーバー結合 19 件（�
 | ----------------------------- | ------------ | ---------------------------------------------------------------------------------------------------- |
 | `tests/conformance.rs`        | 7 章、8.4    | lsp-det の上流側。偽の上流（`examples/fake_lsp_server.rs`）と実サーバー 4 種                         |
 | `tests/client_conformance.rs` | 9.1          | lsp-det の下流側。準拠した偽の上流と rust-analyzer を名乗る偽の上流                                  |
+| `tests/process_lifetime.rs`   | 設計 4.5     | クライアントや lsp-det が不意に死んだとき lsp-det と上流が終了すること。CI が 3 OS で回す            |
 | `tests/upstream_dev.rs`       | 上流への変更 | 上流の fork に当てたパッチの受け入れ条件（[scripts/upstream/README.md](scripts/upstream/README.md)） |
 
 ## 上流への働きかけ
@@ -153,7 +154,7 @@ cargo test --test conformance -- --ignored   # 実サーバー結合 19 件（�
 | [docs/v0.1-design.md](docs/v0.1-design.md)             | プロキシの実装スコープ（上流側・下流側・写像・実行モデル）                                                          |
 | [docs/adr/README.md](docs/adr/README.md)               | 設計判断の索引。生きている決定と却下した案                                                                          |
 | [docs/vision.md](docs/vision.md)                       | 長期構想（宣言範囲・起動方法の宣言は凍結中）                                                                        |
-| [docs/research/](docs/research/)                       | 調査と実測 18 本。各言語サーバーの readiness の実態、先行プロキシ、Serena / Claude Code / Zed / VS Code の LSP 統合 |
+| [docs/research/](docs/research/)                       | 調査と実測 19 本。各言語サーバーの readiness の実態、先行プロキシ、Serena / Claude Code / Zed / VS Code の LSP 統合 |
 
 ## 現在地
 

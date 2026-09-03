@@ -16,8 +16,7 @@
 
 lsp-det と上流 (pyright-langserver / typescript-language-server) は PATH で
 解決される。target/upstream/bin を先頭に置けばソースビルドの上流を使う。
-CRASH=1 のプロセス探索は /proc と pgrep に依存する (Linux 専用。lsp-det 自体も
-Linux 専用。v0.1-design.md 2 章)。
+CRASH=1 のプロセス探索は /proc と pgrep に依存する (この探索だけ Linux 専用)。
 観測の記録は docs/research/serena-integration-measurement.md。
 """
 

@@ -9,7 +9,7 @@
 3. `docs/v0.1-design.md` — 実装スコープ（上流側・下流側・写像・実行モデル・マイルストーン）
 4. `docs/adr/` — 決定の経緯と却下案。成功基準と構造の根拠は ADR 0009、採用しなかった依存（tokio 等）の理由は ADR 0005
 5. `docs/vision.md` — 長期構想（宣言範囲・起動方法の宣言は凍結中）
-6. `docs/research/` — 調査報告 17 本。実装中の疑問はまずここを検索（先行プロキシの落とし穴、各サーバーの readiness 挙動、Serena / CC の統合仕様が実測済み、CC 経由のドッグフーディング観測は `claude-code-dogfooding.md`）
+6. `docs/research/` — 調査報告 18 本。実装中の疑問はまずここを検索（先行プロキシの落とし穴、各サーバーの readiness 挙動、Serena / CC の統合仕様が実測済み、CC 経由のドッグフーディング観測は `claude-code-dogfooding.md`）
 
 ## 絶対の制約
 
@@ -45,7 +45,7 @@
 - **v0.2（ADR 0010、2026-09-03 決定）**: M5 → M6 → M7 の順。各段は M4 と同じ手順（flake に追加 → 実測記録 → RED → GREEN → 実サーバー結合テスト → `TESTED_VERSIONS`）。README と仕様の英訳、rust-analyzer / gopls への上流 issue は v0.2 と独立に進めてよい
 - **M5 — pyright の写像 完了**（2026-09-03）: `src/adapter/pyright.rs`。信号は `window/logMessage` のファイル列挙完了で `$/progress` ではない（ADR 0011、`docs/research/pyright-readiness-measurement.md`）。pyright は `serverInfo` を返さないので起動ログの名乗りで選ぶ（`Tracker` が `initialize` 応答前に選び、通知はしない。`serverInfo` が同じ名前なら観測を保ち、違う名前なら選び直す）。7.2 / 7.3 を実 pyright 1.1.412 と basedpyright 1.39.8 で通し、製品ごとの一覧で宣言。ドッグフーディングは `dogfood/claude-plugin/.lsp.json` の `pyright-via-lsp-det`
 - **M6 — typescript-language-server の写像 完了**（2026-09-03）: `src/adapter/typescript_language_server.rs`。progress "Initializing JS/TS language features…" で readiness、"[tsserver] Exited. Code:" の Error ログで health error（言語サーバーは生き残って空配列を成功として返すので、下流側の拒否が効く。再起動はない）。名乗りは `initialize` 応答前の "Using Typescript version …" ログと応答後の `$/typescriptVersion`（`docs/research/typescript-language-server-readiness-measurement.md`）。名乗りに出るのは TypeScript の版だけなので `TESTED_VERSIONS` もその版（5.9.3）。7.3 も通り `{completeness, freshness}`。上流側の透過経路は名乗りを読んで既知でないと分かるまで覗き見を省かない。実サーバー結合テストは 19 件（rust-analyzer 4 + gopls 4 + pyright 6 + typescript-language-server 5）。ドッグフーディングは `typescript-language-server-via-lsp-det`
-- **M7 — Serena 統合**（次）: `ls_base_cmd` で python / typescript を lsp-det 経由に
+- **M7 — Serena 統合 完了**（2026-09-03）: 設定（`ls_specific_settings.<言語>.ls_base_cmd`）だけで lsp-det を挟める（`dogfood/serena/README.md`）。Serena 自身の readiness 待ちと lsp-det の保留は両立する。tsserver クラッシュ後の references は Serena 単体では空配列の成功応答、lsp-det 経由では理由付きエラー（`docs/research/serena-integration-measurement.md`）。置き換え候補の Serena コードは約 285 行。v0.2 の 3 マイルストーンはこれで完了
 
 ドッグフーディングは `dogfood/README.md` の手順。観測結果は `docs/research/claude-code-dogfooding.md` に追記する（第 1〜3 回で、経路の成立・起動直後の横断リクエストが保留されて完全な結果になること・82 秒の保留でも CC がタイムアウトしないこと・gopls 経路・`error` の拒否の見せ方を確認済み。CC の `shutdown` は `params: {}` で rust-analyzer に拒否されるが lsp-det は無関係）。観測項目（ドッグフーディングで拾う事実）: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007：通常編集では往復しない）。
 

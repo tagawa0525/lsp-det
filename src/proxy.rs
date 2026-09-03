@@ -320,12 +320,14 @@ impl UpstreamSide {
 
     /// 上流のメッセージを観測し、出力列を返す。
     fn on_upstream(&mut self, msg: RawMessage, gate: &mut Gate) -> Vec<Out> {
-        // handshake 後、写像がなく恒等写像でもなく progress の肩代わりも
-        // 要らなければ、上流メッセージから読むものはない。覗き見 (serde_json は
-        // ボディ全体を字句解析する) を省き、透過経路の負荷を素通しと同じに保つ。
+        // handshake 後、恒等写像でなく progress の肩代わりも要らず、上流が
+        // 既知の写像で観測されているなら、覗き見はその写像のために要る。
+        // 写像がまだないときも省けない: 名乗りは `initialize` 応答の後に届く
+        // ことがある (typescript-language-server の `$/typescriptVersion`。
+        // ADR 0011 決定 A-3)。省けるのは、名乗りを読んで既知でないと分かった後。
         if self.handshake_done
             && !self.identity
-            && !self.tracker.observes_upstream()
+            && self.tracker.upstream_is_unmapped()
             && self.client_declared_progress
         {
             return vec![Out::ToClient(msg)];
@@ -645,8 +647,8 @@ impl StateTracker {
         self.tracker.provider()
     }
 
-    fn observes_upstream(&self) -> bool {
-        self.tracker.observes_upstream()
+    fn upstream_is_unmapped(&self) -> bool {
+        self.tracker.upstream_is_unmapped()
     }
 
     /// 恒等写像のとき、上流から読んだ境界の状態をログする。

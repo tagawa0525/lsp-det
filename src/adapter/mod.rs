@@ -12,6 +12,7 @@
 pub mod gopls;
 pub mod pyright;
 pub mod rust_analyzer;
+pub mod typescript_language_server;
 
 pub use gopls::{GoplsAdapter, TESTED_VERSIONS as GOPLS_TESTED_VERSIONS};
 pub use pyright::{
@@ -19,6 +20,9 @@ pub use pyright::{
 };
 pub use rust_analyzer::{
     RustAnalyzerAdapter, SERVER_STATUS_METHOD, TESTED_VERSIONS as RUST_ANALYZER_TESTED_VERSIONS,
+};
+pub use typescript_language_server::{
+    TESTED_VERSIONS as TYPESCRIPT_LANGUAGE_SERVER_TESTED_VERSIONS, TypescriptLanguageServerAdapter,
 };
 
 use crate::initialize::ServerInfo;
@@ -61,6 +65,9 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         "pyright" | "basedpyright" => {
             Some(Box::new(PyrightAdapter::for_identity(server_name, version)))
         }
+        typescript_language_server::SERVER_NAME => Some(Box::new(
+            TypescriptLanguageServerAdapter::for_version(version),
+        )),
         _ => None,
     }
 }
@@ -68,23 +75,39 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
 /// `serverInfo` を返さない上流の名乗り (ADR 0011 決定 A-2)。
 ///
 /// 上流→クライアント方向の通知から、上流が起動時に自ら送る名乗りを読む。
-/// 今のところ pyright 系の `window/logMessage`
-/// ("Pyright language server 1.1.412 starting") だけ。名乗りでなければ `None`。
-/// 汎用の認識機構は作らない (必要になった写像が自分の認識を足す)。
+/// pyright 系の `window/logMessage` ("Pyright language server 1.1.412
+/// starting") と、typescript-language-server 固有の `$/typescriptVersion`。
+/// 名乗りでなければ `None`。汎用の認識機構は作らない (必要になった写像が
+/// 自分の認識を足す)。
 pub fn identity_from_notification(view: &MessageView, body: &[u8]) -> Option<ServerInfo> {
-    if !view.is_notification() || view.method() != Some("window/logMessage") {
+    if !view.is_notification() {
         return None;
     }
-    #[derive(serde::Deserialize)]
-    struct Envelope {
-        params: LogMessage,
+    match view.method() {
+        Some("window/logMessage") => {
+            #[derive(serde::Deserialize)]
+            struct Envelope {
+                params: LogMessage,
+            }
+            #[derive(serde::Deserialize)]
+            struct LogMessage {
+                message: String,
+            }
+            let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
+            let message = &envelope.params.message;
+            pyright::startup_identity(message)
+                .or_else(|| typescript_language_server::startup_identity(message))
+        }
+        Some("$/typescriptVersion") => {
+            #[derive(serde::Deserialize)]
+            struct Envelope {
+                params: serde_json::Value,
+            }
+            let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
+            typescript_language_server::identity_from_typescript_version(&envelope.params)
+        }
+        _ => None,
     }
-    #[derive(serde::Deserialize)]
-    struct LogMessage {
-        message: String,
-    }
-    let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
-    pyright::startup_identity(&envelope.params.message)
 }
 
 #[cfg(test)]
@@ -103,6 +126,27 @@ mod tests {
         assert!(select("basedpyright", Some("1.39.8")).is_some());
         assert!(select("pyright", None).is_some());
         assert!(select("Pyright", None).is_none(), "鍵は小文字に揃える");
+    }
+
+    #[test]
+    fn identifies_typescript_language_server_by_its_startup_log() {
+        use crate::peek::peek;
+        let body = br#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Using Typescript version (user-setting) 5.9.3 from path \"/x/tsserver.js\""}}"#;
+        let view = peek(body).unwrap();
+        let identity = identity_from_notification(&view, body).expect("起動ログは名乗り");
+        assert_eq!(identity.name, "typescript-language-server");
+        assert_eq!(identity.version.as_deref(), Some("5.9.3"));
+    }
+
+    #[test]
+    fn identifies_typescript_language_server_by_its_typescript_version_notification() {
+        use crate::peek::peek;
+        let body = br#"{"jsonrpc":"2.0","method":"$/typescriptVersion","params":{"version":"5.9.3","source":"user-setting"}}"#;
+        let view = peek(body).unwrap();
+        let identity = identity_from_notification(&view, body).expect("固有の通知は名乗り");
+        assert_eq!(identity.name, "typescript-language-server");
+        assert_eq!(identity.version.as_deref(), Some("5.9.3"));
+        assert!(select(&identity.name, identity.version.as_deref()).is_some());
     }
 
     #[test]

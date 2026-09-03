@@ -44,6 +44,9 @@
 //! - `--request-progress-create`: `initialized` を受けたら
 //!   `window/workDoneProgress/create` リクエスト（id `"wdp-1"`）を送る。
 //!   応答が返ったかは `$/fake/report` の `progressCreateAnswered` で分かる
+//! - `--startup-typescript-version <version>`: `initialize` に応答した直後に
+//!   typescript-language-server 固有の通知 `$/typescriptVersion`
+//!   `{version, source: "fake"}` を送る（実サーバーと同じ順序）
 //! - `$/fake/emitLogMessage`（通知。params は `{type, message}`）:
 //!   `window/logMessage` をそのまま送る（pyright の "Starting service
 //!   instance" / "Found N source files" 等を再現する）
@@ -83,6 +86,11 @@ fn main() {
     let startup_log = flags
         .iter()
         .position(|flag| flag == "--startup-log")
+        .and_then(|i| flags.get(i + 1))
+        .cloned();
+    let startup_typescript_version = flags
+        .iter()
+        .position(|flag| flag == "--startup-typescript-version")
         .and_then(|i| flags.get(i + 1))
         .cloned();
     let mut progress_create_answered = false;
@@ -181,6 +189,16 @@ fn main() {
                     };
                 }
                 respond(&mut stdout, id, result);
+                if let Some(version) = &startup_typescript_version {
+                    send(
+                        &mut stdout,
+                        json!({
+                            "jsonrpc": "2.0",
+                            "method": "$/typescriptVersion",
+                            "params": {"version": version, "source": "fake"}
+                        }),
+                    );
+                }
             }
             "experimental/serverState" if declare_server_state_provider => {
                 respond(

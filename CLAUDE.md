@@ -36,20 +36,15 @@
 - GitHub リモートは作成済み（`github.com/tagawa0525/lsp-det`）。PR + レビュー待ちフローで開発する
 - テストは偽上流・偽クライアントで決定的に。実サーバー結合はローカル smoke のみ（CI に入れない）
 
-## 現在地とマイルストーン
+## 現在地
 
 成功基準は「仕様・上流側と下流側それぞれの準拠テスト・上流側と下流側の参照実装が自己無矛盾で、rust-analyzer と gopls に当てて通ること」（ADR 0009）。作者の Claude Code 環境での稼働は成功基準ではなく観測手段。
 
-- **M1 完了**（2026-08-28）: 素通しプロキシ。フレーミング（`src/framing.rs`）・プロセス寿命（`src/process/`）・イベントループ（`src/proxy.rs`）・CLI（`src/cli.rs`）を TDD で実装。プロセス寿命の 2 経路は `tests/process_lifetime.rs` が 3 OS の CI で検証する（2026-09-04、ADR 0012。それ以前は Linux のみで手動 smoke テスト）
-- **M2 — 上流側（rust-analyzer）完了**（2026-09-03）: 覗き見（`src/peek.rs`）・状態の保持（`src/tracker.rs`）・rust-analyzer の写像（`src/adapter.rs`）・capability 注入と `serverInfo` の読み取り（`src/initialize.rs`）・`experimental/serverState` / `serverStateChanged`・保証の宣言・上流側の準拠テスト（`tests/conformance.rs`、偽上流は `examples/fake_lsp_server.rs`）。ADR 0009 の追従も完了: `dead` の削除、`serverInfo.name` による写像選択と無条件の capability 注入、`window/workDoneProgress/create` の自前応答、テスト済みの版の一覧（`adapter::rust_analyzer::TESTED_VERSIONS`。足すときは実 rust-analyzer で `cargo test --test conformance -- --ignored` を通してから）、`warning` の補正（"Failed to discover workspace." → `error`）、CLI の縮小（`lsp-det -- <上流コマンド>` のみ）、準拠テストの仕様 8.4 への追従。7.2 / 7.3 は rust-analyzer 1.98.0 で確認済み
-- **M3 — 下流側 完了**（2026-09-03）: `src/gate.rs`（判定表・保留キュー・キャンセル・`shutdown` と上流消失での drain）と `src/proxy.rs` の配線。判定表は v0.1-design 4.3 が正。下流側の準拠テストは `tests/client_conformance.rs`（仕様 9.1。準拠した偽上流と rust-analyzer と名乗る偽上流の両方が被験者）。恒等写像のときは上流への `initialize` に `experimental.serverState` を注入し、初期状態を id `lsp-det:serverState` で自ら問い合わせる。打ち切りタイマーはない
-- **M4 — gopls の写像 完了**（2026-09-03）: `src/adapter/gopls.rs`（`$/progress` の "Setting up workspace" と "Error loading workspace" からの合成。写像は `adapter::Mapping` trait に統一し `adapter/{mod,rust_analyzer,gopls}.rs` に分割）。実 gopls v0.23.0 で 7.1 / 7.2 / 7.3 と go.mod 変更時の再発行なしを確認し（`docs/research/gopls-readiness-measurement.md`）、`{completeness, freshness}` を v0.23.0 に宣言。`serverInfo.version` はビルド情報の JSON 文字列。実サーバー結合テストは `cargo test --test conformance -- --ignored`（rust-analyzer 4 件 + gopls 4 件）
-- **v0.2（ADR 0010、2026-09-03 決定）**: M5 → M6 → M7 の順。各段は M4 と同じ手順（flake に追加 → 実測記録 → RED → GREEN → 実サーバー結合テスト → `TESTED_VERSIONS`）。README と仕様の英訳、rust-analyzer / gopls への上流 issue は v0.2 と独立に進めてよい
-- **M5 — pyright の写像 完了**（2026-09-03）: `src/adapter/pyright.rs`。信号は `window/logMessage` のファイル列挙完了で `$/progress` ではない（ADR 0011、`docs/research/pyright-readiness-measurement.md`）。pyright は `serverInfo` を返さないので起動ログの名乗りで選ぶ（`Tracker` が `initialize` 応答前に選び、通知はしない。`serverInfo` が同じ名前なら観測を保ち、違う名前なら選び直す）。7.2 / 7.3 を実 pyright 1.1.412 と basedpyright 1.39.8 で通し、製品ごとの一覧で宣言。ドッグフーディングは `dogfood/claude-plugin/.lsp.json` の `pyright-via-lsp-det`
-- **M6 — typescript-language-server の写像 完了**（2026-09-03）: `src/adapter/typescript_language_server.rs`。progress "Initializing JS/TS language features…" で readiness、"[tsserver] Exited. Code:" の Error ログで health error（言語サーバーは生き残って空配列を成功として返すので、下流側の拒否が効く。再起動はない）。名乗りは `initialize` 応答前の "Using Typescript version …" ログと応答後の `$/typescriptVersion`（`docs/research/typescript-language-server-readiness-measurement.md`）。名乗りに出るのは TypeScript の版だけなので `TESTED_VERSIONS` もその版（5.9.3）。7.3 も通り `{completeness, freshness}`。上流側の透過経路は名乗りを読んで既知でないと分かるまで覗き見を省かない。実サーバー結合テストは 19 件（rust-analyzer 4 + gopls 4 + pyright 6 + typescript-language-server 5）。ドッグフーディングは `typescript-language-server-via-lsp-det`
-- **M7 — Serena 統合 完了**（2026-09-03）: 設定（`ls_specific_settings.<言語>.ls_base_cmd`）だけで lsp-det を挟める（`dogfood/serena/README.md`）。Serena 自身の readiness 待ちと lsp-det の保留は両立する。tsserver クラッシュ後の references は Serena 単体では空配列の成功応答、lsp-det 経由では理由付きエラー（`docs/research/serena-integration-measurement.md`）。置き換え候補の Serena コードは約 285 行。v0.2 の 3 マイルストーンはこれで完了
+- v0.1（M1〜M4: 素通しプロキシ、上流側、下流側、gopls の写像）と v0.2（ADR 0010 の M5〜M7: pyright、typescript-language-server、Serena 統合。ADR 0012 の 3 OS 対応）は完了。マイルストーンごとの内容と日付は `CHANGELOG.md`
+- 次は 0.3.0: ADR 0013（`completeness` を `coverage` に改名し `workspace/symbol` を保証から外す）、0014（`didChangeWatchedFiles` を `freshness` に加える）、0015（下流側の代行: `didChangeWatchedFiles` の代行と重複 `didOpen` の書き換え）。ADR 3 本を先に書いてから実装する。外向きの提出は `docs/upstream-submissions.md`
+- 実サーバーの結合テストは `cargo test --test conformance -- --ignored`（19 件）と `cargo test --test process_lifetime -- --ignored`（4 件）。`TESTED_VERSIONS` を動かすのはこれらを通してから
 
-ドッグフーディングは `dogfood/README.md` の手順。観測結果は `docs/research/claude-code-dogfooding.md` に追記する（第 1〜3 回で、経路の成立・起動直後の横断リクエストが保留されて完全な結果になること・82 秒の保留でも CC がタイムアウトしないこと・gopls 経路・`error` の拒否の見せ方を確認済み。CC の `shutdown` は `params: {}` で rust-analyzer に拒否されるが lsp-det は無関係）。観測項目（ドッグフーディングで拾う事実）: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007：通常編集では往復しない）。
+ドッグフーディングは `dogfood/README.md` の手順。観測結果は `docs/research/claude-code-dogfooding.md` に追記する（第 1〜3 回で、経路の成立・起動直後の横断リクエストが保留されて完全な結果になること・82 秒の保留でも CC がタイムアウトしないこと・gopls 経路・`error` の拒否の見せ方を確認済み）。観測項目: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007: 通常編集では往復しない）。
 
 ### この開発環境の rust-analyzer 起動不能問題（2026-08-28 解消）
 

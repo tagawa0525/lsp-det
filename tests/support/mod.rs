@@ -120,7 +120,7 @@ pub fn fake_upstream_binary() -> PathBuf {
     path.pop(); // deps/
     path.pop(); // <profile>/
     path.push("examples");
-    path.push("fake_lsp_server");
+    path.push(format!("fake_lsp_server{}", std::env::consts::EXE_SUFFIX));
     assert!(
         path.exists(),
         "偽上流 {} が無い。examples をビルドしない起動方法\
@@ -133,6 +133,105 @@ pub fn fake_upstream_binary() -> PathBuf {
 
 pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// `target/<profile>/examples/pseudo_client`（プロセス寿命のテスト専用の
+/// 擬似クライアント）。探し方は `fake_upstream_binary` と同じ。
+pub fn pseudo_client_binary() -> PathBuf {
+    let mut path = fake_upstream_binary();
+    path.set_file_name(format!("pseudo_client{}", std::env::consts::EXE_SUFFIX));
+    assert!(
+        path.exists(),
+        "擬似クライアント {} が無い。`cargo test` か `cargo build --examples` を先に実行すること",
+        path.display()
+    );
+    path
+}
+
+/// `pid` のプロセスが `window` 以内に消えたら true。10ms ごとに見る。
+/// 手元に `Child` がないプロセス（殺した親の子）の終了を確かめるためのもの。
+pub fn wait_until_exited(pid: u32, window: Duration) -> bool {
+    let deadline = std::time::Instant::now() + window;
+    while process_is_alive(pid) {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
+/// `pid` のプロセスがまだ存在するか。シグナル 0 は届け先の存在確認だけをする。
+#[cfg(unix)]
+pub fn process_is_alive(pid: u32) -> bool {
+    // SAFETY: シグナル 0 は何も送らず、対象の存在と権限だけを確かめる。
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+/// 同上 (Windows)。終了したプロセスはハンドルが開けないか、終了コードが
+/// `STILL_ACTIVE` でなくなる。
+#[cfg(windows)]
+pub fn process_is_alive(pid: u32) -> bool {
+    win::process_is_alive(pid)
+}
+
+/// `pid` に SIGKILL (Windows は TerminateProcess) を送る。送れたら true。
+#[cfg(unix)]
+fn force_kill(pid: u32) -> bool {
+    // SAFETY: 自分が起動した被験者の子孫にだけ送る。
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) == 0 }
+}
+
+#[cfg(windows)]
+fn force_kill(pid: u32) -> bool {
+    win::force_kill(pid)
+}
+
+/// テスト補助が使う Windows API。本体 (`src/process/windows.rs`) と同じく
+/// 必要な関数だけを直接宣言する。
+#[cfg(windows)]
+mod win {
+    use std::ffi::c_void;
+
+    type Handle = *mut c_void;
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const PROCESS_TERMINATE: u32 = 0x0001;
+    const STILL_ACTIVE: u32 = 259;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(desired_access: u32, inherit_handle: i32, process_id: u32) -> Handle;
+        fn GetExitCodeProcess(process: Handle, exit_code: *mut u32) -> i32;
+        fn TerminateProcess(process: Handle, exit_code: u32) -> i32;
+        fn CloseHandle(handle: Handle) -> i32;
+    }
+
+    pub fn process_is_alive(pid: u32) -> bool {
+        // SAFETY: 引数は定数と pid。ハンドルは必ず閉じる。
+        unsafe {
+            let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            let mut code = 0u32;
+            let ok = GetExitCodeProcess(handle, &mut code);
+            CloseHandle(handle);
+            ok != 0 && code == STILL_ACTIVE
+        }
+    }
+
+    pub fn force_kill(pid: u32) -> bool {
+        // SAFETY: 自分が起動した被験者の子孫にだけ送る。ハンドルは必ず閉じる。
+        unsafe {
+            let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
+            if handle.is_null() {
+                return false;
+            }
+            let ok = TerminateProcess(handle, 9);
+            CloseHandle(handle);
+            ok != 0
+        }
+    }
 }
 
 enum Incoming {
@@ -822,37 +921,86 @@ impl Drop for TempGoProject {
     }
 }
 
-/// `pid` の子孫のうち、コマンドラインに `needle` を含むものに SIGKILL を送る。
-/// 実 typescript-language-server の tsserver (孫プロセス) を落とすのに使う。
-/// 殺した pid を返す。
+/// `pid` の子孫のうち、コマンドラインに `needle` を含むものに SIGKILL
+/// (Windows は TerminateProcess) を送る。実 typescript-language-server の
+/// tsserver (孫プロセス) を落とすのに使う。殺した pid を返す。
 pub fn kill_descendants_matching(pid: u32, needle: &str) -> Vec<u32> {
     let mut killed = Vec::new();
     let mut frontier = vec![pid];
     while let Some(parent) = frontier.pop() {
-        // pgrep が失敗しても (その親が消えていても) 残りの探索は続ける。
-        let Ok(out) = std::process::Command::new("pgrep")
-            .args(["-P", &parent.to_string()])
-            .output()
-        else {
-            continue;
-        };
-        for child in String::from_utf8_lossy(&out.stdout)
-            .split_whitespace()
-            .filter_map(|s| s.parse::<u32>().ok())
-        {
+        for (child, cmdline) in children_of(parent) {
             frontier.push(child);
-            let cmdline = std::fs::read(format!("/proc/{child}/cmdline")).unwrap_or_default();
-            if String::from_utf8_lossy(&cmdline).contains(needle) {
-                // SAFETY: 自分が起動した被験者の子孫にだけ送る。
-                let sent = unsafe { libc::kill(child as i32, libc::SIGKILL) };
-                // 送れたときだけ「殺した」と数える (既に消えていれば失敗する)。
-                if sent == 0 {
-                    killed.push(child);
-                }
+            // 送れたときだけ「殺した」と数える (既に消えていれば失敗する)。
+            if cmdline.contains(needle) && force_kill(child) {
+                killed.push(child);
             }
         }
     }
     killed
+}
+
+/// `parent` の直接の子と、そのコマンドライン。親が消えていれば空。
+#[cfg(target_os = "linux")]
+fn children_of(parent: u32) -> Vec<(u32, String)> {
+    pgrep_children(parent)
+        .into_iter()
+        .map(|child| {
+            let cmdline = std::fs::read(format!("/proc/{child}/cmdline")).unwrap_or_default();
+            (child, String::from_utf8_lossy(&cmdline).into_owned())
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn children_of(parent: u32) -> Vec<(u32, String)> {
+    pgrep_children(parent)
+        .into_iter()
+        .map(|child| {
+            let out = std::process::Command::new("ps")
+                .args(["-o", "command=", "-p", &child.to_string()])
+                .output()
+                .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+                .unwrap_or_default();
+            (child, out)
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn children_of(parent: u32) -> Vec<(u32, String)> {
+    let script = format!(
+        "Get-CimInstance Win32_Process | Where-Object {{ $_.ParentProcessId -eq {parent} }} \
+         | ForEach-Object {{ \"$($_.ProcessId)`t$($_.CommandLine)\" }}"
+    );
+    let Ok(out) = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (pid, cmdline) = line.split_once('\t')?;
+            Some((pid.trim().parse().ok()?, cmdline.to_string()))
+        })
+        .collect()
+}
+
+/// `pgrep -P` で直接の子を列挙する。pgrep が失敗しても (その親が消えて
+/// いても) 空を返して残りの探索は続く。
+#[cfg(unix)]
+fn pgrep_children(parent: u32) -> Vec<u32> {
+    let Ok(out) = std::process::Command::new("pgrep")
+        .args(["-P", &parent.to_string()])
+        .output()
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .filter_map(|s| s.parse::<u32>().ok())
+        .collect()
 }
 
 /// 一時的な TypeScript プロジェクト。`a.ts` の `target` を `b.ts` の `caller` から呼ぶ。

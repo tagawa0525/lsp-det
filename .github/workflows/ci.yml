@@ -1,0 +1,26 @@
+# 3 つの OS でビルドとテストを回す（ADR 0012 決定 D）。
+# プロセス寿命の結合テスト（tests/process_lifetime.rs）は OS の機構を使うので、
+# macOS と Windows の挙動はここでしか確かめられない。
+# 実サーバーの結合テスト（#[ignore]）は回さない（v0.1-design.md 6 章）。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test

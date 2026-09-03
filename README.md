@@ -111,7 +111,7 @@ lsp-det: [0.213s] server state -> {"health":"ok","readiness":"indexing"} (previo
 lsp-det: [6.712s] server state -> {"health":"ok","readiness":"ready"} (previous held 6.499s)
 ```
 
-Linux only. Process lifetime management depends on `PR_SET_PDEATHSIG`.
+Linux, macOS, and Windows. If the client dies without closing the pipe, lsp-det exits and takes the language server with it, using the mechanism each OS provides: `PR_SET_PDEATHSIG` on Linux, `kqueue` process events on macOS, and a Job Object on Windows. Release binaries for each OS are attached to [GitHub Releases](https://github.com/tagawa0525/lsp-det/releases) from `v*` tags.
 
 ## Build and test
 
@@ -130,6 +130,7 @@ The tests are the spec made executable. Swapping the subject applies them to rea
 | ----------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `tests/conformance.rs`        | 7, 8.4               | The upstream side of lsp-det, against a fake upstream (`examples/fake_lsp_server.rs`) and four real servers                    |
 | `tests/client_conformance.rs` | 9.1                  | The downstream side of lsp-det, against a conformant fake upstream and a fake upstream calling itself rust-analyzer            |
+| `tests/process_lifetime.rs`   | Design 4.5           | lsp-det and its upstream exit when the client or lsp-det dies abruptly, on all three OSes in CI                                |
 | `tests/upstream_dev.rs`       | Changes to upstreams | Acceptance criteria for the patches on the upstream forks ([scripts/upstream/README.md](scripts/upstream/README.md), Japanese) |
 
 ## Working with upstreams
@@ -156,7 +157,7 @@ Documents other than this README are written in Japanese.
 | [docs/v0.1-design.md](docs/v0.1-design.md)             | The implementation scope of the proxy (upstream side, downstream side, mappings, execution model)                                                                |
 | [docs/adr/README.md](docs/adr/README.md)               | Index of design decisions, listing the ones still in force and the rejected alternatives                                                                         |
 | [docs/vision.md](docs/vision.md)                       | Long-term vision (declaration ranges and launch manifests are frozen)                                                                                            |
-| [docs/research/](docs/research/)                       | 18 investigations and measurements: how each language server signals readiness, prior proxies, and the LSP integrations of Serena, Claude Code, Zed, and VS Code |
+| [docs/research/](docs/research/)                       | 19 investigations and measurements: how each language server signals readiness, prior proxies, and the LSP integrations of Serena, Claude Code, Zed, and VS Code |
 
 ## Status
 

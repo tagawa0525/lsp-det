@@ -49,6 +49,10 @@ pub fn exit_with_parent() {
             "lsp-det: cannot watch parent process {parent}: {}; will not follow its death",
             io::Error::last_os_error()
         );
+        // SAFETY: 自分で開いた fd を、他に持ち手がないうちに閉じる。
+        unsafe {
+            libc::close(kq);
+        }
         return;
     }
 

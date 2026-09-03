@@ -84,6 +84,7 @@ unsafe extern "system" {
     fn OpenProcess(desired_access: u32, inherit_handle: Bool, process_id: u32) -> Handle;
     fn WaitForSingleObject(handle: Handle, milliseconds: u32) -> u32;
     fn GetCurrentProcess() -> Handle;
+    fn CloseHandle(handle: Handle) -> Bool;
 }
 
 #[link(name = "ntdll")]
@@ -160,6 +161,10 @@ fn create_job() -> Option<SendHandle> {
             "lsp-det: SetInformationJobObject failed: {}; the upstream will not follow an abrupt death of lsp-det",
             io::Error::last_os_error()
         );
+        // SAFETY: 自分で作ったハンドルを、他に持ち手がないうちに閉じる。
+        unsafe {
+            CloseHandle(job);
+        }
         return None;
     }
     Some(SendHandle(job))

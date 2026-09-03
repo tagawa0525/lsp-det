@@ -47,6 +47,15 @@ impl Tracker {
     /// 同一視すると、M4 で gopls を足したときに match を書き直すことになる。
     pub fn select_mapping(&mut self, server_info: Option<&ServerInfo>) -> Option<ServerState> {
         let server_info = server_info?;
+        if let Some(current) = &self.identity
+            && current.name == server_info.name
+        {
+            // 起動ログで既に同じ写像を選んでいる (basedpyright は両方で名乗る)。
+            // 選び直すと起動ログの後に読んだ観測 ("Starting service instance"
+            // の数) が消えるので、写像はそのまま名乗りだけ serverInfo に揃える。
+            self.identity = Some(server_info.clone());
+            return Some(self.state.clone());
+        }
         self.adopt(server_info.clone())
     }
 

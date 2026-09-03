@@ -204,6 +204,43 @@ mod tests {
     }
 
     #[test]
+    fn reselecting_the_same_mapping_from_server_info_keeps_what_it_observed() {
+        // basedpyright は起動ログで名乗り、"Starting service instance" を出して
+        // から initialize に serverInfo 付きで応答する。serverInfo で選び直す
+        // ときに数えたフォルダを捨てると、完了ログが数える相手を失い ready に
+        // ならない (実 basedpyright 1.39.8 で観測)。
+        let mut tracker = Tracker::new();
+        let based = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"basedpyright language server 1.39.8 starting"}}"#;
+        observe(&mut tracker, based);
+        observe(&mut tracker, PYRIGHT_STARTED);
+        tracker.select_mapping(Some(&ServerInfo {
+            name: "basedpyright".to_string(),
+            version: Some("1.39.8".to_string()),
+        }));
+        let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("数えたフォルダの完了で ready");
+        assert_eq!(ready.readiness, Readiness::Ready);
+    }
+
+    #[test]
+    fn a_different_name_in_server_info_replaces_the_mapping() {
+        // 名前が違えば serverInfo が強い。起動ログの写像は捨てて選び直す。
+        let mut tracker = Tracker::new();
+        observe(&mut tracker, PYRIGHT_STARTUP);
+        let state = tracker
+            .select_mapping(Some(&info("rust-analyzer")))
+            .expect("serverInfo で選び直す");
+        assert_eq!(state.readiness, Readiness::Initializing);
+        assert!(
+            observe(&mut tracker, &status("ok", true)).is_some(),
+            "rust-analyzer の写像"
+        );
+        assert_eq!(
+            tracker.identity().map(|i| i.name.as_str()),
+            Some("rust-analyzer")
+        );
+    }
+
+    #[test]
     fn ordinary_logs_do_not_select_a_mapping() {
         let mut tracker = Tracker::new();
         assert!(observe(&mut tracker, PYRIGHT_FOUND).is_none());

@@ -266,7 +266,7 @@ mod tests {
         // 守れない保証を宣言しないことが仕様 5.1 の要求。
         assert_eq!(
             serde_json::to_string(&ServerStateProvider::complete()).unwrap(),
-            r#"{"completeness":true}"#
+            r#"{"coverage":true}"#
         );
     }
 
@@ -278,7 +278,7 @@ mod tests {
         });
         assert_eq!(
             serde_json::to_string(&both).unwrap(),
-            r#"{"completeness":true,"freshness":true}"#
+            r#"{"coverage":true,"freshness":true}"#
         );
     }
 }

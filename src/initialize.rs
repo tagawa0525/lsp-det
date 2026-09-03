@@ -397,7 +397,7 @@ mod tests {
         let out = declared(body, &ServerStateProvider::complete());
         assert_eq!(
             out["result"]["capabilities"]["experimental"]["serverStateProvider"],
-            serde_json::json!({"completeness": true})
+            serde_json::json!({"coverage": true})
         );
         // 上流の宣言はそのまま残る。
         assert_eq!(

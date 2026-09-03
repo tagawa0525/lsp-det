@@ -312,7 +312,7 @@ fn spec_9_1_5_answers_held_requests_when_the_upstream_exits() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn spec_7_2_completeness_through_the_downstream_side_with_a_fake_upstream() {
+fn spec_7_2_coverage_through_the_downstream_side_with_a_fake_upstream() {
     let subjects = [
         ServerUnderTest::lsp_det_with_conformant_upstream_flags(&[
             "--initial-readiness",

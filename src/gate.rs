@@ -17,9 +17,10 @@ use crate::framing::RawMessage;
 use crate::peek::RequestId;
 use crate::state::{Health, Readiness, ServerState};
 
-/// 仕様 7.0 のワークスペース横断メソッドの一覧。下流側が `ready` を待つ
-/// 対象であり、`workspace/symbol` を除いて `coverage` の保証対象でもある
-/// (ADR 0013)。
+/// 仕様 7.0 の 1 の一覧。下流側が `ready` を待つ (保留する) 対象で、
+/// この定数の役割はそれだけ。`coverage` の保証対象 (仕様 7.0 の 2) は
+/// ここから `workspace/symbol` を除いたもので、コードには現れない
+/// (保証は宣言の意味であり、判定には使わない。ADR 0013)。
 pub const CROSS_WORKSPACE_METHODS: &[&str] = &[
     "textDocument/references",
     "textDocument/definition",

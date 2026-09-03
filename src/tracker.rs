@@ -62,7 +62,7 @@ impl Tracker {
             self.named_but_unknown = true;
         }
         if let Some(current) = &self.identity
-            && current.name == server_info.name
+            && current.name.eq_ignore_ascii_case(&server_info.name)
         {
             // 起動ログで既に同じ写像を選んでいる (basedpyright は両方で名乗る)。
             // 選び直すと起動ログの後に読んだ観測 ("Starting service instance"

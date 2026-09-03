@@ -58,13 +58,16 @@ pub const CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS: &[&str] = &[
 
 /// 上流が名乗った名前に対応する写像。既知でなければ `None`
 /// (上流側は両軸 `unknown` を報告する。仕様 8.2 の 3)。
+///
+/// 名前の大文字小文字は区別しない。`serverInfo.name` は表示用の自由な文字列で
+/// LSP は比較の規則を定めておらず、同じサーバーが "Pyright" (productName) と
+/// "pyright" (起動ログの鍵) の両方で現れる。
 pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mapping>> {
-    match server_name {
+    let key = server_name.to_ascii_lowercase();
+    match key.as_str() {
         "rust-analyzer" => Some(Box::new(RustAnalyzerAdapter::for_version(version))),
         "gopls" => Some(Box::new(GoplsAdapter::for_version(version))),
-        "pyright" | "basedpyright" => {
-            Some(Box::new(PyrightAdapter::for_identity(server_name, version)))
-        }
+        "pyright" | "basedpyright" => Some(Box::new(PyrightAdapter::for_identity(&key, version))),
         typescript_language_server::SERVER_NAME => Some(Box::new(
             TypescriptLanguageServerAdapter::for_version(version),
         )),

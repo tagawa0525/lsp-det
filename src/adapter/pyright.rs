@@ -63,9 +63,9 @@ pub const BASEDPYRIGHT_TESTED_VERSIONS: &[&str] = &["1.39.8"];
 /// 起動ログの名乗りを読む。
 ///
 /// pyright 系は `${productName} language server ${version} starting` を
-/// 送る。productName は "Pyright" または "basedpyright"。写像の鍵は
-/// `serverInfo.name` と同じ小文字の "pyright" / "basedpyright" に揃える
-/// (basedpyright は `serverInfo.name` に "basedpyright" を名乗る)。
+/// 送る。productName は "Pyright" または "basedpyright"。写像の鍵は小文字の
+/// "pyright" / "basedpyright" にする (basedpyright は `serverInfo.name` に
+/// "basedpyright" を名乗る。名前の突き合わせは大文字小文字を区別しない)。
 /// 版は省かれることがあり、そのときは `None`。他の文言には `None`。
 pub fn startup_identity(message: &str) -> Option<ServerInfo> {
     let (product, rest) = message.split_once(STARTUP_INFIX)?;

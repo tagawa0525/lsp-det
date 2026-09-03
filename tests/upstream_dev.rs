@@ -84,9 +84,11 @@ fn pyright_names_itself_in_server_info() {
         &["--stdio"],
         project.root.clone(),
     ));
-    assert_eq!(
-        info["name"],
-        json!("pyright"),
+    // 上流は productName ("Pyright") を名乗る。lsp-det は大文字小文字を区別しない。
+    assert!(
+        info["name"]
+            .as_str()
+            .is_some_and(|n| n.eq_ignore_ascii_case("pyright")),
         "pyright が serverInfo で名乗っていない: {info}"
     );
     assert!(

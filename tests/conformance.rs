@@ -515,13 +515,48 @@ fn basedpyright_is_identified_by_its_server_info() {
 }
 
 #[test]
-fn pyright_spec_8_2_5_declares_no_guarantees_until_measured() {
-    // まだどの版にも 7.2 / 7.3 を当てていない (pyright::TESTED_VERSIONS)。
-    let (mut client, result) = pyright_client(true);
+fn pyright_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
+    // 起動ログの版が pyright::TESTED_VERSIONS になければ保証は宣言しない。
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "none",
+        &["--startup-log", "Pyright language server 1.1.400 starting"],
+    );
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!(true),
         "pyright に測っていない保証を宣言した: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn pyright_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
+    // 7.2 / 7.3 を実 pyright 1.1.412 に当てて通した (pyright_* ignored)。
+    // 版は起動ログから読む (serverInfo がない)。
+    let (mut client, result) = pyright_client(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版に保証を宣言していない: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn basedpyright_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
+    // 7.2 / 7.3 を実 basedpyright 1.39.8 に当てて通した。版は serverInfo から読む。
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "basedpyright",
+        &["--server-version", "1.39.8"],
+    );
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版に保証を宣言していない: {result}"
     );
     client.shutdown();
 }
@@ -1027,9 +1062,10 @@ fn pyright_spec_7_1_through_lsp_det_with_real_pyright() {
         result["result"]["serverInfo"].is_null(),
         "前提が崩れている。pyright が serverInfo を返すようになった: {result}"
     );
-    assert!(
-        !result["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null(),
-        "上流側の宣言がない: {result}"
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版の実 pyright に保証が宣言されていない: {result}"
     );
     let state = client.server_state();
     assert_ne!(
@@ -1057,6 +1093,11 @@ fn pyright_spec_7_1_through_lsp_det_with_real_basedpyright() {
         result["result"]["serverInfo"]["name"],
         json!("basedpyright")
     );
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"completeness": true, "freshness": true}),
+        "測った版の実 basedpyright に保証が宣言されていない: {result}"
+    );
     assert_ne!(client.server_state().readiness, Readiness::Unknown);
     client.wait_until_ready();
     client.shutdown();
@@ -1066,11 +1107,22 @@ fn pyright_spec_7_1_through_lsp_det_with_real_basedpyright() {
 #[test]
 #[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
 fn pyright_spec_7_2_completeness_through_lsp_det_with_real_pyright() {
-    let project = support::TempPyProject::with_cross_file_reference("completeness");
+    py_completeness_with("pyright-langserver", "completeness");
+}
+
+/// 7.2 完全性を実 basedpyright で測る。宣言の根拠。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn pyright_spec_7_2_completeness_through_lsp_det_with_real_basedpyright() {
+    py_completeness_with("basedpyright-langserver", "based-completeness");
+}
+
+fn py_completeness_with(command: &str, tag: &str) {
+    let project = support::TempPyProject::with_cross_file_reference(tag);
     let a = project.file("a.py");
     let b = project.file("b.py");
 
-    let mut client = ConformanceClient::start(&real_pyright(&project, "pyright-langserver"));
+    let mut client = ConformanceClient::start(&real_pyright(&project, command));
     client.initialize_with_root(true, &project.root);
     client.wait_until_ready();
     client.did_open(&a, "python");
@@ -1089,11 +1141,22 @@ fn pyright_spec_7_2_completeness_through_lsp_det_with_real_pyright() {
 #[test]
 #[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
 fn pyright_spec_7_3_cross_file_freshness_through_lsp_det_with_real_pyright() {
-    let project = support::TempPyProject::with_cross_file_reference("freshness");
+    py_freshness_with("pyright-langserver", "freshness");
+}
+
+/// 7.3 鮮度を実 basedpyright で測る。宣言の根拠。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn pyright_spec_7_3_cross_file_freshness_through_lsp_det_with_real_basedpyright() {
+    py_freshness_with("basedpyright-langserver", "based-freshness");
+}
+
+fn py_freshness_with(command: &str, tag: &str) {
+    let project = support::TempPyProject::with_cross_file_reference(tag);
     let a = project.file("a.py");
     let b = project.file("b.py");
 
-    let mut client = ConformanceClient::start(&real_pyright(&project, "pyright-langserver"));
+    let mut client = ConformanceClient::start(&real_pyright(&project, command));
     client.initialize_with_root(true, &project.root);
     client.wait_until_ready();
     client.did_open(&a, "python");

@@ -107,6 +107,12 @@ impl PyrightAdapter {
         Self::for_version(None)
     }
 
+    /// 名乗った名前と版を見て、その製品でテスト済みの版なら保証を宣言する。
+    pub fn for_identity(name: &str, version: Option<&str>) -> Self {
+        let _ = name;
+        Self::for_version(version)
+    }
+
     /// 名乗った版を見て、テスト済みの版なら保証を宣言する。
     pub fn for_version(version: Option<&str>) -> Self {
         let version_is_tested = version.is_some_and(|v| TESTED_VERSIONS.contains(&v.trim()));
@@ -380,13 +386,31 @@ mod tests {
     // --- 保証 ------------------------------------------------------------------
 
     #[test]
-    fn declares_no_guarantees_until_the_conformance_suite_passed_on_a_version() {
-        // 仕様 8.2 の 5。まだどの版にも 7.2 / 7.3 を当てていない。
-        for version in [Some("1.1.412"), Some("1.39.8"), None] {
+    fn declares_guarantees_only_for_versions_the_conformance_suite_passed_on() {
+        // 仕様 8.2 の 5。7.2 / 7.3 を実 pyright 1.1.412 と実 basedpyright 1.39.8 に
+        // 当てて通した (tests/conformance.rs の pyright_* ignored)。版の番号は
+        // 製品ごとに別系列なので、一覧も製品ごとに持つ。
+        assert_eq!(
+            PyrightAdapter::for_identity("pyright", Some("1.1.412")).guarantees(),
+            ServerStateProvider::complete_and_fresh()
+        );
+        assert_eq!(
+            PyrightAdapter::for_identity("basedpyright", Some("1.39.8")).guarantees(),
+            ServerStateProvider::complete_and_fresh()
+        );
+        for (name, version) in [
+            ("pyright", Some("1.1.400")),
+            ("pyright", Some("1.39.8")),
+            ("pyright", None),
+            ("basedpyright", Some("1.1.412")),
+            ("basedpyright", Some("1.39.7")),
+            ("basedpyright", None),
+            ("other", Some("1.1.412")),
+        ] {
             assert_eq!(
-                PyrightAdapter::for_version(version).guarantees(),
+                PyrightAdapter::for_identity(name, version).guarantees(),
                 ServerStateProvider::Basic(true),
-                "測っていない版 {version:?} に保証を宣言した"
+                "測っていない {name} {version:?} に保証を宣言した"
             );
         }
     }

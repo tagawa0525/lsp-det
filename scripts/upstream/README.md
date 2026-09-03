@@ -40,12 +40,21 @@ lsp-det の次段階は上流への働きかけである（ADR 0009 決定 A-3�
 
 ## 用意してある変更（fork のブランチ）
 
-| 上流                       | ブランチ                                                 | 内容                                                                                         | 受け入れ条件               |
-| -------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------- |
-| pyright                    | `tagawa0525/pyright` の `server-info`                    | `languageServerBase.ts` の `initialize()` に `serverInfo: {name: productName, version}`      | 通過                       |
-| typescript-language-server | `tagawa0525/typescript-language-server` の `server-info` | `src/version.ts` に版の読み取りをまとめ、`initialize` の結果に `serverInfo: {name, version}` | 通過（lint・build も通る） |
+| 上流                       | ブランチ                                                 | 内容                                                                                                                                                                                                                               | 受け入れ条件                                                                                |
+| -------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| pyright                    | `tagawa0525/pyright` の `server-info`                    | `languageServerBase.ts` の `initialize()` に `serverInfo: {name: productName, version}`                                                                                                                                            | 通過                                                                                        |
+| typescript-language-server | `tagawa0525/typescript-language-server` の `server-info` | `src/version.ts` に版の読み取りをまとめ、`initialize` の結果に `serverInfo: {name, version}`                                                                                                                                       | 通過（lint・build も通る）                                                                  |
+| rust-analyzer              | `tagawa0525/rust-analyzer` の `server-state`             | `experimental/serverState` 一式（`lsp/ext.rs`、`reload.rs` の `current_server_state`、`main_loop.rs` の通知、capability、`lsp-extensions.md` と hash）。ワークスペース未発見は `error`                                             | 通過（`cargo xtask tidy`、lib tests 99 件も通る）。恒等写像で 7.1 / 7.2 / 7.3 も通る        |
+| gopls                      | `tagawa0525/tools` の `server-state`                     | `server_state.go`（フォルダごとの初期ロードで `indexing` → `ready`、ロード失敗と "Error loading workspace" で `error`）、`protocol.go` に `ServerStateProvider` フック（生成コードの外で `experimental/serverState` を配送）と通知 | 通過（`go test ./internal/server ./internal/protocol` も通る）。恒等写像で 7.2 / 7.3 も通る |
 
-lsp-det 側は、名前の大文字小文字を区別せず（pyright は "Pyright" と名乗る）、`serverInfo` の版で保証の根拠を置き換えるかを写像が決める（typescript-language-server の版は包み紙の版）ようにしてある
+本プロトコルを話す上流（rust-analyzer / gopls のパッチ版）では、lsp-det は恒等写像になり上流の通知をそのまま流す。準拠テストの次の断言は、観測者としての写像の前提なのでパッチ版では失敗するのが正しい:
+
+- `gopls_spec_7_1_through_lsp_det_with_real_gopls` の「`initialize` 直後は `ready` でない」: 小さな fixture では上流が正直に `ready` を答える（仕様 7.1 の 1 は ADR 0009 決定 C-5 で緩めてある）
+- `gopls_does_not_reemit_workspace_setup_on_go_mod_change`: 上流の初期ロードの通知（`indexing` → `ready`）が `wait_until_ready` の後にも受信待ちに残っていて拾われる。go.mod の変更で上流が再発行しているのではない（gopls は go.mod 変更後のリロードをリクエストの中で同期的に行うので `ready` のまま正しい）
+
+lsp-det 側は、名前の大文字小文字を区別せず（pyright は "Pyright" と名乗る）、`serverInfo` の版で保証の根拠を置き換えるかを写像が決める（typescript-language-server の版は包み紙の版）ようにしてある。rust-analyzer のパッチに当てたことで、恒等写像の初期状態の問い合わせが `initialized` より前だった不具合も見つかり直した（PR #26）
+
+`reference/` でコミットするときは `--no-verify` を付ける。本リポジトリ用の commit hook（Conventional Commits の件名、markdownlint の自動修正）が上流の文書まで書き換える
 
 ## Serena
 

@@ -207,15 +207,16 @@ impl Mapping for TypescriptLanguageServerAdapter {
         match view.method() {
             Some(TYPESCRIPT_VERSION_METHOD) => {
                 // 解析エンジンの版。起動ログが (設定で) 出なかったときの根拠。
+                // 版があるときだけ更新する (版のない通知で根拠を捨てない)。
                 #[derive(Deserialize)]
                 struct Envelope {
                     params: Value,
                 }
                 if let Ok(envelope) = serde_json::from_slice::<Envelope>(body)
                     && let Some(identity) = identity_from_typescript_version(&envelope.params)
+                    && let Some(version) = identity.version.as_deref()
                 {
-                    self.version_is_tested =
-                        Self::for_version(identity.version.as_deref()).version_is_tested;
+                    self.version_is_tested = Self::for_version(Some(version)).version_is_tested;
                 }
                 None
             }

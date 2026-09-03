@@ -1023,6 +1023,134 @@ fn spec_7_3_cross_file_freshness_through_lsp_det_with_real_rust_analyzer() {
 }
 
 // ---------------------------------------------------------------------------
+// typescript-language-server の写像 (ADR 0010 決定 B の M6、設計 5.3)
+//
+// serverInfo を返さず readiness の語彙も持たない。上流側は固有の通知
+// `$/typescriptVersion` で写像を選び、"Initializing JS/TS language features…"
+// の $/progress から readiness を、"[tsserver] Exited. Code:" のログから
+// health を合成する。
+// ---------------------------------------------------------------------------
+
+fn tsls_client(declare_server_state: bool) -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_typescript_language_server();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(declare_server_state);
+    (client, result)
+}
+
+#[test]
+fn typescript_language_server_is_identified_by_its_typescript_version_notification() {
+    // 名乗りは initialize 応答の後に届く。写像はその時点で選ばれ、開始状態にいる。
+    let (mut client, result) = tsls_client(true);
+    assert!(
+        result["result"]["serverInfo"].is_null(),
+        "前提が崩れている。偽 typescript-language-server は serverInfo を返さないはず: {result}"
+    );
+    // 名乗りは応答の後なので、届くまで待つ (最初の状態問い合わせの前に届く)。
+    client.make_upstream_begin_project_load("1");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.shutdown();
+}
+
+#[test]
+fn typescript_language_server_is_identified_even_when_the_client_declares_progress() {
+    // クライアントが window.workDoneProgress を宣言していると、上流側は
+    // handshake 後の覗き見を省く経路に入る。写像が未選択の間は省いてはならない。
+    let server = ServerUnderTest::lsp_det_with_fake_typescript_language_server();
+    let mut client = ConformanceClient::start(&server);
+    client.initialize_with_capabilities(json!({
+        "window": {"workDoneProgress": true},
+        "experimental": {"serverState": true}
+    }));
+    client.make_upstream_begin_project_load("1");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.shutdown();
+}
+
+#[test]
+fn typescript_language_server_spec_8_2_5_declares_no_guarantees_until_measured() {
+    let (mut client, result) = tsls_client(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!(true),
+        "測っていない保証を宣言した: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn typescript_language_server_spec_7_1_2_becomes_ready_when_the_project_load_ends() {
+    let (mut client, _) = tsls_client(true);
+    client.make_upstream_begin_project_load("1");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.make_upstream_end_project_load("1");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(state.health, Health::Ok, "ロードの成功で health は ok");
+    client.shutdown();
+}
+
+#[test]
+fn typescript_language_server_spec_7_1_3_rearms_on_the_next_project_load() {
+    // 2 つ目のプロジェクト (または tsconfig の変更) で再発行される。
+    let (mut client, _) = tsls_client(true);
+    client.make_upstream_begin_project_load("1");
+    client.await_state_changed();
+    client.make_upstream_end_project_load("1");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+
+    client.make_upstream_begin_project_load("2");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.make_upstream_end_project_load("2");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn typescript_language_server_spec_7_1_4_reports_a_tsserver_exit_as_health_error() {
+    let (mut client, _) = tsls_client(true);
+    client.make_upstream_begin_project_load("1");
+    client.await_state_changed();
+    client.make_upstream_end_project_load("1");
+    client.await_state_changed();
+
+    client.make_upstream_emit_log_message(
+        1,
+        "[lspserver] [tsclient] [tsserver] Exited. Code: null. Signal: SIGKILL",
+    );
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Error);
+    assert!(
+        state
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("Exited. Code: null")),
+        "失敗の message を添える: {state:?}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn typescript_language_server_ignores_unrelated_progress_and_logs() {
+    let (mut client, _) = tsls_client(true);
+    client.make_upstream_emit_progress(json!({
+        "token": "r",
+        "value": {"kind": "begin", "title": "Finding references"}
+    }));
+    client.make_upstream_emit_progress(json!({"token": "r", "value": {"kind": "end"}}));
+    client.make_upstream_emit_log_message(
+        3,
+        "Using Typescript version (user-setting) 5.9.3 from path x",
+    );
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "無関係なメッセージで状態が動いた"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
 // 実 pyright / basedpyright 結合（ローカル専用。CI に入れない — v0.1-design.md 6 章）
 //
 // pyright-langserver と basedpyright-langserver が PATH にあること (flake.nix)。
@@ -1175,6 +1303,176 @@ fn py_freshness_with(command: &str, tag: &str) {
     assert!(
         after.is_empty(),
         "ready を名乗りながら、消したはずの参照を返した (鮮度違反): {after:#?}"
+    );
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 実 typescript-language-server 結合（ローカル専用。CI に入れない — v0.1-design.md 6 章）
+//
+// typescript-language-server と tsserver (typescript) が PATH にあること (flake.nix)。
+// ---------------------------------------------------------------------------
+
+/// lsp-det 経由で実 typescript-language-server を起動する被験者。
+fn real_tsls(project: &support::TempTsProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec![
+            "--".to_string(),
+            "typescript-language-server".to_string(),
+            "--stdio".to_string(),
+        ],
+        root: project.root.clone(),
+    }
+}
+
+/// `a.ts` の `target` への参照のうち、`file` を指すものだけを返す。
+fn ts_references_in(
+    client: &mut ConformanceClient,
+    a: &std::path::Path,
+    file: &std::path::Path,
+) -> Vec<Value> {
+    let wanted = support::file_uri(file);
+    client
+        .references(a, 0, 16)
+        .into_iter()
+        .filter(|location| location["uri"] == Value::String(wanted.clone()))
+        .collect()
+}
+
+/// ファイルを開くとプロジェクトがロードされ、initializing → indexing → ready と進む。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn typescript_language_server_spec_7_1_through_lsp_det_with_real_server() {
+    let project = support::TempTsProject::with_cross_file_reference("readiness");
+    let mut client = ConformanceClient::start(&real_tsls(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert!(
+        result["result"]["serverInfo"].is_null(),
+        "前提が崩れている。typescript-language-server が serverInfo を返すようになった: {result}"
+    );
+    client.did_open(&project.file("a.ts"), "typescript");
+    client.wait_until_ready();
+    assert_eq!(client.server_state().health, Health::Ok);
+    client.shutdown();
+}
+
+/// 7.2 完全性。宣言の根拠。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn typescript_language_server_spec_7_2_completeness_through_lsp_det_with_real_server() {
+    let project = support::TempTsProject::with_cross_file_reference("completeness");
+    let a = project.file("a.ts");
+    let b = project.file("b.ts");
+
+    let mut client = ConformanceClient::start(&real_tsls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&a, "typescript");
+    client.wait_until_ready();
+
+    let found = ts_references_in(&mut client, &a, &b);
+    assert!(
+        found
+            .iter()
+            .any(|location| location["range"]["start"]["line"] == 3),
+        "ready を名乗りながら b.ts の呼び出しを取りこぼした (完全性違反): {found:#?}"
+    );
+    client.shutdown();
+}
+
+/// 7.3 鮮度 (クロスファイル)。宣言の根拠。仕様 10 章の見込みは「freshness 不可」。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn typescript_language_server_spec_7_3_cross_file_freshness_through_lsp_det_with_real_server() {
+    let project = support::TempTsProject::with_cross_file_reference("freshness");
+    let a = project.file("a.ts");
+    let b = project.file("b.ts");
+
+    let mut client = ConformanceClient::start(&real_tsls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&a, "typescript");
+    client.did_open(&b, "typescript");
+    client.wait_until_ready();
+
+    let before = ts_references_in(&mut client, &a, &b);
+    assert!(
+        !before.is_empty(),
+        "前提が崩れている。b.ts からの参照が見えるはず"
+    );
+
+    client.did_change(&b, 2, support::TS_B_WITHOUT_CALL);
+    assert_eq!(client.server_state().readiness, Readiness::Ready);
+
+    let after = ts_references_in(&mut client, &a, &b);
+    assert!(
+        after.is_empty(),
+        "ready を名乗りながら、消したはずの参照を返した (鮮度違反): {after:#?}"
+    );
+    client.shutdown();
+}
+
+/// tsconfig の変更でロードが再発行され、indexing を経て ready に戻る。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn typescript_language_server_rearms_on_tsconfig_change_with_real_server() {
+    let project = support::TempTsProject::with_cross_file_reference("tsconfig");
+    let mut client = ConformanceClient::start(&real_tsls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&project.file("a.ts"), "typescript");
+    client.wait_until_ready();
+
+    let tsconfig = project.file("tsconfig.json");
+    std::fs::write(
+        &tsconfig,
+        support::TSCONFIG.replace("\"strict\":true", "\"strict\":false"),
+    )
+    .unwrap();
+    client.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": support::file_uri(&tsconfig), "type": 2}]}),
+    );
+    let observed = client
+        .await_notification_within("experimental/serverStateChanged", Duration::from_secs(8))
+        .expect("tsconfig の変更で readiness が動かない (ソースの読みと違う)");
+    assert_eq!(observed["readiness"], json!("indexing"));
+    client.wait_until_ready();
+    client.shutdown();
+}
+
+/// tsserver を落とすと、言語サーバーは生き残って空応答を返す。上流側は
+/// "[tsserver] Exited. Code:" のログで error にし、下流側は references を拒否する。
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn typescript_language_server_tsserver_crash_becomes_health_error_with_real_server() {
+    let project = support::TempTsProject::with_cross_file_reference("crash");
+    let a = project.file("a.ts");
+    let mut client = ConformanceClient::start(&real_tsls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&a, "typescript");
+    client.wait_until_ready();
+
+    let killed = support::kill_descendants_matching(client.server_pid(), "tsserver");
+    assert!(!killed.is_empty(), "tsserver の孫プロセスが見つからない");
+
+    let state = client.await_state_changed();
+    assert_eq!(
+        state.health,
+        Health::Error,
+        "クラッシュを health に写していない: {state:?}"
+    );
+
+    let id = client.send_request(
+        "textDocument/references",
+        json!({
+            "textDocument": {"uri": support::file_uri(&a)},
+            "position": {"line": 0, "character": 16},
+            "context": {"includeDeclaration": false},
+        }),
+    );
+    let response = client.await_response_to(id);
+    assert!(
+        !response["error"].is_null(),
+        "壊れたサーバーの成功風応答をそのまま流した: {response}"
     );
     client.shutdown();
 }

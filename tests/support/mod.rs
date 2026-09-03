@@ -66,6 +66,12 @@ impl ServerUnderTest {
         )
     }
 
+    /// typescript-language-server を演じる偽上流 + lsp-det。`serverInfo` を
+    /// 返さず、`initialize` 応答の直後に `$/typescriptVersion` を送る。
+    pub fn lsp_det_with_fake_typescript_language_server() -> Self {
+        Self::lsp_det_with_upstream("none", &["--startup-typescript-version", "5.9.3"])
+    }
+
     /// 本プロトコルに準拠した偽上流 + lsp-det。上流側は恒等写像になり、
     /// 下流側は上流の状態を境界越しに読む（設計 4.1）。
     pub fn lsp_det_with_conformant_upstream_flags(upstream_flags: &[&str]) -> Self {
@@ -380,6 +386,27 @@ impl ConformanceClient {
     /// pyright 風のファイル列挙完了 (info)。
     pub fn make_upstream_finish_enumeration(&mut self, message: &str) {
         self.make_upstream_emit_log_message(3, message);
+    }
+
+    /// typescript-language-server 風のプロジェクトロードの begin。
+    pub fn make_upstream_begin_project_load(&mut self, token: &str) {
+        self.make_upstream_emit_progress(json!({
+            "token": token,
+            "value": {"kind": "begin", "title": "Initializing JS/TS language features…"}
+        }));
+    }
+
+    /// 同じく end。
+    pub fn make_upstream_end_project_load(&mut self, token: &str) {
+        self.make_upstream_emit_progress(json!({
+            "token": token,
+            "value": {"kind": "end"}
+        }));
+    }
+
+    /// 被験者 (lsp-det) の pid。子孫プロセスを探すのに使う。
+    pub fn server_pid(&self) -> u32 {
+        self.child.id()
     }
 
     /// gopls 風の "Setting up workspace" の begin。
@@ -786,6 +813,74 @@ impl Drop for TempGoProject {
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
+
+/// `pid` の子孫のうち、コマンドラインに `needle` を含むものに SIGKILL を送る。
+/// 実 typescript-language-server の tsserver (孫プロセス) を落とすのに使う。
+/// 殺した pid を返す。
+pub fn kill_descendants_matching(pid: u32, needle: &str) -> Vec<u32> {
+    let mut killed = Vec::new();
+    let mut frontier = vec![pid];
+    while let Some(parent) = frontier.pop() {
+        let Ok(out) = std::process::Command::new("pgrep")
+            .args(["-P", &parent.to_string()])
+            .output()
+        else {
+            break;
+        };
+        for child in String::from_utf8_lossy(&out.stdout)
+            .split_whitespace()
+            .filter_map(|s| s.parse::<u32>().ok())
+        {
+            frontier.push(child);
+            let cmdline = std::fs::read(format!("/proc/{child}/cmdline")).unwrap_or_default();
+            if String::from_utf8_lossy(&cmdline).contains(needle) {
+                // SAFETY: 自分が起動した被験者の子孫にだけ送る。
+                unsafe {
+                    libc::kill(child as i32, libc::SIGKILL);
+                }
+                killed.push(child);
+            }
+        }
+    }
+    killed
+}
+
+/// 一時的な TypeScript プロジェクト。`a.ts` の `target` を `b.ts` の `caller` から呼ぶ。
+pub struct TempTsProject {
+    pub root: PathBuf,
+}
+
+impl TempTsProject {
+    pub fn with_cross_file_reference(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-ts-{tag}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("一時プロジェクトを作れない");
+        std::fs::write(root.join("tsconfig.json"), TSCONFIG).unwrap();
+        std::fs::write(root.join("a.ts"), TS_A).unwrap();
+        std::fs::write(root.join("b.ts"), TS_B_WITH_CALL).unwrap();
+        TempTsProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempTsProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+pub const TSCONFIG: &str = r#"{"compilerOptions":{"strict":true,"module":"esnext","target":"es2020","moduleResolution":"bundler"},"include":["**/*.ts"]}"#;
+/// `target` は 1 行目の 17 文字目 (0 起点で line 0, character 16) にある。
+pub const TS_A: &str = "export function target(): number {\n  return 1;\n}\n";
+/// 呼び出しは 4 行目 (0 起点で line 3)。1 行目の import も参照として数えられる。
+pub const TS_B_WITH_CALL: &str =
+    "import { target } from './a';\n\nexport function caller(): number {\n  return target();\n}\n";
+pub const TS_B_WITHOUT_CALL: &str = "export function caller(): number {\n  return 1;\n}\n";
 
 /// 一時的な Python プロジェクト。`a.py` の `target` を `b.py` の `caller` から呼ぶ。
 /// pyright は `initialize` の `workspaceFolders` をフォルダごとの service

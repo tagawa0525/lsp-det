@@ -12,6 +12,7 @@
 pub mod gopls;
 pub mod pyright;
 pub mod rust_analyzer;
+pub mod typescript_language_server;
 
 pub use gopls::{GoplsAdapter, TESTED_VERSIONS as GOPLS_TESTED_VERSIONS};
 pub use pyright::{
@@ -19,6 +20,9 @@ pub use pyright::{
 };
 pub use rust_analyzer::{
     RustAnalyzerAdapter, SERVER_STATUS_METHOD, TESTED_VERSIONS as RUST_ANALYZER_TESTED_VERSIONS,
+};
+pub use typescript_language_server::{
+    TESTED_VERSIONS as TYPESCRIPT_LANGUAGE_SERVER_TESTED_VERSIONS, TypescriptLanguageServerAdapter,
 };
 
 use crate::initialize::ServerInfo;
@@ -61,6 +65,9 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         "pyright" | "basedpyright" => {
             Some(Box::new(PyrightAdapter::for_identity(server_name, version)))
         }
+        typescript_language_server::SERVER_NAME => Some(Box::new(
+            TypescriptLanguageServerAdapter::for_version(version),
+        )),
         _ => None,
     }
 }
@@ -103,6 +110,17 @@ mod tests {
         assert!(select("basedpyright", Some("1.39.8")).is_some());
         assert!(select("pyright", None).is_some());
         assert!(select("Pyright", None).is_none(), "鍵は小文字に揃える");
+    }
+
+    #[test]
+    fn identifies_typescript_language_server_by_its_typescript_version_notification() {
+        use crate::peek::peek;
+        let body = br#"{"jsonrpc":"2.0","method":"$/typescriptVersion","params":{"version":"5.9.3","source":"user-setting"}}"#;
+        let view = peek(body).unwrap();
+        let identity = identity_from_notification(&view, body).expect("固有の通知は名乗り");
+        assert_eq!(identity.name, "typescript-language-server");
+        assert_eq!(identity.version.as_deref(), Some("5.9.3"));
+        assert!(select(&identity.name, identity.version.as_deref()).is_some());
     }
 
     #[test]

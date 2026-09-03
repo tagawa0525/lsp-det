@@ -44,13 +44,21 @@ const ENUMERATION_EMPTY: &str = "No source files found.";
 /// 再列挙の開始 (`sourceEnumerator.ts` のコンストラクタ、log レベル)。
 const ENUMERATION_STARTED: &str = "Searching for source files";
 
-/// 準拠テスト 7.2 / 7.3 を実 pyright / basedpyright に当てて通した版。
-/// 名乗り (`serverInfo.version` または起動ログの版) と完全一致で突き合わせる。
+/// 準拠テスト 7.2 / 7.3 を実 pyright に当てて通した版。名乗り (起動ログの
+/// 版。pyright は `serverInfo` を返さない) と完全一致で突き合わせる。
 ///
 /// 一覧にない版には保証を宣言しない。足すときは、その版で
 /// `cargo test --test conformance -- --ignored pyright_` を通してから
 /// (守れない保証の宣言は仕様 5.1 違反)。
-pub const TESTED_VERSIONS: &[&str] = &[];
+///
+/// 通した記録: 1.1.412 (nixpkgs)、2026-09-03、5 回連続。
+pub const TESTED_VERSIONS: &[&str] = &["1.1.412"];
+
+/// 同じく basedpyright。版の番号は pyright と別系列なので一覧も別に持つ。
+/// 名乗りは `serverInfo.version` (起動ログにも同じ版が出る)。
+///
+/// 通した記録: 1.39.8 (nixpkgs、pyright 1.1.410 由来)、2026-09-03、5 回連続。
+pub const BASEDPYRIGHT_TESTED_VERSIONS: &[&str] = &["1.39.8"];
 
 /// 起動ログの名乗りを読む。
 ///
@@ -104,18 +112,17 @@ impl Default for PyrightAdapter {
 impl PyrightAdapter {
     /// 版を名乗らない pyright 向け。保証は宣言しない。
     pub fn new() -> Self {
-        Self::for_version(None)
+        Self::for_identity("pyright", None)
     }
 
     /// 名乗った名前と版を見て、その製品でテスト済みの版なら保証を宣言する。
     pub fn for_identity(name: &str, version: Option<&str>) -> Self {
-        let _ = name;
-        Self::for_version(version)
-    }
-
-    /// 名乗った版を見て、テスト済みの版なら保証を宣言する。
-    pub fn for_version(version: Option<&str>) -> Self {
-        let version_is_tested = version.is_some_and(|v| TESTED_VERSIONS.contains(&v.trim()));
+        let tested: &[&str] = match name {
+            "pyright" => TESTED_VERSIONS,
+            "basedpyright" => BASEDPYRIGHT_TESTED_VERSIONS,
+            _ => &[],
+        };
+        let version_is_tested = version.is_some_and(|v| tested.contains(&v.trim()));
         PyrightAdapter {
             version_is_tested,
             state: ServerState::initializing(),

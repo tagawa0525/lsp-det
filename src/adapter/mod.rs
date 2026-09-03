@@ -14,7 +14,9 @@ pub mod pyright;
 pub mod rust_analyzer;
 
 pub use gopls::{GoplsAdapter, TESTED_VERSIONS as GOPLS_TESTED_VERSIONS};
-pub use pyright::{PyrightAdapter, TESTED_VERSIONS as PYRIGHT_TESTED_VERSIONS};
+pub use pyright::{
+    BASEDPYRIGHT_TESTED_VERSIONS, PyrightAdapter, TESTED_VERSIONS as PYRIGHT_TESTED_VERSIONS,
+};
 pub use rust_analyzer::{
     RustAnalyzerAdapter, SERVER_STATUS_METHOD, TESTED_VERSIONS as RUST_ANALYZER_TESTED_VERSIONS,
 };
@@ -56,7 +58,9 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
     match server_name {
         "rust-analyzer" => Some(Box::new(RustAnalyzerAdapter::for_version(version))),
         "gopls" => Some(Box::new(GoplsAdapter::for_version(version))),
-        "pyright" | "basedpyright" => Some(Box::new(PyrightAdapter::for_version(version))),
+        "pyright" | "basedpyright" => {
+            Some(Box::new(PyrightAdapter::for_identity(server_name, version)))
+        }
         _ => None,
     }
 }

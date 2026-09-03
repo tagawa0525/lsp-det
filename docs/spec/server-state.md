@@ -91,10 +91,12 @@ interface ServerCapabilities {
     serverStateProvider?: boolean | {
       /**
        * readiness が "ready" かつ health が "error" でないとき、
-       * 7.0 に列挙するワークスペース横断メソッドの応答が完全である
-       * （後から同じ問い合わせの結果が増えることがない）ことを保証する。
+       * 7.0 の保証対象メソッドの応答がワークスペース全体のインデックスに
+       * 基づく（インデックスの進行によって後から同じ問い合わせの結果が
+       * 増えることがない）ことを保証する。件数の上限による打ち切りは
+       * 対象外（10 章）。
        */
-      completeness?: boolean;
+      coverage?: boolean;
       /**
        * readiness が "ready" かつ health が "error" でないとき、
        * 受信済みの textDocument/didChange をすべて織り込んだ応答を
@@ -117,12 +119,12 @@ interface ClientCapabilities {
 
 `serverStateProvider: true`（または両フラグなし）は、状態の通知そのものだけを約束する。`indexing` 中の応答が不完全でありうるという警告として、それだけでも価値を持つ。
 
-`completeness` と `freshness` は LSP の他の capability（`renameProvider: boolean | { prepareProvider }` 等）と同じくオプションであり、`ready` が結果について何を意味するかを足す。両者は**独立**で順序関係はない。現実のサーバーは 4 象限すべてに存在する:
+`coverage` と `freshness` は LSP の他の capability（`renameProvider: boolean | { prepareProvider }` 等）と同じくオプションであり、`ready` が結果について何を意味するかを足す。両者は**独立**で順序関係はない。現実のサーバーは 4 象限すべてに存在する:
 
-|                       | freshness                                                    | freshness なし                              |
-| --------------------- | ------------------------------------------------------------ | ------------------------------------------- |
-| **completeness**      | スナップショット方式 + 全インデックス（rust-analyzer）       | 全インデックスだが非同期処理（tsserver 系） |
-| **completeness なし** | リクエスト毎スナップショットだが全インデックスなし（clangd） | 保証なし                                    |
+|                   | freshness                                                    | freshness なし                              |
+| ----------------- | ------------------------------------------------------------ | ------------------------------------------- |
+| **coverage**      | スナップショット方式 + 全インデックス（rust-analyzer）       | 全インデックスだが非同期処理（tsserver 系） |
+| **coverage なし** | リクエスト毎スナップショットだが全インデックスなし（clangd） | 保証なし                                    |
 
 実装は自分が守れる保証だけを宣言する。守れない保証の宣言は本プロトコルへの違反である。
 
@@ -134,7 +136,7 @@ interface ClientCapabilities {
 
 ## 6. セマンティクス
 
-1. **完全性**（`completeness` 宣言時）: `readiness` が `"ready"` かつ `health` が `"error"` でないとき、7.0 のメソッドへの応答は完全な結果でなければならない
+1. **網羅**（`coverage` 宣言時）: `readiness` が `"ready"` かつ `health` が `"error"` でないとき、7.0 の保証対象メソッドへの応答はワークスペース全体のインデックスに基づかなければならず、インデックスの進行によって後から同じ問い合わせの結果が増えてはならない。サーバーが件数の上限を持つ検索（`workspace/symbol`）は対象外である（7.0、10 章）
 2. **鮮度**（`freshness` 宣言時）: `readiness` が `"ready"` かつ `health` が `"error"` でないとき、それまでに受信した `textDocument/didChange` はすべて織り込み済みでなければならない。この保証の実質はクロスファイルの鮮度（変更したファイル以外を起点とする問い合わせに、インデックスが変更を反映していること）である。単一ファイル内の変更→問い合わせの多くは、LSP の既存の処理順序保証（同一接続では後続リクエストが先行通知の後に処理される）だけで満たされる
 3. **再インデックス**: ワークスペースの再解析（依存ファイル変更、ブランチ切り替え等）が始まったら、`readiness` を `"indexing"` に戻して通知しなければならない
 4. **既存機構との関係**: `$/progress` は人間向けの進捗表示であり本プロトコルを代替しない。`ServerCancelled` エラーはポーリングを強いるため本プロトコルを代替しない（LSP issue #1367 の議論を参照）
@@ -145,9 +147,10 @@ interface ClientCapabilities {
 
 準拠テストの fixture は、インデックスに観測可能な時間を要する規模（ファイル数）でなければならない。小規模な fixture では `initialize` 応答の時点で既に `ready` に達し、7.1 の 3 の遷移が観測できない。これはテスト側の前提であり、サーバーが `initialize` 直後に正直に `ready` を返すことを禁じるものではない。
 
-### 7.0 対象メソッド（completeness の保証対象）
+### 7.0 ワークスペース横断メソッド
 
-`textDocument/references`, `textDocument/definition`, `textDocument/typeDefinition`, `textDocument/declaration`, `textDocument/implementation`, `workspace/symbol`, `textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls`, `callHierarchy/outgoingCalls`, `textDocument/rename`, `textDocument/prepareRename`
+1. **一覧**（9 章で `ready` を待つ対象）: `textDocument/references`, `textDocument/definition`, `textDocument/typeDefinition`, `textDocument/declaration`, `textDocument/implementation`, `workspace/symbol`, `textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls`, `callHierarchy/outgoingCalls`, `textDocument/rename`, `textDocument/prepareRename`
+2. **`coverage` の保証対象**: 1 から `workspace/symbol` を除いたもの。`workspace/symbol` はエディタのピッカー向けのあいまい検索で、サーバーが件数の上限を持ち、打ち切りを伝える語彙が LSP にない（10 章）。インデックス中の応答が部分的である点は変わらないので、待つ対象には残す
 
 ### 7.1 保証なしの宣言
 
@@ -156,7 +159,7 @@ interface ClientCapabilities {
 3. 依存変更の後に `"ready"` → `"indexing"` → `"ready"` の遷移が観測できる
 4. インデックスの失敗（ロードできないワークスペース等）が `health` の `"error"` または `"warning"` として報告される（6 章 5 項）
 
-### 7.2 completeness 宣言時
+### 7.2 coverage 宣言時
 
 1. `"ready"` になった後の `textDocument/references` が、事前計算した完全な結果と一致する
 
@@ -187,7 +190,7 @@ interface ClientCapabilities {
 2. **最初の信号まで `health` は `unknown`**。サーバーの語彙（rust-analyzer の `experimental/serverStatus` 等）を写す観測者も、最初の信号が届くまでは `health` を知らない。`readiness` は「initialize 直後」に対応する `initializing` から始めてよい
 3. **信号のないサーバーは両軸 `unknown`**。readiness を伝える語彙を持たないサーバー（clangd 等）を代行する観測者は、両軸 `unknown` を報告する。これは正直な準拠であり、`initializing` に留め置く（「まだ何も答えられない」という嘘）ことも `ready` を名乗ることもしてはならない
 4. **6 章 3 項と 7.1 の 3 は `readiness` を追跡している観測者にのみ適用する**。両軸 `unknown` の観測者は再インデックスを観測できない
-5. **保証の宣言は観測に基づく**。観測者がサーバーに代わって `completeness` / `freshness` を宣言できるのは、そのサーバーの当該版に 7.2 / 7.3 を当てて通った場合に限る。観測者はサーバーの内部を保証できず、テストを通した版の範囲を超えて宣言してはならない。サーバーは `InitializeResult.serverInfo` で名前と版を名乗るので、観測者はそれで範囲を判定できる
+5. **保証の宣言は観測に基づく**。観測者がサーバーに代わって `coverage` / `freshness` を宣言できるのは、そのサーバーの当該版に 7.2 / 7.3 を当てて通った場合に限る。観測者はサーバーの内部を保証できず、テストを通した版の範囲を超えて宣言してはならない。サーバーは `InitializeResult.serverInfo` で名前と版を名乗るので、観測者はそれで範囲を判定できる
 6. **サーバーが自ら宣言していれば観測者は加えない**。上流の `InitializeResult` に `serverStateProvider` があれば、中継層はサーバーの宣言をそのまま通し、`experimental/serverState` を上流へ転送し、自前の通知を送らない。同一接続に送信者の異なる 2 系統の状態が流れることを避けるためである。中継層の宣言でサーバーの宣言を隠すことは 5.1 の趣旨に反する
 7. **プロセスの消失は本プロトコルの値ではない**。サーバープロセスの終了は接続の終了（stdio の EOF 等）として伝わり、既存のクライアントはそれで再起動を判断する。中継層は上流の消失を観測したら、未応答のリクエストにエラーを応答したうえで自分の接続も閉じる。「サーバーが死んだ」を表す値を本プロトコルに設けない理由は、死んだサーバーは通知を送れず、生き残った中継層が成功風の応答を返す状態は `health: "error"` で表せるからである
 
@@ -214,7 +217,7 @@ interface ClientCapabilities {
 1. `readiness` が `"ready"` でなく、かつ `health` が `"error"` でないとき、7.0 のメソッドの要求を出す前に `"ready"` を待つ。待つことに時間の上限を置く必要はない。応答が返らない状況の扱いはクライアント自身のタイムアウトの責任であり、本プロトコルの値とは無関係である
 2. `health` が `"error"` のとき、待たずに失敗として扱う。壊れたサーバーを待ち続けることは本プロトコルの意図に反する（6 章 5 項）
 3. `readiness` が `"unknown"` のとき、待たずに進む。待つべき信号が存在しない
-4. 7.0 以外のメソッド（`textDocument/hover`、`textDocument/completion`、`textDocument/documentSymbol` 等）は `"indexing"` 中も待たない。これらは `completeness` の保証対象ではなく、待っても完全性は得られない
+4. 7.0 以外のメソッド（`textDocument/hover`、`textDocument/completion`、`textDocument/documentSymbol` 等）は `"indexing"` 中も待たない。これらは `coverage` の保証対象ではなく、待っても網羅は得られない
 5. `health` が `"warning"` のとき、`"ok"` と同じく進む。待っても改善しない
 6. 中継層として非対応クライアントを代行する場合、代行の都合で応答を返さない要求を作らない。クライアントが `$/cancelRequest` を送ったら該当する保留中の要求にキャンセルのエラーを応答し、`shutdown` を受けたら保留中の要求すべてにエラーを応答してから `shutdown` を上流へ流す
 
@@ -230,14 +233,16 @@ interface ClientCapabilities {
 
 ## 10. 既存実装との対応
 
-| 実装                       | 既存の語彙                                                                                                                                                                                              | 本プロトコルへの写像                                                                                                                                            | 宣言できる保証（見込み）                                                                                                                                 |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| rust-analyzer              | `experimental/serverStatus` の `health` / `quiescent`                                                                                                                                                   | `health` はそのまま、`quiescent: true` → `readiness: "ready"`。本プロトコルは事実上その後継                                                                     | completeness + freshness（準拠テスト 7.2 / 7.3 で確認済み）                                                                                              |
-| jdtls                      | `language/status` の `ServiceReady` / `ProjectStatus`                                                                                                                                                   | `ServiceReady` → `readiness: "ready"`、`ProjectStatus: WARNING` → `health: "warning"`                                                                           | completeness                                                                                                                                             |
-| gopls                      | `$/progress`（title "Setting up workspace"）の end                                                                                                                                                      | end → `readiness: "ready"`（観測者による合成）。"Error loading workspace" の progress → `health`                                                                | completeness + freshness（準拠テスト 7.2 / 7.3 を v0.23.0 で確認済み）                                                                                   |
-| pyright                    | `window/logMessage` のファイル列挙完了（"Found N source files" / "No source files found."）。`$/progress` は開いたファイルの解析の進行で、横断リクエストの完全性とは別                                  | 列挙完了 → `readiness: "ready"`（観測者による合成。ワークスペースフォルダの数だけ待つ）。health の信号はなく `unknown`                                          | completeness + freshness（準拠テスト 7.2 / 7.3 を pyright 1.1.412 と basedpyright 1.39.8 で確認済み）                                                    |
-| typescript-language-server | `$/progress`（title "Initializing JS/TS language features…"）の begin / end。tsserver の終了は `window/logMessage`（error）"[tsserver] Exited. Code:"（言語サーバーは生き残り、空配列を成功として返す） | begin → `indexing`、end → `ready` かつ `health: "ok"`。終了ログ → `health: "error"`（再起動はないので戻らない）。プロジェクトはファイルを開くまでロードされない | completeness + freshness（準拠テスト 7.2 / 7.3 を TypeScript 5.9.3 + typescript-language-server 5.3.0 で確認済み。名乗りに出るのは TypeScript の版だけ） |
-| clangd                     | なし                                                                                                                                                                                                    | 観測者は両軸 `"unknown"` を報告する                                                                                                                             | 観測者経由: 保証なし。サーバー自身が実装する場合: freshness のみ（全インデックスを持たない）                                                             |
+| 実装                       | 既存の語彙                                                                                                                                                                                              | 本プロトコルへの写像                                                                                                                                            | 宣言できる保証（見込み）                                                                                                                             |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| rust-analyzer              | `experimental/serverStatus` の `health` / `quiescent`                                                                                                                                                   | `health` はそのまま、`quiescent: true` → `readiness: "ready"`。本プロトコルは事実上その後継                                                                     | coverage + freshness（準拠テスト 7.2 / 7.3 で確認済み）                                                                                              |
+| jdtls                      | `language/status` の `ServiceReady` / `ProjectStatus`                                                                                                                                                   | `ServiceReady` → `readiness: "ready"`、`ProjectStatus: WARNING` → `health: "warning"`                                                                           | coverage                                                                                                                                             |
+| gopls                      | `$/progress`（title "Setting up workspace"）の end                                                                                                                                                      | end → `readiness: "ready"`（観測者による合成）。"Error loading workspace" の progress → `health`                                                                | coverage + freshness（準拠テスト 7.2 / 7.3 を v0.23.0 で確認済み）                                                                                   |
+| pyright                    | `window/logMessage` のファイル列挙完了（"Found N source files" / "No source files found."）。`$/progress` は開いたファイルの解析の進行で、横断リクエストの完全性とは別                                  | 列挙完了 → `readiness: "ready"`（観測者による合成。ワークスペースフォルダの数だけ待つ）。health の信号はなく `unknown`                                          | coverage + freshness（準拠テスト 7.2 / 7.3 を pyright 1.1.412 と basedpyright 1.39.8 で確認済み）                                                    |
+| typescript-language-server | `$/progress`（title "Initializing JS/TS language features…"）の begin / end。tsserver の終了は `window/logMessage`（error）"[tsserver] Exited. Code:"（言語サーバーは生き残り、空配列を成功として返す） | begin → `indexing`、end → `ready` かつ `health: "ok"`。終了ログ → `health: "error"`（再起動はないので戻らない）。プロジェクトはファイルを開くまでロードされない | coverage + freshness（準拠テスト 7.2 / 7.3 を TypeScript 5.9.3 + typescript-language-server 5.3.0 で確認済み。名乗りに出るのは TypeScript の版だけ） |
+| clangd                     | なし                                                                                                                                                                                                    | 観測者は両軸 `"unknown"` を報告する                                                                                                                             | 観測者経由: 保証なし。サーバー自身が実装する場合: freshness のみ（全インデックスを持たない）                                                         |
+
+`workspace/symbol` の件数の上限（2026-09-04 の実測、[research/workspace-symbol-truncation-measurement.md](../research/workspace-symbol-truncation-measurement.md)）: rust-analyzer は 128（`workspace.symbol.search.limit` で変更可）、gopls は 100（固定）。どちらも打ち切りを伝えない。pyright と typescript-language-server は打ち切らない。ワークスペースのシンボルを列挙したいクライアントは `textDocument/documentSymbol` をファイルごとに取る。
 
 `experimental/serverState` という名前は rust-analyzer の `experimental/serverStatus` と近いが、これは後継であることを示す意図的な命名である。両者はクライアントのログや設定で混同しやすいため、実装・運用時は注意する。上流提案時には後継関係を明示する。
 

@@ -273,6 +273,30 @@ mod tests {
     }
 
     #[test]
+    fn typescript_language_server_keeps_the_engine_version_as_the_guarantee_basis() {
+        // typescript-language-server に serverInfo を足す上流の変更は、包み紙自身の
+        // 版 (6.0.0) を名乗る。保証が依存するのは解析エンジン (TypeScript) の版で、
+        // それは起動ログと $/typescriptVersion に出る。serverInfo の版で保証の根拠を
+        // 置き換えない (どの版を根拠にするかは写像が決める)。
+        let mut tracker = Tracker::new();
+        let startup = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Using Typescript version (user-setting) 5.9.3 from path \"/x/tsserver.js\""}}"#;
+        observe(&mut tracker, startup);
+        assert_eq!(
+            tracker.provider(),
+            ServerStateProvider::complete_and_fresh()
+        );
+        tracker.select_mapping(Some(&ServerInfo {
+            name: "typescript-language-server".to_string(),
+            version: Some("6.0.0".to_string()),
+        }));
+        assert_eq!(
+            tracker.provider(),
+            ServerStateProvider::complete_and_fresh(),
+            "包み紙の版で保証を落とした"
+        );
+    }
+
+    #[test]
     fn the_same_name_in_another_case_keeps_the_mapping_too() {
         // pyright に serverInfo を足す上流の変更は productName "Pyright" を名乗る。
         // 起動ログで "pyright" と読んだ写像と同じものなので、選び直さず観測を保つ。

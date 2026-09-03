@@ -52,9 +52,24 @@ M6（typescript-language-server の写像、ADR 0010）の前提を実サーバ�
 - **health**: 最初の end で `ok`（ロードの成功を観測した）。"[tsserver] Exited. Code:" のログ（error）で `error`。再起動はないので `error` は戻らない。クラッシュ後の references は空配列を成功として返すので、下流側の拒否（RequestFailed）が「壊れたサーバーの成功風応答」を消す
 - **限界**: ファイルを開くまでプロジェクトをロードしないので、`didOpen` を送らずに横断リクエストだけを送るクライアントでは `initializing` のまま保留が解けない（保留がロードの契機を奪う）。Claude Code は `didOpen` の後に横断リクエストを送る（[research/claude-code-dogfooding.md](claude-code-dogfooding.md)）。Serena は M7 で観測する。根本の解決は typescript-language-server が本プロトコルを話すこと
 
+## M6 の結果（2026-09-03、写像実装後）
+
+lsp-det 経由（`lsp-det -- typescript-language-server --stdio`）で `tests/conformance.rs` の `typescript_language_server_*` ignored 5 件を 5 回連続で通した。
+
+| 項目                   | 結果                                                                                                                                |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| 写像の選択             | `initialize` 応答前の "Using Typescript version …" ログで選び、応答後の `$/typescriptVersion` は同じ写像なので観測を保つ            |
+| 7.1 遷移               | `didOpen` → `indexing` → `ready`（health `ok`）                                                                                     |
+| 7.2 完全性             | 通過                                                                                                                                |
+| 7.3 クロスファイル鮮度 | **通過**。仕様 10 章の見込み「非同期処理のため freshness 不可」は実測で覆った。`didChange` のオーバーレイは references に反映される |
+| tsconfig 変更          | `indexing` を経て `ready` に戻る                                                                                                    |
+| tsserver のクラッシュ  | health `error`（message に "Exited. Code:"）。本プロトコルを宣言しないクライアントの references を下流側が RequestFailed で拒否する |
+
+`$/typescriptVersion` だけを名乗りにした版では、実サーバーで `initialize` 応答直後の状態問い合わせが両軸 `unknown` になった（通知が応答の後に届くため）。応答前のログを名乗りに足して解消した。
+
 ## 一般化してはならない点
 
 - 0 件になる窓（約 0.3 秒）は 2 ファイルの fixture と本機の速さでの値。大規模プロジェクトでは長くなる
 - クラッシュはロード完了後に測った。ロード中のクラッシュで progress の end とログのどちらが先に届くかは測っていない（写像はどちらの順でも `error` に落ち着く。end で `ok` にしてもその後の "Exited." で `error` になる）
 - exit code が非 0 のクラッシュでは言語サーバー自身が落ちて接続が閉じる（ソースの読み。実測は SIGKILL のみ）。その場合は EOF で伝わる（ADR 0009 決定 C-3）
-- 7.2 / 7.3 の通過は本文書では測っていない。M6 の準拠テスト（`tests/conformance.rs` の `typescript_language_server_*` ignored）で測り、通った版だけ一覧に載せる。仕様 10 章の見込みは「completeness のみ（非同期処理のため freshness 不可）」
+- 7.2 / 7.3 は 2 ファイルの fixture で測った。大規模プロジェクトでのロード中の応答が空になる窓は同じ構造だが、本文書の測定範囲外

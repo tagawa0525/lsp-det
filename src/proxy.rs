@@ -615,15 +615,17 @@ impl StateTracker {
     fn select_mapping(&mut self, info: Option<&initialize::ServerInfo>) -> Option<ServerState> {
         match self.tracker.select_mapping(info) {
             Some(state) => {
-                let provider = serde_json::to_string(&self.tracker.provider())
-                    .unwrap_or_else(|_| "<unserializable>".to_string());
-                eprintln!(
-                    "lsp-det: upstream is {:?} version {:?}; using its mapping, declaring {provider}",
-                    info.map(|i| i.name.as_str()).unwrap_or(""),
-                    info.and_then(|i| i.version.as_deref()).unwrap_or("<none>")
-                );
+                self.log_selected_mapping("is");
                 self.log(&state);
                 Some(state)
+            }
+            None if info.is_none() && self.tracker.observes_upstream() => {
+                // serverInfo を返さない上流 (pyright)。起動ログで選んだ写像を保つ。
+                eprintln!(
+                    "lsp-det: the upstream InitializeResult has no serverInfo; \
+                     keeping the mapping selected from its startup log"
+                );
+                None
             }
             None => {
                 eprintln!(
@@ -652,11 +654,32 @@ impl StateTracker {
         self.log(state);
     }
 
-    /// 状態が変わったらログして新しい状態を返す。
+    /// 状態が変わったらログして新しい状態を返す。写像がこの通知で選ばれた
+    /// (上流が起動ログで名乗った) ときはその旨も残す。
     fn observe(&mut self, view: &peek::MessageView, body: &[u8]) -> Option<ServerState> {
-        let state = self.tracker.observe_upstream(view, body)?;
+        let had_mapping = self.tracker.observes_upstream();
+        let changed = self.tracker.observe_upstream(view, body);
+        if !had_mapping && self.tracker.observes_upstream() {
+            self.log_selected_mapping("introduced itself in its startup log as");
+            let initial = self.tracker.state().clone();
+            self.log(&initial);
+        }
+        let state = changed?;
         self.log(&state);
         Some(state)
+    }
+
+    fn log_selected_mapping(&self, how: &str) {
+        let provider = serde_json::to_string(&self.tracker.provider())
+            .unwrap_or_else(|_| "<unserializable>".to_string());
+        let identity = self.tracker.identity();
+        eprintln!(
+            "lsp-det: upstream {how} {:?} version {:?}; using its mapping, declaring {provider}",
+            identity.map(|i| i.name.as_str()).unwrap_or(""),
+            identity
+                .and_then(|i| i.version.as_deref())
+                .unwrap_or("<none>")
+        );
     }
 
     fn log(&mut self, state: &ServerState) {

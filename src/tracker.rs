@@ -1,9 +1,10 @@
 //! `ServerState` の保持と遷移 (v0.1-design.md 4.2、ADR 0008)。
 //!
 //! 写像 (上流メッセージの解釈) と状態の保持を分ける。写像は上流が
-//! `InitializeResult.serverInfo` で名乗るまで選べないので、それまでは
-//! 両軸 `unknown`。既知の名前なら写像に切り替え、そうでなければ
-//! `unknown` のまま正直に報告する (仕様 8.2 の 3)。
+//! 名乗るまで選べないので、それまでは両軸 `unknown`。名乗りは
+//! `InitializeResult.serverInfo` か、それを返さない上流では起動時の
+//! `window/logMessage` (ADR 0011 決定 A)。既知の名前なら写像に切り替え、
+//! そうでなければ `unknown` のまま正直に報告する (仕様 8.2 の 3)。
 
 use crate::adapter::{self, Mapping};
 use crate::initialize::ServerInfo;
@@ -13,6 +14,8 @@ use crate::state::{ServerState, ServerStateProvider};
 pub struct Tracker {
     state: ServerState,
     adapter: Option<Box<dyn Mapping>>,
+    /// 写像を選ぶ根拠になった名乗り。
+    identity: Option<ServerInfo>,
 }
 
 impl Default for Tracker {
@@ -27,7 +30,13 @@ impl Tracker {
         Tracker {
             state: ServerState::unobserved(),
             adapter: None,
+            identity: None,
         }
+    }
+
+    /// 写像を選ぶ根拠になった名乗り (`serverInfo` または起動ログ)。
+    pub fn identity(&self) -> Option<&ServerInfo> {
+        self.identity.as_ref()
     }
 
     /// 上流が `InitializeResult` で名乗った。既知の名前なら写像を選び、
@@ -38,9 +47,14 @@ impl Tracker {
     /// 同一視すると、M4 で gopls を足したときに match を書き直すことになる。
     pub fn select_mapping(&mut self, server_info: Option<&ServerInfo>) -> Option<ServerState> {
         let server_info = server_info?;
-        let adapter = adapter::select(&server_info.name, server_info.version.as_deref())?;
+        self.adopt(server_info.clone())
+    }
+
+    fn adopt(&mut self, identity: ServerInfo) -> Option<ServerState> {
+        let adapter = adapter::select(&identity.name, identity.version.as_deref())?;
         self.state = adapter.initial_state();
         self.adapter = Some(adapter);
+        self.identity = Some(identity);
         Some(self.state.clone())
     }
 
@@ -71,7 +85,17 @@ impl Tracker {
     /// アダプタだけで、なしのときに勝手に読むと他のサーバーの同名通知を
     /// 誤読する。
     pub fn observe_upstream(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
-        let next = self.adapter.as_mut()?.interpret(view, body)?;
+        let Some(adapter) = self.adapter.as_mut() else {
+            // 写像がまだない。上流が起動時のログで名乗っていれば、それで選ぶ
+            // (ADR 0011 決定 A-2)。`serverInfo` が後から来ればそれで選び直す。
+            // 選択は開始状態を置くだけで、通知する変化ではない。`serverInfo` で
+            // 選んだときと同じ。起動ログは `initialize` 応答より先に届き、LSP は
+            // 応答前のサーバー→クライアント通知を (logMessage 等を除き) 禁じる。
+            let identity = adapter::identity_from_notification(view, body)?;
+            self.adopt(identity);
+            return None;
+        };
+        let next = adapter.interpret(view, body)?;
         self.apply(next)
     }
 
@@ -130,12 +154,19 @@ mod tests {
     #[test]
     fn a_startup_log_selects_the_mapping_before_the_upstream_answers_initialize() {
         // pyright は serverInfo を返さない。起動ログの名乗りで写像を選び、
-        // 開始状態 (initializing) に移る。unknown → initializing は通知を要する変化。
+        // 開始状態 (initializing) に移る。選択は通知する変化ではない
+        // (serverInfo で選んだときと同じ。起動ログは initialize 応答より先に
+        // 届き、LSP は応答前のサーバー→クライアント通知を禁じる)。
         let mut tracker = Tracker::new();
-        let state = observe(&mut tracker, PYRIGHT_STARTUP).expect("名乗りで開始状態に移る");
+        assert!(
+            observe(&mut tracker, PYRIGHT_STARTUP).is_none(),
+            "選択は通知しない"
+        );
+        let state = tracker.state();
         assert_eq!(state.readiness, Readiness::Initializing);
         assert_eq!(state.health, Health::Unknown);
         assert!(tracker.observes_upstream());
+        assert_eq!(tracker.identity().map(|i| i.name.as_str()), Some("pyright"));
 
         // 写像はその後の通知を読む。
         observe(&mut tracker, PYRIGHT_STARTED);

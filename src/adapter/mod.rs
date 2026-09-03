@@ -68,8 +68,19 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
 /// ("Pyright language server 1.1.412 starting") だけ。名乗りでなければ `None`。
 /// 汎用の認識機構は作らない (必要になった写像が自分の認識を足す)。
 pub fn identity_from_notification(view: &MessageView, body: &[u8]) -> Option<ServerInfo> {
-    let _ = (view, body);
-    todo!("M5 GREEN")
+    if !view.is_notification() || view.method() != Some("window/logMessage") {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        params: LogMessage,
+    }
+    #[derive(serde::Deserialize)]
+    struct LogMessage {
+        message: String,
+    }
+    let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
+    pyright::startup_identity(&envelope.params.message)
 }
 
 #[cfg(test)]

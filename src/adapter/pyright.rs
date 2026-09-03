@@ -23,10 +23,26 @@
 //! `completeness` / `freshness` は準拠テスト 7.2 / 7.3 を実 pyright に当てて
 //! 通した版 ([`TESTED_VERSIONS`]) にだけ宣言する (ADR 0009 決定 D-5)。
 
+use serde::Deserialize;
+
 use super::Mapping;
 use crate::initialize::ServerInfo;
 use crate::peek::MessageView;
-use crate::state::{ServerState, ServerStateProvider};
+use crate::state::{Readiness, ServerState, ServerStateProvider};
+
+const LOG_MESSAGE_METHOD: &str = "window/logMessage";
+/// 起動ログの productName と版の間の定型句 (`languageServerBase.ts` のコンストラクタ)。
+const STARTUP_INFIX: &str = " language server ";
+const STARTUP_SUFFIX: &str = " starting";
+/// ワークスペースフォルダごとの `AnalyzerService` の開始 (`languageServerBase.ts`)。
+const SERVICE_STARTED_PREFIX: &str = "Starting service instance ";
+/// ファイル列挙の完了 (`sourceEnumerator.ts` の `_finish()`)。
+const ENUMERATION_FOUND_PREFIX: &str = "Found ";
+const ENUMERATION_FOUND_SUFFIX_ONE: &str = " source file";
+const ENUMERATION_FOUND_SUFFIX_MANY: &str = " source files";
+const ENUMERATION_EMPTY: &str = "No source files found.";
+/// 再列挙の開始 (`sourceEnumerator.ts` のコンストラクタ、log レベル)。
+const ENUMERATION_STARTED: &str = "Searching for source files";
 
 /// 準拠テスト 7.2 / 7.3 を実 pyright / basedpyright に当てて通した版。
 /// 名乗り (`serverInfo.version` または起動ログの版) と完全一致で突き合わせる。
@@ -44,14 +60,39 @@ pub const TESTED_VERSIONS: &[&str] = &[];
 /// (basedpyright は `serverInfo.name` に "basedpyright" を名乗る)。
 /// 版は省かれることがあり、そのときは `None`。他の文言には `None`。
 pub fn startup_identity(message: &str) -> Option<ServerInfo> {
-    let _ = message;
-    todo!("M5 GREEN")
+    let (product, rest) = message.split_once(STARTUP_INFIX)?;
+    let name = match product {
+        "Pyright" | "pyright" => "pyright",
+        "basedpyright" => "basedpyright",
+        _ => return None,
+    };
+    // 版は `serverOptions.version && serverOptions.version + ' '` なので
+    // 省かれうる。そのとき rest は "starting" だけ。
+    let version = match rest {
+        r if r == STARTUP_SUFFIX.trim_start() => None,
+        r => {
+            let v = r.strip_suffix(STARTUP_SUFFIX)?;
+            if v.is_empty() || v.contains(' ') {
+                return None;
+            }
+            Some(v.to_string())
+        }
+    };
+    Some(ServerInfo {
+        name: name.to_string(),
+        version,
+    })
 }
 
 /// pyright / basedpyright の写像。
 pub struct PyrightAdapter {
     /// 名乗った版が [`TESTED_VERSIONS`] に入っているか。保証を宣言する条件。
     version_is_tested: bool,
+    state: ServerState,
+    /// "Starting service instance" を見た数 (= 列挙を待つフォルダの数)。
+    instances: usize,
+    /// 列挙の完了ログを見た数。`instances` に追いついたら `ready`。
+    completed: usize,
 }
 
 impl Default for PyrightAdapter {
@@ -69,8 +110,62 @@ impl PyrightAdapter {
     /// 名乗った版を見て、テスト済みの版なら保証を宣言する。
     pub fn for_version(version: Option<&str>) -> Self {
         let version_is_tested = version.is_some_and(|v| TESTED_VERSIONS.contains(&v.trim()));
-        PyrightAdapter { version_is_tested }
+        PyrightAdapter {
+            version_is_tested,
+            state: ServerState::initializing(),
+            instances: 0,
+            completed: 0,
+        }
     }
+
+    fn on_log(&mut self, message: &str) -> Option<ServerState> {
+        if message.starts_with(SERVICE_STARTED_PREFIX) {
+            // 新しいフォルダの列挙が始まる。ready だったなら indexing に戻す
+            // (didChangeWorkspaceFolders)。initializing のときはそのまま。
+            self.instances += 1;
+            if self.state.readiness == Readiness::Ready {
+                self.state.readiness = Readiness::Indexing;
+            }
+        } else if message == ENUMERATION_STARTED {
+            // 再列挙 (log レベル。既定の logLevel では届かない)。
+            if self.instances == 0 {
+                return None;
+            }
+            self.completed = self.completed.saturating_sub(1);
+            self.state.readiness = Readiness::Indexing;
+        } else if is_enumeration_complete(message) {
+            if self.completed >= self.instances {
+                // 数える相手がいない完了。ready を名乗る根拠にしない。
+                return None;
+            }
+            self.completed += 1;
+            if self.completed == self.instances {
+                self.state.readiness = Readiness::Ready;
+            }
+        } else {
+            return None;
+        }
+        Some(self.state.clone())
+    }
+}
+
+/// "Found N source file(s)" または "No source files found."。
+fn is_enumeration_complete(message: &str) -> bool {
+    if message == ENUMERATION_EMPTY {
+        return true;
+    }
+    let Some(rest) = message.strip_prefix(ENUMERATION_FOUND_PREFIX) else {
+        return false;
+    };
+    let count = rest
+        .strip_suffix(ENUMERATION_FOUND_SUFFIX_MANY)
+        .or_else(|| rest.strip_suffix(ENUMERATION_FOUND_SUFFIX_ONE));
+    count.is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+#[derive(Deserialize)]
+struct LogMessageParams {
+    message: String,
 }
 
 impl Mapping for PyrightAdapter {
@@ -87,8 +182,15 @@ impl Mapping for PyrightAdapter {
     }
 
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
-        let _ = (view, body);
-        todo!("M5 GREEN")
+        if !view.is_notification() || view.method() != Some(LOG_MESSAGE_METHOD) {
+            return None;
+        }
+        #[derive(Deserialize)]
+        struct Envelope {
+            params: LogMessageParams,
+        }
+        let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
+        self.on_log(&envelope.params.message)
     }
 }
 

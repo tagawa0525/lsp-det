@@ -29,7 +29,7 @@
           rust-analyzer # `rust-analyzer 2026-08-03` と名乗る（rustup 版とは別ビルド）
           go
           gopls
-          pyright # M5 の写像。`serverInfo.name` と版は実測記録に記す
+          pyright # M5 の写像。serverInfo を返さないので、名乗りと版は起動時の window/logMessage から読む (ADR 0011)
           basedpyright # pyright の通知名を継承。写像を共有する
         ];
       };

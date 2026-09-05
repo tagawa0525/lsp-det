@@ -211,3 +211,81 @@ fn gopls_speaks_the_server_state_protocol() {
     let project = support::TempGoProject::with_cross_file_reference("upstream-dev");
     assert_upstream_speaks_the_protocol("gopls", &[], project.root.clone());
 }
+
+// ---------------------------------------------------------------------------
+// Bug fix: a request without a tsserver is an error, not an empty success
+// ---------------------------------------------------------------------------
+
+/// typescript-language-server: after tsserver has exited, a request is answered with an error
+/// (`RequestFailed`, -32803, the reason in the message) instead of an empty array reported as
+/// success (research/typescript-language-server-readiness-measurement.md: the language server
+/// survives a SIGKILL of tsserver and answers `references` with `[]`).
+#[test]
+#[ignore = "acceptance condition for an upstream change. Local only. Put target/upstream/bin in PATH and run cargo test --test upstream_dev -- --ignored"]
+fn typescript_language_server_fails_requests_after_tsserver_exit() {
+    let project = support::TempTsProject::with_cross_file_reference("upstream-dev-crash");
+    let a = project.file("a.ts");
+    let mut client = ConformanceClient::start(&direct(
+        "typescript-language-server",
+        &["--stdio"],
+        project.root.clone(),
+    ));
+    client.initialize_with_root(false, &project.root);
+    client.did_open(&a, "typescript");
+
+    // Premise: tsserver is up and answers. Right after didOpen the project may still be loading,
+    // so poll until the cross-file reference appears (the cap only bounds the premise).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        if !client.references(&a, 0, 16).is_empty() {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the premise is broken: no references within 20 seconds"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    let killed = support::kill_descendants_matching(client.server_pid(), "tsserver");
+    assert!(
+        !killed.is_empty(),
+        "the tsserver grandchild process was not found"
+    );
+    // The language server notices the exit and logs it ("[tsserver] Exited. Code: ..."). Send
+    // the request only after that, so the test does not depend on the order of the kill and the
+    // request.
+    loop {
+        let log = client
+            .await_notification_within("window/logMessage", std::time::Duration::from_secs(10))
+            .expect("the exit of tsserver is not logged within 10 seconds");
+        if log["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("Exited. Code:"))
+        {
+            break;
+        }
+    }
+
+    let id = client.send_request(
+        "textDocument/references",
+        json!({
+            "textDocument": {"uri": support::file_uri(&a)},
+            "position": {"line": 0, "character": 16},
+            "context": {"includeDeclaration": false},
+        }),
+    );
+    let response = client.await_response_to(id);
+    assert_eq!(
+        response["error"]["code"],
+        json!(-32803),
+        "a request without a tsserver is not RequestFailed: {response}"
+    );
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("tsserver exited")),
+        "the reason is not in the message: {response}"
+    );
+    client.shutdown();
+}

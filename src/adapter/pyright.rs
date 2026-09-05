@@ -28,7 +28,7 @@ use serde::Deserialize;
 use super::Mapping;
 use crate::initialize::ServerInfo;
 use crate::peek::MessageView;
-use crate::state::{Readiness, ServerState, ServerStateProvider};
+use crate::state::{FileChangeType, Readiness, ServerState, ServerStateProvider};
 
 const LOG_MESSAGE_METHOD: &str = "window/logMessage";
 /// 起動ログの productName と版の間の定型句 (`languageServerBase.ts` のコンストラクタ)。
@@ -188,9 +188,9 @@ impl Mapping for PyrightAdapter {
 
     fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
         } else {
-            ServerStateProvider::Basic(true)
+            ServerStateProvider::notifications_only()
         }
     }
 
@@ -407,11 +407,11 @@ mod tests {
         // 製品ごとに別系列なので、一覧も製品ごとに持つ。
         assert_eq!(
             PyrightAdapter::for_identity("pyright", Some("1.1.412")).guarantees(),
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
         );
         assert_eq!(
             PyrightAdapter::for_identity("basedpyright", Some("1.39.8")).guarantees(),
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
         );
         for (name, version) in [
             ("pyright", Some("1.1.400")),
@@ -424,7 +424,7 @@ mod tests {
         ] {
             assert_eq!(
                 PyrightAdapter::for_identity(name, version).guarantees(),
-                ServerStateProvider::Basic(true),
+                ServerStateProvider::notifications_only(),
                 "測っていない {name} {version:?} に保証を宣言した"
             );
         }

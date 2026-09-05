@@ -763,14 +763,18 @@ impl ConformanceClient {
 
     /// `textDocument/references`。宣言は含めない（利用箇所だけ数える）。
     pub fn references(&mut self, path: &std::path::Path, line: u32, character: u32) -> Vec<Value> {
-        let response = self.request(
-            "textDocument/references",
-            json!({
-                "textDocument": {"uri": file_uri(path)},
-                "position": {"line": line, "character": character},
-                "context": {"includeDeclaration": false},
-            }),
-        );
+        let params = json!({
+            "textDocument": {"uri": file_uri(path)},
+            "position": {"line": line, "character": character},
+            "context": {"includeDeclaration": false},
+        });
+        let mut response = self.request("textDocument/references", params.clone());
+        if response["error"]["code"] == json!(-32801) {
+            // ContentModified: サーバーが変更中の計算を捨てた。LSP はクライアントに
+            // 再送を求める (rust-analyzer は didChangeWatchedFiles 直後の要求を
+            // これで拒む)。応答ではないので一度だけ送り直す。
+            response = self.request("textDocument/references", params);
+        }
         response["result"].as_array().cloned().unwrap_or_default()
     }
 

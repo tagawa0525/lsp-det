@@ -30,7 +30,7 @@ use serde_json::Value;
 use super::Mapping;
 use crate::initialize::ServerInfo;
 use crate::peek::MessageView;
-use crate::state::{Health, Readiness, ServerState, ServerStateProvider};
+use crate::state::{FileChangeType, Health, Readiness, ServerState, ServerStateProvider};
 
 const PROGRESS_METHOD: &str = "$/progress";
 const LOG_MESSAGE_METHOD: &str = "window/logMessage";
@@ -187,9 +187,9 @@ impl Mapping for TypescriptLanguageServerAdapter {
 
     fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
         } else {
-            ServerStateProvider::Basic(true)
+            ServerStateProvider::notifications_only()
         }
     }
 
@@ -455,7 +455,7 @@ mod tests {
         let mut adapter = TypescriptLanguageServerAdapter::for_version(Some("5.9.3"));
         assert_eq!(
             adapter.guarantees(),
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
         );
         interpret(
             &mut adapter,
@@ -463,7 +463,7 @@ mod tests {
         );
         assert_eq!(
             adapter.guarantees(),
-            ServerStateProvider::coverage_and_freshness(),
+            ServerStateProvider::workspace(&[], &[FileChangeType::Changed]),
             "版のない通知で根拠を捨てた"
         );
         interpret(
@@ -472,7 +472,7 @@ mod tests {
         );
         assert_eq!(
             adapter.guarantees(),
-            ServerStateProvider::Basic(true),
+            ServerStateProvider::notifications_only(),
             "版のある通知は根拠を更新する"
         );
     }
@@ -483,12 +483,12 @@ mod tests {
         // 当てて通した。名乗りに出るのは TypeScript の版だけ。
         assert_eq!(
             TypescriptLanguageServerAdapter::for_version(Some("5.9.3")).guarantees(),
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
         );
         for version in [Some("5.9.2"), Some("5.3.0"), Some("garbage"), None] {
             assert_eq!(
                 TypescriptLanguageServerAdapter::for_version(version).guarantees(),
-                ServerStateProvider::Basic(true),
+                ServerStateProvider::notifications_only(),
                 "測っていない版 {version:?} に保証を宣言した"
             );
         }

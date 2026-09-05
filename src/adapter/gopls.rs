@@ -25,7 +25,7 @@ use serde_json::Value;
 
 use super::Mapping;
 use crate::peek::MessageView;
-use crate::state::{Health, Readiness, ServerState, ServerStateProvider};
+use crate::state::{ALL_FILE_CHANGES, Health, Readiness, ServerState, ServerStateProvider};
 
 const PROGRESS_METHOD: &str = "$/progress";
 /// 初期ロード (`general.go` の `addFolders`)。
@@ -198,9 +198,9 @@ impl Mapping for GoplsAdapter {
     /// ignored)。宣言できるのはテストを当てた版だけ。
     fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[("workspace/symbol", 100)], &ALL_FILE_CHANGES)
         } else {
-            ServerStateProvider::Basic(true)
+            ServerStateProvider::notifications_only()
         }
     }
 
@@ -418,7 +418,7 @@ mod tests {
         // (tests/conformance.rs の gopls_* ignored)。それ以外には宣言しない。
         assert_eq!(
             GoplsAdapter::for_version(Some(GOPLS_VERSION_JSON)).guarantees(),
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[("workspace/symbol", 100)], &ALL_FILE_CHANGES)
         );
         for untested in [
             Some("v0.22.0"),
@@ -428,7 +428,7 @@ mod tests {
         ] {
             assert_eq!(
                 GoplsAdapter::for_version(untested).guarantees(),
-                ServerStateProvider::Basic(true),
+                ServerStateProvider::notifications_only(),
                 "テストを当てていない版 {untested:?} に保証を宣言した"
             );
         }

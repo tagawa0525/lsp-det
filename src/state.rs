@@ -4,6 +4,8 @@
 //! 機械判定に使ってはならない。ワイヤ形式は仕様が規範なので、本モジュールの
 //! テストは serde の出力そのものを固定する。
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// 状態を問い合わせるリクエスト (仕様 4.1)。
@@ -49,46 +51,81 @@ pub struct ServerState {
     pub message: Option<String>,
 }
 
-/// `ServerCapabilities.experimental.serverStateProvider` の値 (仕様 5 章)。
+/// `ServerCapabilities.experimental.serverStateProvider` の値 (仕様 5 章、ADR 0016)。
 ///
-/// `boolean | { coverage?, freshness? }`。`coverage` と `freshness` は
-/// 独立で順序関係を持たない (ADR 0004 決定 3。名前は ADR 0013)。実装は自分が
-/// 守れる保証だけを宣言する。守れない保証の宣言は仕様違反である (仕様 5.1)。
-///
-/// `coverage`: `ready` のとき保証対象メソッド (仕様 7.0 の 2) の応答が
-/// ワークスペース全体のインデックスに基づき、後から結果が増えない。
-/// `freshness`: `ready` のとき受信済みの変更をすべて織り込んでいる。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum ServerStateProvider {
-    /// 保証なしの宣言。状態の通知そのものだけを保証する。
-    Basic(bool),
-    WithGuarantees(Guarantees),
+/// 常にオブジェクト。`{}` は状態の通知だけを約束する。`coverage` と
+/// `freshness` は `ready` が応答について何を意味するかを足し、値は
+/// あるべき姿からの欠けを名指しする (真偽値ではない)。実装は自分が守れる
+/// 保証だけを宣言する。守れない保証の宣言は仕様違反である (仕様 5.1)。
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ServerStateProvider {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<Coverage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub freshness: Option<Freshness>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct Guarantees {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub coverage: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub freshness: Option<bool>,
+/// `ready` のとき、7.0 のメソッドの応答が基づく範囲と、件数の上限で
+/// 結果を切るメソッド (メソッド名 → 上限)。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Coverage {
+    pub scope: CoverageScope,
+    pub incomplete: BTreeMap<String, u64>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CoverageScope {
+    /// ワークスペース全体のインデックス。
+    Workspace,
+    /// クライアントが開いている文書だけ。
+    OpenDocuments,
+}
+
+/// `ready` のとき織り込んでいる `workspace/didChangeWatchedFiles` の変更の
+/// 種類。`textDocument/didChange` は常に織り込む。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Freshness {
+    #[serde(rename = "fileChanges")]
+    pub file_changes: Vec<FileChangeType>,
+}
+
+/// LSP の `FileChangeType` の名前。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FileChangeType {
+    Created,
+    Changed,
+    Deleted,
+}
+
+/// 3 種類すべて (あるべき姿)。
+pub const ALL_FILE_CHANGES: [FileChangeType; 3] = [
+    FileChangeType::Created,
+    FileChangeType::Changed,
+    FileChangeType::Deleted,
+];
 
 impl ServerStateProvider {
-    /// `coverage` のみを宣言する。
-    pub fn coverage() -> Self {
-        ServerStateProvider::WithGuarantees(Guarantees {
-            coverage: Some(true),
-            freshness: None,
-        })
+    /// 状態の通知だけを約束する (保証なし)。
+    pub fn notifications_only() -> Self {
+        Self::default()
     }
 
-    /// `coverage` と `freshness` の両方を宣言する。
-    pub fn coverage_and_freshness() -> Self {
-        ServerStateProvider::WithGuarantees(Guarantees {
-            coverage: Some(true),
-            freshness: Some(true),
-        })
+    /// ワークスペース全体のインデックスに基づく `coverage` (上限で切る
+    /// メソッドがあればその一覧) と、挙げた種類の変更を織り込む `freshness`。
+    pub fn workspace(incomplete: &[(&str, u64)], file_changes: &[FileChangeType]) -> Self {
+        ServerStateProvider {
+            coverage: Some(Coverage {
+                scope: CoverageScope::Workspace,
+                incomplete: incomplete
+                    .iter()
+                    .map(|(method, limit)| (method.to_string(), *limit))
+                    .collect(),
+            }),
+            freshness: Some(Freshness {
+                file_changes: file_changes.to_vec(),
+            }),
+        }
     }
 }
 
@@ -257,11 +294,11 @@ mod tests {
     }
 
     #[test]
-    fn the_basic_grade_serializes_as_a_bare_true() {
-        // 仕様 5 章の `boolean | {...}` の boolean 側。
+    fn notifications_only_serializes_as_an_empty_object() {
+        // 仕様 5 章: {} は状態の通知だけを約束する (ADR 0016)。
         assert_eq!(
-            serde_json::to_string(&ServerStateProvider::Basic(true)).unwrap(),
-            "true"
+            serde_json::to_string(&ServerStateProvider::notifications_only()).unwrap(),
+            "{}"
         );
     }
 
@@ -269,20 +306,17 @@ mod tests {
     fn a_grade_omits_the_guarantees_it_does_not_claim() {
         // 守れない保証を宣言しないことが仕様 5.1 の要求。
         assert_eq!(
-            serde_json::to_string(&ServerStateProvider::coverage()).unwrap(),
-            r#"{"coverage":true}"#
+            serde_json::to_string(&ServerStateProvider::workspace(&[], &[])).unwrap(),
+            r#"{"coverage":{"scope":"workspace","incomplete":{}},"freshness":{"fileChanges":[]}}"#
         );
     }
 
     #[test]
     fn a_grade_serializes_both_guarantees_when_claimed() {
-        let both = ServerStateProvider::WithGuarantees(Guarantees {
-            coverage: Some(true),
-            freshness: Some(true),
-        });
+        let both = ServerStateProvider::workspace(&[("workspace/symbol", 128)], &ALL_FILE_CHANGES);
         assert_eq!(
             serde_json::to_string(&both).unwrap(),
-            r#"{"coverage":true,"freshness":true}"#
+            r#"{"coverage":{"scope":"workspace","incomplete":{"workspace/symbol":128}},"freshness":{"fileChanges":["Created","Changed","Deleted"]}}"#
         );
     }
 }

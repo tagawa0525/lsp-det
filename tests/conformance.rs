@@ -1805,8 +1805,9 @@ fn spec_7_3_2_watched_file_changes_are_reflected_after_reindexing_with_a_fake_up
 }
 
 /// 実サーバー共通の手順。定義側 `def` を開き、呼び出し側 `caller` を開かずに
-/// ディスク上で変え (Changed)、新規ファイル `new_file` を作る (Created)。
-/// `extra` は同時に Changed で送るファイル (Rust の lib.rs)。
+/// ディスク上で変え (Changed)、新規ファイル `new_file` を作り (Created)、
+/// 消す (Deleted)。`extra` は同時に Changed で送るファイル (Rust の lib.rs)。
+#[allow(clippy::too_many_arguments)] // 手順の引数をそのまま並べる方が読みやすい
 fn watched_file_changes_are_reflected(
     client: &mut ConformanceClient,
     def: &std::path::Path,
@@ -2000,7 +2001,7 @@ fn workspace_symbol_count_through(client: &mut ConformanceClient) -> usize {
             .filter(|item| {
                 item["name"]
                     .as_str()
-                    .is_some_and(|n| n.contains("wsymprobe"))
+                    .is_some_and(|n| n.to_ascii_lowercase().contains("wsymprobe"))
             })
             .count()
     })

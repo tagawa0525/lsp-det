@@ -19,7 +19,7 @@ use serde::Deserialize;
 
 use super::Mapping;
 use crate::peek::MessageView;
-use crate::state::{Health, Readiness, ServerState, ServerStateProvider};
+use crate::state::{ALL_FILE_CHANGES, Health, Readiness, ServerState, ServerStateProvider};
 
 /// rust-analyzer が送る readiness 通知のメソッド名。
 pub const SERVER_STATUS_METHOD: &str = "experimental/serverStatus";
@@ -81,12 +81,32 @@ fn leading_token(version: &str) -> &str {
 /// ないので文字列で見る。脆いが、[`TESTED_VERSIONS`] の範囲で守る。
 const MISSING_WORKSPACE_MESSAGE: &str = "Failed to discover workspace.";
 
-#[derive(Default)]
 pub struct RustAnalyzerAdapter {
     /// 名乗った版が [`TESTED_VERSIONS`] に入っているか。保証を宣言する条件。
     version_is_tested: bool,
     /// パース不能な status を一度ログしたか (連投を避けるため)。
     warned_unparseable: bool,
+    /// `workspace/symbol` の上限。既定 128。クライアントの
+    /// `initializationOptions.workspace.symbol.search.limit` で変わる。
+    workspace_symbol_limit: u64,
+    /// 最後に読んだ health。通知からの先読みで readiness だけを動かすときに使う。
+    last_health: Health,
+}
+
+/// rust-analyzer が既定で持つ `workspace/symbol` の上限 (`config.rs` の
+/// `workspace_symbol_search_limit`)。
+const DEFAULT_WORKSPACE_SYMBOL_LIMIT: u64 = 128;
+
+/// rust-analyzer が `client/registerCapability` で監視を登録するファイル。
+/// これらの Created / Deleted には必ず `quiescent: false → true` が続く
+/// (research/disk-edit-propagation-measurement.md の追記)。
+const WATCHED_FILE_SUFFIXES: &[&str] =
+    &[".rs", "/Cargo.toml", "/Cargo.lock", "/rust-analyzer.toml"];
+
+impl Default for RustAnalyzerAdapter {
+    fn default() -> Self {
+        Self::for_version(None)
+    }
 }
 
 impl RustAnalyzerAdapter {
@@ -102,6 +122,8 @@ impl RustAnalyzerAdapter {
         RustAnalyzerAdapter {
             version_is_tested,
             warned_unparseable: false,
+            workspace_symbol_limit: DEFAULT_WORKSPACE_SYMBOL_LIMIT,
+            last_health: Health::Unknown,
         }
     }
 
@@ -127,10 +149,40 @@ impl Mapping for RustAnalyzerAdapter {
     /// 範囲外の版には状態の通知だけを約束する。
     fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(
+                &[("workspace/symbol", self.workspace_symbol_limit)],
+                &ALL_FILE_CHANGES,
+            )
         } else {
-            ServerStateProvider::Basic(true)
+            ServerStateProvider::notifications_only()
         }
+    }
+
+    fn learn_initialization_options(&mut self, options: &serde_json::Value) {
+        if let Some(limit) = options["workspace"]["symbol"]["search"]["limit"].as_u64() {
+            self.workspace_symbol_limit = limit;
+        }
+    }
+
+    /// Created / Deleted の通知で `indexing` を先読みする (ADR 0014 追補
+    /// 決定 D)。監視の対象のファイルにだけ効く。Changed には信号が続かない
+    /// (送信中の要求が -32801 で拒まれるだけ) ので先読みしない。
+    fn observe_client(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
+        if !view.is_notification() || view.method() != Some("workspace/didChangeWatchedFiles") {
+            return None;
+        }
+        let changes = parse_watched_file_changes(body)?;
+        let reindexes = changes.iter().any(|change| {
+            matches!(change.kind, 1 | 3)
+                && WATCHED_FILE_SUFFIXES
+                    .iter()
+                    .any(|suffix| change.uri.ends_with(suffix))
+        });
+        reindexes.then_some(ServerState {
+            health: self.last_health,
+            readiness: Readiness::Indexing,
+            message: None,
+        })
     }
 
     /// 上流→クライアント方向のメッセージから、上流が報告している状態を
@@ -171,6 +223,7 @@ impl Mapping for RustAnalyzerAdapter {
             health = Health::Error;
         }
 
+        self.last_health = health;
         Some(ServerState {
             health,
             readiness: if params.quiescent {
@@ -181,6 +234,28 @@ impl Mapping for RustAnalyzerAdapter {
             message: params.message,
         })
     }
+}
+
+struct WatchedFileChange {
+    uri: String,
+    kind: u8,
+}
+
+/// `workspace/didChangeWatchedFiles` の `changes` (uri と FileChangeType)。
+fn parse_watched_file_changes(body: &[u8]) -> Option<Vec<WatchedFileChange>> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let changes = value["params"]["changes"].as_array()?;
+    Some(
+        changes
+            .iter()
+            .filter_map(|change| {
+                Some(WatchedFileChange {
+                    uri: change["uri"].as_str()?.to_string(),
+                    kind: change["type"].as_u64()? as u8,
+                })
+            })
+            .collect(),
+    )
 }
 
 /// `params` を取り出して `ServerStatusParams` として読む。
@@ -220,10 +295,13 @@ mod tests {
         let tested = crate::adapter::select("rust-analyzer", Some("2026-08-03")).unwrap();
         assert_eq!(
             tested.guarantees(),
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[("workspace/symbol", 128)], &ALL_FILE_CHANGES)
         );
         let untested = crate::adapter::select("rust-analyzer", Some("2026-08-04")).unwrap();
-        assert_eq!(untested.guarantees(), ServerStateProvider::Basic(true));
+        assert_eq!(
+            untested.guarantees(),
+            ServerStateProvider::notifications_only()
+        );
     }
 
     #[test]

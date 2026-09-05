@@ -10,6 +10,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::adapter;
+use crate::documents::OpenDocuments;
 use crate::framing::{self, RawMessage};
 use crate::gate::{self, Decision, DrainReason, Gate, Release};
 use crate::initialize;
@@ -17,6 +18,7 @@ use crate::peek::{self, RequestId};
 use crate::process;
 use crate::state::{self, ServerState, ServerStateProvider};
 use crate::tracker::Tracker;
+use crate::watched_files::WatchedFiles;
 
 /// 上流の生死をポーリングする間隔。`Upstream` の所有権 (kill する権利) を
 /// main ループ 1 箇所に保つため、別スレッドで `wait()` させず `recv_timeout`
@@ -147,6 +149,9 @@ enum ClientKind {
     /// その他の通知。写像がクライアントの通知から先読みした変化があれば持つ
     /// (ADR 0014 追補 決定 D)。
     Notification(Option<ServerState>),
+    /// `textDocument/didOpen`。既に開いている uri なら、全文の `didChange` に
+    /// 書き換えたメッセージを持つ (ADR 0015 決定 B)。
+    DidOpen(Option<RawMessage>),
     Other,
 }
 
@@ -234,6 +239,12 @@ struct UpstreamSide {
     /// `initialized` まで他のリクエストを受けないことを許し、rust-analyzer は
     /// 規約違反として終了する)。
     identity_query_pending: bool,
+    /// `workspace/didChangeWatchedFiles` の代行 (ADR 0015 決定 A)。クライアントが
+    /// capability を宣言せず、git 管理下のルートがあるときだけ `Some`。
+    /// クライアントが自分で通知を送ったら `None` に戻す。
+    watched_files: Option<WatchedFiles>,
+    /// 開いている文書 (重複した `didOpen` の書き換え。ADR 0015 決定 B)。
+    documents: OpenDocuments,
 }
 
 impl UpstreamSide {
@@ -247,6 +258,8 @@ impl UpstreamSide {
             identity: false,
             identity_state: ServerState::initializing(),
             identity_query_pending: false,
+            watched_files: None,
+            documents: OpenDocuments::new(),
         }
     }
 
@@ -280,9 +293,29 @@ impl UpstreamSide {
                     None => ClientKind::Other,
                 }
             }
-            Ok(view) if view.is_notification() && !self.identity => {
-                ClientKind::Notification(self.tracker.observe_client(&view, &msg.body))
-            }
+            Ok(view) if view.is_notification() => match view.method() {
+                Some("textDocument/didOpen") => {
+                    ClientKind::DidOpen(self.documents.on_did_open(&msg.body))
+                }
+                Some("textDocument/didClose") => {
+                    self.documents.on_did_close(&msg.body);
+                    ClientKind::Other
+                }
+                Some("workspace/didChangeWatchedFiles") => {
+                    // クライアントが自分で送る。以後は代行しない (ADR 0015 決定 A)。
+                    self.watched_files = None;
+                    let predicted = if self.identity {
+                        None
+                    } else {
+                        self.tracker.observe_client(&view, &msg.body)
+                    };
+                    ClientKind::Notification(predicted)
+                }
+                _ if !self.identity => {
+                    ClientKind::Notification(self.tracker.observe_client(&view, &msg.body))
+                }
+                _ => ClientKind::Other,
+            },
             _ => ClientKind::Other,
         };
 
@@ -299,6 +332,10 @@ impl UpstreamSide {
             ClientKind::InitializeRequest(id) => {
                 self.initialize_id = id;
                 self.tracker.remember_initialize(&msg.body);
+                if !initialize::client_declares_watched_files(&msg.body) {
+                    // 宣言しないクライアントにだけ代行する (ADR 0015 決定 A)。
+                    self.watched_files = WatchedFiles::new(&initialize::workspace_roots(&msg.body));
+                }
                 self.client_declared = initialize::client_declares_server_state(&msg.body);
                 self.client_declared_progress =
                     initialize::client_declares_work_done_progress(&msg.body);
@@ -330,11 +367,20 @@ impl UpstreamSide {
                 None => vec![Out::ToUpstream(msg)],
             },
             ClientKind::Request { id, method } => {
-                match gate.on_request(msg, id, &method, self.boundary_state()) {
-                    Decision::Forward(msg) => vec![Out::ToUpstream(msg)],
-                    Decision::Held => Vec::new(),
-                    Decision::Reject(response) => vec![Out::ToClient(response)],
+                // 横断リクエストの前に、ディスク上の変更を上流に知らせる (代行)。
+                let mut outs = Vec::new();
+                if gate::is_cross_workspace(&method)
+                    && let Some(watched) = self.watched_files.as_mut()
+                    && let Some(notification) = watched.changes_since_last_scan()
+                {
+                    outs.push(Out::ToUpstream(notification));
                 }
+                match gate.on_request(msg, id, &method, self.boundary_state()) {
+                    Decision::Forward(msg) => outs.push(Out::ToUpstream(msg)),
+                    Decision::Held => {}
+                    Decision::Reject(response) => outs.push(Out::ToClient(response)),
+                }
+                outs
             }
             ClientKind::Initialized => {
                 let mut outs = vec![Out::ToUpstream(msg)];
@@ -355,6 +401,7 @@ impl UpstreamSide {
                 }
                 outs
             }
+            ClientKind::DidOpen(rewritten) => vec![Out::ToUpstream(rewritten.unwrap_or(msg))],
             ClientKind::Other => vec![Out::ToUpstream(msg)],
         }
     }

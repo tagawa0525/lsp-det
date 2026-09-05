@@ -48,6 +48,44 @@ pub fn client_declares_work_done_progress(body: &[u8]) -> bool {
         == Some(&Value::Bool(true))
 }
 
+/// クライアントが `workspace.didChangeWatchedFiles` を宣言しているか
+/// (ADR 0015: 宣言していれば下流側は代行しない)。
+pub fn client_declares_watched_files(body: &[u8]) -> bool {
+    let Ok(root) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    root.get("params")
+        .and_then(|params| params.get("capabilities"))
+        .and_then(|caps| caps.get("workspace"))
+        .and_then(|workspace| workspace.get("didChangeWatchedFiles"))
+        .is_some_and(Value::is_object)
+}
+
+/// クライアントの `initialize` が指すワークスペースのルート
+/// (`workspaceFolders`、なければ `rootUri`)。`file:` 以外は含めない。
+pub fn workspace_roots(body: &[u8]) -> Vec<std::path::PathBuf> {
+    let Ok(root) = serde_json::from_slice::<Value>(body) else {
+        return Vec::new();
+    };
+    let params = &root["params"];
+    let mut roots: Vec<std::path::PathBuf> = params["workspaceFolders"]
+        .as_array()
+        .map(|folders| {
+            folders
+                .iter()
+                .filter_map(|folder| folder["uri"].as_str())
+                .filter_map(crate::uri::uri_to_path)
+                .collect()
+        })
+        .unwrap_or_default();
+    if roots.is_empty()
+        && let Some(path) = params["rootUri"].as_str().and_then(crate::uri::uri_to_path)
+    {
+        roots.push(path);
+    }
+    roots
+}
+
 /// 上流が `InitializeResult.serverInfo` で名乗った名前と版 (LSP 3.15)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerInfo {

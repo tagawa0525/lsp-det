@@ -1250,6 +1250,16 @@ pub fn flush<W: Write>(writer: &mut W) {
     let _ = writer.flush();
 }
 
+/// fixture を git 管理下に置く (下流側の代行は git ls-files で列挙する)。
+pub fn git_init(root: &std::path::Path) {
+    let status = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(root)
+        .status()
+        .expect("git を起動できない");
+    assert!(status.success(), "git init に失敗: {}", root.display());
+}
+
 /// 一時的な git 管理下のワークスペース (下流側の代行のテスト用)。
 /// `git init` して `a.rs` を置く。追跡はしない (`--others` で拾われる)。
 pub struct TempGitWorkspace {

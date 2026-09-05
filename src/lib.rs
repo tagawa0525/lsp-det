@@ -9,6 +9,7 @@
 
 pub mod adapter;
 pub mod cli;
+pub mod documents;
 pub mod framing;
 pub mod gate;
 pub mod initialize;
@@ -17,3 +18,5 @@ pub mod process;
 pub mod proxy;
 pub mod state;
 pub mod tracker;
+pub mod uri;
+pub mod watched_files;

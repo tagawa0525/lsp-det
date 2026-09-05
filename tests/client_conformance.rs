@@ -449,3 +449,207 @@ fn spec_9_1_1_holds_while_reindexing_after_watched_file_changes() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// ADR 0015: 下流側の代行 (プロトコルの外)
+//
+// (A) capability を宣言せず通知も送らないクライアントに代わって、7.0 の
+//     リクエストの前に git ls-files の一覧の mtime を比べ
+//     workspace/didChangeWatchedFiles を送る
+// (B) 既に開いている uri への didOpen を全文の didChange に書き換える
+// ---------------------------------------------------------------------------
+
+/// 代行の被験者: rust-analyzer と名乗る偽上流を ready にしておく。
+fn ready_client_in(root: &std::path::Path, capabilities: Value) -> ConformanceClient {
+    let mut client = ConformanceClient::start(&ServerUnderTest::lsp_det_with_fake_upstream());
+    client.initialize_with_root_and_capabilities(root, capabilities);
+    client.make_upstream_emit_status("ok", true);
+    sync_with_upstream(&mut client);
+    client
+}
+
+fn plain_capabilities() -> Value {
+    json!({"textDocument": {"hover": {}}})
+}
+
+fn watching_capabilities() -> Value {
+    json!({"textDocument": {"hover": {}}, "workspace": {"didChangeWatchedFiles": {"dynamicRegistration": true}}})
+}
+
+fn changes_of(notification: &Value) -> Vec<(String, u64)> {
+    notification["changes"]
+        .as_array()
+        .map(|changes| {
+            changes
+                .iter()
+                .map(|c| {
+                    (
+                        c["uri"].as_str().unwrap_or("").to_string(),
+                        c["type"].as_u64().unwrap_or(0),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn stands_in_for_watched_files_before_a_cross_workspace_request() {
+    let ws = support::TempGitWorkspace::new("watched");
+    let mut client = ready_client_in(&ws.root, plain_capabilities());
+    let a = ws.file("a.rs");
+    let b = ws.file("b.rs");
+
+    // 起動後の変更: a.rs を書き換え、b.rs を作る (どちらも開かない)。
+    std::fs::write(&a, "pub fn target() {}\npub fn more() {}\n").unwrap();
+    std::fs::write(&b, "pub fn other() {}\n").unwrap();
+
+    let id = client.send_references();
+    client.await_response_to(id);
+
+    let seen = client.upstream_methods_seen();
+    let watched = seen
+        .iter()
+        .position(|m| m == "workspace/didChangeWatchedFiles");
+    let references = seen.iter().position(|m| m == "textDocument/references");
+    assert!(
+        matches!((watched, references), (Some(w), Some(r)) if w < r),
+        "代行の通知が references より先に上流へ届いていない: {seen:?}"
+    );
+    let notifications = client.upstream_notifications("workspace/didChangeWatchedFiles");
+    assert_eq!(
+        notifications.len(),
+        1,
+        "通知は 1 つにまとめる: {notifications:#?}"
+    );
+    let mut changes = changes_of(&notifications[0]);
+    changes.sort();
+    assert_eq!(
+        changes,
+        vec![(support::file_uri(&a), 2), (support::file_uri(&b), 1)],
+        "Changed と Created が uri と種類つきで届く"
+    );
+
+    // 変更がなければ通知しない。
+    let id = client.send_references();
+    client.await_response_to(id);
+    assert_eq!(
+        client
+            .upstream_notifications("workspace/didChangeWatchedFiles")
+            .len(),
+        1,
+        "変更がないのに通知した"
+    );
+
+    // Deleted。
+    std::fs::remove_file(&b).unwrap();
+    let id = client.send_references();
+    client.await_response_to(id);
+    let notifications = client.upstream_notifications("workspace/didChangeWatchedFiles");
+    assert_eq!(
+        changes_of(&notifications[1]),
+        vec![(support::file_uri(&b), 3)]
+    );
+    client.shutdown();
+}
+
+#[test]
+fn does_not_stand_in_when_the_client_declares_watched_files() {
+    let ws = support::TempGitWorkspace::new("declared");
+    let mut client = ready_client_in(&ws.root, watching_capabilities());
+    std::fs::write(ws.file("b.rs"), "pub fn other() {}\n").unwrap();
+    let id = client.send_references();
+    client.await_response_to(id);
+    assert!(
+        client
+            .upstream_notifications("workspace/didChangeWatchedFiles")
+            .is_empty(),
+        "宣言したクライアントの代行をした"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn stops_standing_in_once_the_client_sends_its_own_notification() {
+    let ws = support::TempGitWorkspace::new("own");
+    let mut client = ready_client_in(&ws.root, plain_capabilities());
+    // クライアントが自分で送る (Serena は宣言せずに送る)。
+    client.did_change_watched_files(&[(&ws.file("a.rs"), 2)]);
+    std::fs::write(ws.file("b.rs"), "pub fn other() {}\n").unwrap();
+    let id = client.send_references();
+    client.await_response_to(id);
+    let notifications = client.upstream_notifications("workspace/didChangeWatchedFiles");
+    assert_eq!(
+        notifications.len(),
+        1,
+        "クライアント自身の通知だけが届く: {notifications:#?}"
+    );
+    assert_eq!(
+        changes_of(&notifications[0]),
+        vec![(support::file_uri(&ws.file("a.rs")), 2)]
+    );
+    client.shutdown();
+}
+
+#[test]
+fn does_not_stand_in_outside_a_git_repository() {
+    let ws = support::TempGitWorkspace::without_git("nogit");
+    let mut client = ready_client_in(&ws.root, plain_capabilities());
+    std::fs::write(ws.file("b.rs"), "pub fn other() {}\n").unwrap();
+    let id = client.send_references();
+    client.await_response_to(id);
+    assert!(
+        client
+            .upstream_notifications("workspace/didChangeWatchedFiles")
+            .is_empty(),
+        "git 管理外で代行した"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn rewrites_a_duplicate_did_open_into_a_full_text_did_change() {
+    let ws = support::TempGitWorkspace::new("didopen");
+    let mut client = ready_client_in(&ws.root, plain_capabilities());
+    let a = ws.file("a.rs");
+    client.did_open(&a, "rust");
+    // Claude Code は Write のたびに同じ uri へ didOpen を送り直す。
+    client.notify(
+        "textDocument/didOpen",
+        json!({"textDocument": {"uri": support::file_uri(&a), "languageId": "rust", "version": 1, "text": "pub fn target() {}\npub fn more() {}\n"}}),
+    );
+    sync_with_upstream(&mut client);
+
+    assert_eq!(
+        client.upstream_notifications("textDocument/didOpen").len(),
+        1,
+        "2 度目の didOpen をそのまま流した"
+    );
+    let changes = client.upstream_notifications("textDocument/didChange");
+    assert_eq!(changes.len(), 1, "全文の didChange に書き換えていない");
+    assert_eq!(
+        changes[0]["textDocument"]["uri"],
+        json!(support::file_uri(&a))
+    );
+    assert_eq!(changes[0]["textDocument"]["version"], json!(1));
+    assert_eq!(
+        changes[0]["contentChanges"],
+        json!([{"text": "pub fn target() {}\npub fn more() {}\n"}])
+    );
+
+    // 閉じてから開き直すのは正当な didOpen。
+    client.did_close(&a);
+    client.did_open(&a, "rust");
+    sync_with_upstream(&mut client);
+    assert_eq!(
+        client.upstream_notifications("textDocument/didOpen").len(),
+        2
+    );
+    assert_eq!(
+        client
+            .upstream_notifications("textDocument/didChange")
+            .len(),
+        1
+    );
+    client.shutdown();
+}

@@ -122,6 +122,9 @@ fn main() {
     let mut stdout = io::stdout();
 
     let mut methods_seen: Vec<String> = Vec::new();
+    // 通知の params を method ごとに記録する (代行の検証用)。
+    let mut notifications_seen: std::collections::BTreeMap<String, Vec<Value>> =
+        std::collections::BTreeMap::new();
     let mut initialize_params = Value::Null;
 
     if let Some(message) = &startup_log {
@@ -159,6 +162,12 @@ fn main() {
             continue;
         }
         methods_seen.push(method.to_string());
+        if id.is_none() {
+            notifications_seen
+                .entry(method.to_string())
+                .or_default()
+                .push(params.clone());
+        }
         if method == "initialized" {
             initialized_seen = true;
         }
@@ -329,6 +338,7 @@ fn main() {
                     id,
                     json!({
                         "methodsSeen": methods_seen,
+                        "notifications": notifications_seen,
                         "initializeParams": initialize_params,
                         "progressCreateAnswered": progress_create_answered
                     }),

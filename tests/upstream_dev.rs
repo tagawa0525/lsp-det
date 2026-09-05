@@ -218,7 +218,7 @@ fn gopls_speaks_the_server_state_protocol() {
 
 /// typescript-language-server: after tsserver has exited, a request is answered with an error
 /// (`RequestFailed`, -32803, the reason in the message) instead of an empty array reported as
-/// success (research/typescript-language-server-readiness-measurement.md: the language server
+/// success (docs/research/typescript-language-server-readiness-measurement.md: the language server
 /// survives a SIGKILL of tsserver and answers `references` with `[]`).
 #[test]
 #[ignore = "acceptance condition for an upstream change. Local only. Put target/upstream/bin in PATH and run cargo test --test upstream_dev -- --ignored"]
@@ -254,10 +254,16 @@ fn typescript_language_server_fails_requests_after_tsserver_exit() {
     );
     // The language server notices the exit and logs it ("[tsserver] Exited. Code: ..."). Send
     // the request only after that, so the test does not depend on the order of the kill and the
-    // request.
+    // request. Other log messages may arrive first, so the wait is bounded as a whole.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        assert!(
+            !remaining.is_zero(),
+            "the exit of tsserver is not logged within 10 seconds"
+        );
         let log = client
-            .await_notification_within("window/logMessage", std::time::Duration::from_secs(10))
+            .await_notification_within("window/logMessage", remaining)
             .expect("the exit of tsserver is not logged within 10 seconds");
         if log["message"]
             .as_str()

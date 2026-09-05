@@ -928,8 +928,10 @@ fn spawn_reader(stdout: ChildStdout, tx: Sender<Incoming>) {
 
 /// `file://` URI。テスト用なのでパーセントエンコードは扱わない
 /// (一時ディレクトリ名を ASCII に限る前提)。
+/// パスの `file:` URI。lsp-det 本体と同じ変換 (Windows は `file:///C:/...`、
+/// パーセントエンコード)。実サーバーが返す uri と突き合わせるので、形を揃える。
 pub fn file_uri(path: &std::path::Path) -> String {
-    format!("file://{}", path.display())
+    lsp_det::uri::path_to_uri(path)
 }
 
 /// 一時的な cargo プロジェクト。クロスファイルの問い合わせには、

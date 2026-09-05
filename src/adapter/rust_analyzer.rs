@@ -203,10 +203,10 @@ impl Mapping for RustAnalyzerAdapter {
             // safer than letting one broken message wrongly advance readiness.
             //
             // But it must not be silently dropped. If the upstream changes the shape of params,
-            // every message becomes unreadable and the state freezes at its last value. Once
-            // the gate is implemented, this would surface as a hold until the emergency-exit
-            // timeout, which cannot be diagnosed without a reason in the log. Logged once to
-            // avoid repeated logging.
+            // every message becomes unreadable and the state freezes at its last value. The
+            // downstream side then keeps holding cross-workspace requests (there is no time
+            // limit on holding), which cannot be diagnosed without a reason in the log. Logged
+            // once to avoid repeated logging.
             if !self.warned_unparseable {
                 self.warned_unparseable = true;
                 eprintln!(

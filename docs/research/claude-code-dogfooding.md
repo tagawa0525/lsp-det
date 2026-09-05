@@ -111,9 +111,42 @@ CC は終了時の `shutdown` リクエストに `params: {}` を付ける。rus
 - gopls と pyright は自前でファイルを監視しないので、CC の Bash 編集はセッションの間ずっと見えない。rust-analyzer は監視の宣言がないときの自前の notify で拾う。tsls は 2 度目の `didOpen` を拒み、古いバッファが残る（disk-edit-propagation-measurement.md）。ADR 0015 の代行 2 つの根拠
 - CC への報告の材料（`docs/upstream-submissions.md`）
 
+## 第 5 回（2026-09-06）: 下流側の代行 2 つを CC 2.1.261 で確かめる
+
+ADR 0015 の代行 2 つ（`workspace/didChangeWatchedFiles` の代行、重複した `didOpen` の `didChange` への書き換え）が実物の CC で効くかを、**lsp-det あり／なし**で比べた。CC への報告に「lsp-det を挟むと消える」と書くための実測。
+
+### 方法
+
+- 被験者: 入れ子の非対話 CC 2.1.261（`claude -p "<手順>" --plugin-dir <プラグイン> --debug-file <ログ> --output-format json --allowedTools "LSP,Bash" --model sonnet`。手順は固定で、ファイルは読ませない）。モデルは Sonnet（被験者は CC の LSP クライアントであり、モデルは無関係）
+- プラグイン 2 種: **直接**（`command` を tee ラッパーにし、サーバーの stdin を記録）と **lsp-det 経由**（`lsp-det -- <tee ラッパー>`。lsp-det が上流に書いたものを記録）
+- lsp-det: main `1234bdd`（0.3.0）の release ビルド。上流: gopls 0.23.0、typescript-language-server 5.3.0（TypeScript 5.9.3）
+- 被験体: `git init` だけしたディレクトリ（代行は `git ls-files --others` で未追跡も拾う）。Go は `a.go`（`func Target()` と `main` での呼び出し）と `b.go`（呼び出し 1 つ）。TS は `a.ts`（`export function target()`）と `b.ts`（import と呼び出し 1 つ）
+- 手順（Go）: `findReferences`（`Target`）→ Bash で `c.go`（呼び出し 1 つ）を作る → `findReferences`。手順（TS）: `findReferences`（`target`）→ Write で `b.ts` を上書き（呼び出し 2 つ）→ `findReferences` → Write で再度上書き（呼び出し 3 つ）→ `findReferences`
+
+### 結果
+
+| 被験体                                 | 直接                                                                                                                                                            | lsp-det 経由                                                                                                           |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| gopls: Bash で `c.go` を足した後の件数 | 3 → **3**（`c.go` は見えない。上流に届いたのは `didOpen a.go` と references だけ）                                                                              | 3 → **4**（`c.go` を含む。2 回目の references の前に `workspace/didChangeWatchedFiles` `Created c.go` が上流に届いた） |
+| tsls: 起動直後の 1 回目の件数          | **1**（`a.ts` の宣言だけ。プロジェクトは `didOpen` の後にロードされ、その前の応答）                                                                             | **3**（`indexing` の間 0.175 秒保留し、`ready` で流した完全な結果）                                                    |
+| tsls: Write 1 回目 → 2 回目の件数      | 4 → 5                                                                                                                                                           | 4 → 5                                                                                                                  |
+| 2 回目の Write の後に CC が送るもの    | `textDocument/didChange`（全文、version 2）と `textDocument/didSave`                                                                                            | 同じ（書き換えは起きていない）                                                                                         |
+| `initialize` の capability             | 第 4 回と同じ。`workspace` は `{configuration: false, workspaceFolders: false}` で **`didChangeWatchedFiles` がない**。`didChangeWatchedFiles` の通知も送らない | 同じ                                                                                                                   |
+| `shutdown`                             | `params: {}`（第 4 回と同じ）                                                                                                                                   | 同じ                                                                                                                   |
+
+### 結論
+
+- **`didChangeWatchedFiles` の代行は実物の CC で効く**。CC 2.1.261 は監視を宣言も送信もせず、gopls は自前で監視しないので、直接では Bash で作ったファイルがセッションの間見えない。lsp-det を挟むと、次の横断リクエストの前に Created が届き、結果に含まれる
+- **重複した `didOpen` は CC 2.1.261 では起きない**。2.1.259（第 4 回）は Write のたびに `didOpen` を送り直したが、2.1.261 は開いている文書への 2 回目の Write で `didChange`（全文）と `didSave` を送る。ADR 0015 決定 B の書き換えは CC では発動せず、典型的な誘因は CC 側で消えた。書き換え自体は LSP 違反への一般的な対処として残す
+- **tsls でも起動直後の無言の嘘が CC で見える**。直接では最初の `findReferences` が宣言 1 件だけを返し、CC はそれを結果として受け取る。lsp-det 経由では `ready` まで保留して 3 件
+- CC への報告（`docs/upstream-submissions.md`）は 4 件に減る: 起動直後の横断リクエスト（rust-analyzer に加え tsls でも）、`shutdown` の `params: {}`、`didChangeWatchedFiles` の欠落、`didClose` を送らないこと。`didChange` / `didSave` は送るようになった
+- lsp-det 経由では、CC の Write の後に代行が `Changed b.ts` も送っている（開いている文書のディスク変更。サーバーは開いているバッファを優先するので無害）
+- `exit`: CC は `exit` を送った同じミリ秒にクライアントを止める。lsp-det 経由では上流の stdin に `exit` が現れなかったが、上流は終了し残留プロセスはない（EOF かプロセス寿命の経路。原因は特定していない）
+- 費用: 1 走行 5〜7 ターン、Sonnet で 0.1 ドル前後
+
 ## 一般化してはならない点
 
-- 「最初の LSP ツール呼び出しで起動」「`initialize` の直後に横断リクエストを投げる」は CC のこの版での観測。CC の版が変われば変わり得る
+- 「最初の LSP ツール呼び出しで起動」「`initialize` の直後に横断リクエストを投げる」は CC のこの版での観測。CC の版が変われば変わり得る（実際、Write の再 `didOpen` は 2.1.259 で観測し 2.1.261 で消えた）
 - 起動直後の hover が null を返す時間幅と、保留の 6.7 秒は本リポジトリの規模での話で、他のワークスペースには一般化できない
 - 「82 秒でタイムアウトしなかった」は上限の下界にすぎず、CC のタイムアウト値そのものは分かっていない
 - zed の 80.6 秒は、他の被験者と同時に走らせた（CPU を分け合った）値で、単独ならもっと短い。順序（小規模 < 大規模）だけを読む

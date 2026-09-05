@@ -163,4 +163,4 @@ The spec and this README are in English and have Japanese versions alongside. Th
 
 ## Status
 
-v0.1 (rust-analyzer and gopls) and v0.2 (pyright, typescript-language-server, Serena integration) are complete. Next are English comments in the code, a fifth round of dogfooding with Claude Code, and the upstream submissions (in the order of ADR 0017).
+v0.1 (rust-analyzer and gopls) and v0.2 (pyright, typescript-language-server, Serena integration) are complete. Next are the upstream submissions.

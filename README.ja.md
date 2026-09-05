@@ -8,7 +8,7 @@ LSP には、サーバーが要求に完全に答えられる状態かをクラ�
 
 lsp-det は 2 つのものからなる。
 
-- **サーバー状態プロトコル**（[docs/spec/server-state.md](docs/spec/server-state.md)）: サーバーの状態を `health` と `readiness` の 2 軸で表す語彙と、その状態のもとで応答の完全性と鮮度を保証する capability。最終目標は LSP 本体への提案
+- **サーバー状態プロトコル**（[docs/spec/server-state.ja.md](docs/spec/server-state.ja.md)）: サーバーの状態を `health` と `readiness` の 2 軸で表す語彙と、その状態のもとで応答の完全性と鮮度を保証する capability。最終目標は LSP 本体への提案
 - **透過プロキシ `lsp-det`**（Rust、単一バイナリ）: クライアントと言語サーバーの間に挟まり、上記のプロトコルを両側に提供する。言語サーバーの語彙をプロトコルに写し、プロトコルを話さないクライアントに代わって横断リクエストを `ready` まで保留する
 
 ## 何が起きるか
@@ -150,14 +150,14 @@ cargo test --test conformance -- --ignored   # 実サーバー結合 31 件（�
 
 ## 文書
 
-| 文書                                                   | 内容                                                                                                                |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| [docs/spec/server-state.md](docs/spec/server-state.md) | サーバー状態プロトコルの規範。他文書と食い違えばこれが正                                                            |
-| [docs/v0.1-design.md](docs/v0.1-design.md)             | プロキシの実装スコープ（上流側・下流側・写像・実行モデル）                                                          |
-| [docs/adr/README.md](docs/adr/README.md)               | 設計判断の索引。生きている決定と却下した案                                                                          |
-| [docs/vision.md](docs/vision.md)                       | 長期構想（宣言範囲・起動方法の宣言は凍結中）                                                                        |
-| [docs/research/](docs/research/)                       | 調査と実測 22 本。各言語サーバーの readiness の実態、先行プロキシ、Serena / Claude Code / Zed / VS Code の LSP 統合 |
+| 文書                                                         | 内容                                                                                                                                         |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| [docs/spec/server-state.ja.md](docs/spec/server-state.ja.md) | サーバー状態プロトコルの仕様の日本語版。規範は英語版 [docs/spec/server-state.md](docs/spec/server-state.md) で、他文書と食い違えば英語版が正 |
+| [docs/v0.1-design.md](docs/v0.1-design.md)                   | プロキシの実装スコープ（上流側・下流側・写像・実行モデル）                                                                                   |
+| [docs/adr/README.md](docs/adr/README.md)                     | 設計判断の索引。生きている決定と却下した案                                                                                                   |
+| [docs/vision.md](docs/vision.md)                             | 長期構想（宣言範囲・起動方法の宣言は凍結中）                                                                                                 |
+| [docs/research/](docs/research/)                             | 調査と実測 22 本。各言語サーバーの readiness の実態、先行プロキシ、Serena / Claude Code / Zed / VS Code の LSP 統合                          |
 
 ## 現在地
 
-v0.1（rust-analyzer と gopls）と v0.2（pyright、typescript-language-server、Serena 統合）は完了している。次は上流への提出と、仕様の英訳。
+v0.1（rust-analyzer と gopls）と v0.2（pyright、typescript-language-server、Serena 統合）は完了している。次はコードのコメントの英訳、Claude Code でのドッグフーディング第 5 回、上流への提出（ADR 0017 の順）。

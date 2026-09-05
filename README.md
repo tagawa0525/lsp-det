@@ -8,7 +8,7 @@ LSP gives a client no machine-readable way to learn whether the server can fully
 
 lsp-det consists of two things.
 
-- **The server state protocol** ([docs/spec/server-state.md](docs/spec/server-state.md), Japanese; an English translation is planned): a vocabulary that describes a server's state on two axes, `health` and `readiness`, plus capabilities that guarantee coverage (answers computed over the whole workspace index) and freshness of responses in that state. The end goal is a proposal to LSP itself
+- **The server state protocol** ([docs/spec/server-state.md](docs/spec/server-state.md)): a vocabulary that describes a server's state on two axes, `health` and `readiness`, plus capabilities that guarantee coverage (answers computed over the whole workspace index) and freshness of responses in that state. The end goal is a proposal to LSP itself
 - **The transparent proxy `lsp-det`** (Rust, single binary): sits between a client and a language server and provides the protocol to both sides. It maps the language server's own vocabulary onto the protocol, and on behalf of clients that do not speak the protocol, it holds cross-workspace requests until `ready`
 
 ## What changes
@@ -151,7 +151,7 @@ The changes for that are prepared on forks of the upstreams and pass their accep
 
 ## Documents
 
-Documents other than this README are written in Japanese.
+The spec and this README are in English and have Japanese versions alongside. The design records (decisions, research, design, vision) are in Japanese.
 
 | Document                                               | Content                                                                                                                                                          |
 | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -163,4 +163,4 @@ Documents other than this README are written in Japanese.
 
 ## Status
 
-v0.1 (rust-analyzer and gopls) and v0.2 (pyright, typescript-language-server, Serena integration) are complete. Next are the upstream submissions and an English translation of the spec.
+v0.1 (rust-analyzer and gopls) and v0.2 (pyright, typescript-language-server, Serena integration) are complete. Next are English comments in the code, a fifth round of dogfooding with Claude Code, and the upstream submissions (in the order of ADR 0017).

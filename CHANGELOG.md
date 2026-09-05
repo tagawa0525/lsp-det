@@ -10,7 +10,7 @@
 - ADR 0014（仕様）: `freshness` の対象に、クライアントから受信した `workspace/didChangeWatchedFiles` を加える。準拠テスト 7.3 に第 2 のテスト（ディスク上の変更と新規ファイル）を足す
 - ADR 0015（設計 4.3）: 下流側の代行 2 つ。capability `workspace.didChangeWatchedFiles` を宣言せず、通知 `workspace/didChangeWatchedFiles` も送らないクライアントに代わって、保留の対象のリクエストごとに `git ls-files` の一覧の mtime を比べて通知を送る（写像は関与せず、言語ごとの一覧は持たない。git 管理外では代行しない）。既に開いている uri への `didOpen` を全文の `didChange` に書き換える
 - ADR 0016（仕様）: 保証の宣言を、真偽値ではなく欠けを名指しする形にする。`serverStateProvider` は常にオブジェクトで、`coverage: {scope, incomplete: {メソッド: 上限}}`、`freshness: {fileChanges: FileChangeType の一覧}`。ADR 0013 の決定 B（`workspace/symbol` を保証から外す）を置き換え、7.0 を 1 つの一覧に戻す
-- 実装済み: 0013 の改名、0016 の宣言の型と写像（rust-analyzer は `initializationOptions` の上限を読み、Created / Deleted の通知で `indexing` を先読みする。gopls 100、pyright と tsls は `["Changed"]`）、0014 の準拠テスト（Changed / Created / Deleted、上限）。残りは 0015 の代行 2 つ
+- 実装済み: 0013 の改名、0016 の宣言の型と写像（rust-analyzer は `initializationOptions` の上限を読み、Created / Deleted の通知で `indexing` を先読みする。gopls 100、pyright と tsls は `["Changed"]`）、0014 の準拠テスト（Changed / Created / Deleted、上限）、0015 の代行 2 つ（`src/watched_files.rs`、`src/documents.rs`。費用は 4269 ファイルの zed で 1 回の走査 22ms）
 - 外向きの提出は `docs/upstream-submissions.md` の順で、詰めてから
 
 ## 0.2.0（2026-09-04）

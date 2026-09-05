@@ -111,6 +111,8 @@ lsp-det: [0.213s] server state -> {"health":"ok","readiness":"indexing"} (previo
 lsp-det: [6.712s] server state -> {"health":"ok","readiness":"ready"} (previous held 6.499s)
 ```
 
+Two more things the downstream side does on behalf of clients that do not do them (ADR 0015). If the client neither declares `workspace.didChangeWatchedFiles` nor sends that notification, lsp-det lists the workspace with `git ls-files` (tracked and untracked files that are not ignored) before each cross-workspace request and reports files that were created, changed, or deleted since the last request to the server, so a language server that does not watch the disk itself (gopls, pyright) still sees edits made with shell tools. This needs `git` on the PATH and a workspace inside a git work tree; elsewhere nothing is sent. And a `didOpen` for a document that is already open is rewritten into a full-text `didChange`, which is what LSP requires and what typescript-language-server insists on. Both disappear once the client does these itself.
+
 Linux, macOS, and Windows. If the client dies without closing the pipe, lsp-det exits and takes the language server with it, using the mechanism each OS provides: `PR_SET_PDEATHSIG` on Linux, `kqueue` process events on macOS, and a Job Object on Windows. Release binaries for each OS are attached to [GitHub Releases](https://github.com/tagawa0525/lsp-det/releases) from `v*` tags.
 
 ## Build and test

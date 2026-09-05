@@ -1817,6 +1817,7 @@ fn watched_file_changes_are_reflected(
     new_file_text: &str,
     extra: Option<(&std::path::Path, &str)>,
     references_in: fn(&mut ConformanceClient, &std::path::Path, &std::path::Path) -> Vec<Value>,
+    client_notifies: bool,
 ) {
     let before = references_in(client, def, caller);
     assert!(
@@ -1826,7 +1827,9 @@ fn watched_file_changes_are_reflected(
 
     // Changed: 呼び出しを 1 つ足す。
     std::fs::write(caller, two_calls).unwrap();
-    client.did_change_watched_files(&[(caller, 2)]);
+    if client_notifies {
+        client.did_change_watched_files(&[(caller, 2)]);
+    }
     client.wait_until_ready();
     let after_change = references_in(client, def, caller);
     assert_eq!(
@@ -1842,7 +1845,9 @@ fn watched_file_changes_are_reflected(
         std::fs::write(path, text).unwrap();
         changes.push((path, 2));
     }
-    client.did_change_watched_files(&changes);
+    if client_notifies {
+        client.did_change_watched_files(&changes);
+    }
     client.wait_until_ready();
     let in_new_file = references_in(client, def, new_file);
     assert!(
@@ -1857,7 +1862,9 @@ fn watched_file_changes_are_reflected(
         std::fs::write(path, "pub mod a;\npub mod b;\n").unwrap();
         changes.push((path, 2));
     }
-    client.did_change_watched_files(&changes);
+    if client_notifies {
+        client.did_change_watched_files(&changes);
+    }
     client.wait_until_ready();
     let after_delete = references_in(client, def, new_file);
     assert!(
@@ -1883,6 +1890,7 @@ fn spec_7_3_2_watched_file_changes_through_lsp_det_with_real_rust_analyzer() {
         support::C_RS_WITH_CALL,
         Some((&project.file("lib.rs"), support::LIB_RS_WITH_C)),
         references_in,
+        true,
     );
     client.shutdown();
 }
@@ -1904,6 +1912,7 @@ fn gopls_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_gopls() {
         support::GO_C_WITH_CALL,
         None,
         go_references_in,
+        true,
     );
     client.shutdown();
 }
@@ -2086,6 +2095,7 @@ fn changed_file_is_reflected(
     caller: &std::path::Path,
     two_calls: &str,
     references_in: fn(&mut ConformanceClient, &std::path::Path, &std::path::Path) -> Vec<Value>,
+    client_notifies: bool,
 ) {
     let before = references_in(client, def, caller);
     assert!(
@@ -2093,7 +2103,9 @@ fn changed_file_is_reflected(
         "前提が崩れている。呼び出し側からの参照が見えるはず"
     );
     std::fs::write(caller, two_calls).unwrap();
-    client.did_change_watched_files(&[(caller, 2)]);
+    if client_notifies {
+        client.did_change_watched_files(&[(caller, 2)]);
+    }
     client.wait_until_ready();
     let after = references_in(client, def, caller);
     assert_eq!(
@@ -2117,6 +2129,7 @@ fn pyright_spec_7_3_2_changed_file_through_lsp_det_with_real_pyright() {
         &project.file("b.py"),
         support::PY_B_WITH_TWO_CALLS,
         py_references_in,
+        true,
     );
     client.shutdown();
 }
@@ -2135,6 +2148,99 @@ fn typescript_language_server_spec_7_3_2_changed_file_through_lsp_det_with_real_
         &project.file("b.ts"),
         support::TS_B_WITH_TWO_CALLS,
         ts_references_in,
+        true,
+    );
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// ADR 0015 決定 A: 宣言も送信もしないクライアントに代わって lsp-det が
+// didChangeWatchedFiles を送る。上と同じ手順を、クライアントが通知を送らず
+// fixture を git 管理下に置いて回す。
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn stand_in_spec_7_3_2_through_lsp_det_with_real_rust_analyzer() {
+    let project = support::TempCargoProject::with_cross_file_reference("standin");
+    support::git_init(&project.root);
+    let mut client = ConformanceClient::start(&real_rust_analyzer(&project));
+    client.initialize(true);
+    client.wait_until_ready();
+    client.did_open(&project.file("a.rs"), "rust");
+    watched_file_changes_are_reflected(
+        &mut client,
+        &project.file("a.rs"),
+        &project.file("b.rs"),
+        support::B_WITH_TWO_CALLS,
+        &project.file("c.rs"),
+        support::C_RS_WITH_CALL,
+        Some((&project.file("lib.rs"), support::LIB_RS_WITH_C)),
+        references_in,
+        false,
+    );
+    client.shutdown();
+}
+
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn stand_in_spec_7_3_2_through_lsp_det_with_real_gopls() {
+    let project = support::TempGoProject::with_cross_file_reference("standin");
+    support::git_init(&project.root);
+    let mut client = ConformanceClient::start(&real_gopls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    client.did_open(&project.file("a.go"), "go");
+    watched_file_changes_are_reflected(
+        &mut client,
+        &project.file("a.go"),
+        &project.file("b.go"),
+        support::GO_B_WITH_TWO_CALLS,
+        &project.file("c.go"),
+        support::GO_C_WITH_CALL,
+        None,
+        go_references_in,
+        false,
+    );
+    client.shutdown();
+}
+
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn stand_in_spec_7_3_2_changed_file_through_lsp_det_with_real_pyright() {
+    let project = support::TempPyProject::with_cross_file_reference("standin");
+    support::git_init(&project.root);
+    let mut client = ConformanceClient::start(&real_pyright(&project, "pyright-langserver"));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    client.did_open(&project.file("a.py"), "python");
+    changed_file_is_reflected(
+        &mut client,
+        &project.file("a.py"),
+        &project.file("b.py"),
+        support::PY_B_WITH_TWO_CALLS,
+        py_references_in,
+        false,
+    );
+    client.shutdown();
+}
+
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn stand_in_spec_7_3_2_changed_file_through_lsp_det_with_real_server() {
+    let project = support::TempTsProject::with_cross_file_reference("standin");
+    support::git_init(&project.root);
+    let mut client = ConformanceClient::start(&real_tsls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&project.file("a.ts"), "typescript");
+    client.wait_until_ready();
+    changed_file_is_reflected(
+        &mut client,
+        &project.file("a.ts"),
+        &project.file("b.ts"),
+        support::TS_B_WITH_TWO_CALLS,
+        ts_references_in,
+        false,
     );
     client.shutdown();
 }

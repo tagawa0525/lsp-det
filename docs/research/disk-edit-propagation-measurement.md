@@ -70,3 +70,14 @@ ADR 0014 の第 2 のテストを実サーバーに当てると、Changed は 4 
 - "Searching for source files" は pyright のログに一度も出ない（写像が再開の信号として読んでいた文字列は、この版では出ない）
 - tsls の 1.03 秒は TypeScript 自身の監視の実装で、Linux では再帰の glob を `setTimeout(…, 1000)` で更新する（`typescript.js` の `createDirectoryWatcherSupportingRecursive`）。tsls は `useClientFileWatcher` を `initializationOptions` で指定し、かつクライアントが `dynamicRegistration` と `relativePatternSupport` を宣言し TypeScript 5.4.4 以上のときだけ、クライアントの通知を tsserver の `watchChange` に流す。それ以外では `didChangeWatchedFiles` は何もしない（`src/lsp-server.ts:184-201, 498-500`）
 - 測定の道具は scratchpad の `diskedit/probe2.py`（`run2_all.sh`、`summarize2.py`）
+
+## 追記（2026-09-06）: 代行の費用
+
+ADR 0015 の代行（横断リクエストごとに `git ls-files --cached --others --exclude-standard` の一覧と各ファイルの mtime を取り、前回と比べる）の費用を、`reference/zed`（git 管理下、一覧に載るファイル 4269 個）で測った。`src/watched_files.rs` の `measures_the_scan_cost_on_a_large_workspace`（`#[ignore]`）。
+
+| 走査               | 時間   |
+| ------------------ | ------ |
+| 最初の一覧         | 22.6ms |
+| 2 回目（変更なし） | 21.7ms |
+
+横断リクエスト 1 回あたり約 20ms。lsp-det の保留（数秒〜数十秒）や言語サーバーの応答に比べて小さい。走査は要求の到着時にだけ行い、時計は使わない。

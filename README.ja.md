@@ -110,6 +110,8 @@ lsp-det: [0.213s] server state -> {"health":"ok","readiness":"indexing"} (previo
 lsp-det: [6.712s] server state -> {"health":"ok","readiness":"ready"} (previous held 6.499s)
 ```
 
+下流側は、クライアントがしないことを 2 つ代行する（ADR 0015）。クライアントが `workspace.didChangeWatchedFiles` を宣言も送信もしないとき、横断リクエストのたびに `git ls-files`（追跡中と、無視されていない未追跡のファイル）でワークスペースを列挙し、前回から増えた・変わった・消えたファイルを言語サーバーに知らせる。自前でディスクを監視しない言語サーバー（gopls、pyright）でも、シェルでの編集が応答に反映される。これには PATH 上の `git` と、git 管理下のワークスペースが要る（管理外では何も送らない）。もう 1 つは、既に開いている文書への `didOpen` を全文の `didChange` に書き換えること。LSP が求める形で、typescript-language-server はこれでないと受け付けない。どちらもクライアントが自分で行うようになれば消える。
+
 対応 OS は Linux・macOS・Windows。クライアントがパイプを閉じずに死んだときは、lsp-det が終了して言語サーバーも道連れにする。その機構は OS ごとで、Linux は `PR_SET_PDEATHSIG`、macOS は `kqueue` のプロセスイベント、Windows は Job Object。各 OS のリリースバイナリは `v*` のタグから [GitHub Releases](https://github.com/tagawa0525/lsp-det/releases) に添付される。
 
 ## ビルドとテスト

@@ -377,6 +377,33 @@ impl ConformanceClient {
         result
     }
 
+    /// `rootUri` と capabilities を指定する `initialize` → `initialized`。
+    pub fn initialize_with_root_and_capabilities(
+        &mut self,
+        root: &std::path::Path,
+        capabilities: Value,
+    ) -> Value {
+        let uri = file_uri(root);
+        let result = self.request(
+            "initialize",
+            json!({
+                "processId": std::process::id(),
+                "rootUri": uri,
+                "workspaceFolders": [{"uri": uri, "name": "fixture"}],
+                "capabilities": capabilities,
+            }),
+        );
+        self.notify("initialized", json!({}));
+        result
+    }
+
+    pub fn did_close(&mut self, path: &std::path::Path) {
+        self.notify(
+            "textDocument/didClose",
+            json!({"textDocument": {"uri": file_uri(path)}}),
+        );
+    }
+
     pub fn initialize_with_capabilities(&mut self, capabilities: Value) -> Value {
         let result = self.initialize_raw_with_capabilities(capabilities);
         self.notify("initialized", json!({}));
@@ -792,6 +819,14 @@ impl ConformanceClient {
     }
 
     /// 偽上流が `initialize` で受け取った `ClientCapabilities`。
+    /// 上流に届いた `method` の通知の params (届いた順)。
+    pub fn upstream_notifications(&mut self, method: &str) -> Vec<Value> {
+        self.upstream_report()["notifications"][method]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    }
+
     pub fn upstream_client_capabilities(&mut self) -> Value {
         self.upstream_report()["initializeParams"]["capabilities"].clone()
     }
@@ -893,8 +928,10 @@ fn spawn_reader(stdout: ChildStdout, tx: Sender<Incoming>) {
 
 /// `file://` URI。テスト用なのでパーセントエンコードは扱わない
 /// (一時ディレクトリ名を ASCII に限る前提)。
+/// パスの `file:` URI。lsp-det 本体と同じ変換 (Windows は `file:///C:/...`、
+/// パーセントエンコード)。実サーバーが返す uri と突き合わせるので、形を揃える。
 pub fn file_uri(path: &std::path::Path) -> String {
-    format!("file://{}", path.display())
+    lsp_det::uri::path_to_uri(path)
 }
 
 /// 一時的な cargo プロジェクト。クロスファイルの問い合わせには、
@@ -1213,4 +1250,54 @@ pub const LIB_RS_WITH_C: &str = "pub mod a;\npub mod b;\npub mod c;\n";
 /// `write!` を使うため。
 pub fn flush<W: Write>(writer: &mut W) {
     let _ = writer.flush();
+}
+
+/// fixture を git 管理下に置く (下流側の代行は git ls-files で列挙する)。
+pub fn git_init(root: &std::path::Path) {
+    let status = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(root)
+        .status()
+        .expect("git を起動できない");
+    assert!(status.success(), "git init に失敗: {}", root.display());
+}
+
+/// 一時的な git 管理下のワークスペース (下流側の代行のテスト用)。
+/// `git init` して `a.rs` を置く。追跡はしない (`--others` で拾われる)。
+pub struct TempGitWorkspace {
+    pub root: PathBuf,
+}
+
+impl TempGitWorkspace {
+    pub fn new(tag: &str) -> Self {
+        let root =
+            std::env::temp_dir().join(format!("lsp-det-stand-in-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("一時ワークスペースを作れない");
+        git_init(&root);
+        std::fs::write(root.join("a.rs"), "pub fn target() {}\n").unwrap();
+        TempGitWorkspace { root }
+    }
+
+    /// git 管理外の一時ディレクトリ。
+    pub fn without_git(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-stand-in-nogit-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("一時ディレクトリを作れない");
+        std::fs::write(root.join("a.rs"), "pub fn target() {}\n").unwrap();
+        TempGitWorkspace { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempGitWorkspace {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
 }

@@ -19,7 +19,7 @@ v0.1 の成功基準（ADR 0009 決定 A-2）は満たした。仕様・上流�
 
 ### A. 範囲
 
-1. v0.1 は現在の main で完了とする。以後の作業は v0.2 の範囲とし、v0.1 設計書（[v0.1-design.md](../v0.1-design.md)）の 8 章にマイルストーンを追記する形で進める。仕様（[spec/server-state.md](../spec/server-state.md)）は変更しない
+1. v0.1 は現在の main で完了とする。以後の作業は v0.2 の範囲とし、v0.1 設計書（[v0.1-design.md](../v0.1-design.md)）の 8 章にマイルストーンを追記する形で進める。仕様（[spec/server-state.ja.md](../spec/server-state.ja.md)）は変更しない
 2. v0.2 の範囲は、**pyright の写像**、**typescript-language-server の写像**、**Serena を下流の被験者にした観測**の 3 つである
 3. 宣言範囲と起動方法の宣言は凍結のまま（ADR 0001 決定 2）。jdtls・clangd の写像は範囲外。提案を 1 つに絞る
 4. rust-analyzer と gopls への上流 issue（vision 5 章 2）は v0.2 の完了を待たずに出してよい。ただし相手が読める形（README と仕様の英訳）が先に要る。これは v0.2 のマイルストーンとは独立の小さい作業として扱う

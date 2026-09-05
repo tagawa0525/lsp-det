@@ -123,7 +123,7 @@ The only dependencies are `serde`, `serde_json`, `thiserror`, and `libc`. There 
 nix develop            # pins rustc, rust-analyzer, gopls, pyright, and typescript-language-server
 cargo build --release  # target/release/lsp-det
 cargo test             # deterministic tests with a fake language server and a fake client
-cargo test --test conformance -- --ignored   # 19 real-server tests (local only, not in CI)
+cargo test --test conformance -- --ignored   # 31 real-server tests (local only, not in CI)
 ```
 
 The tests are the spec made executable. Swapping the subject applies them to real servers and real clients.

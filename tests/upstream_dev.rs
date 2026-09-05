@@ -1,31 +1,32 @@
-//! 上流に出す変更の受け入れ条件（ローカル専用。すべて `#[ignore]`）。
+//! Acceptance conditions for the changes to be sent upstream (local only. All `#[ignore]`).
 //!
-//! `scripts/upstream/build-*.sh` で `reference/` の clone をビルドし、
-//! `target/upstream/bin` を PATH の先頭に置いて実行する:
+//! Build the clones in `reference/` with `scripts/upstream/build-*.sh`, and run with
+//! `target/upstream/bin` at the front of PATH:
 //!
 //! ```text
 //! PATH="$PWD/target/upstream/bin:$PATH" cargo test --test upstream_dev -- --ignored
 //! ```
 //!
-//! 各テストは「上流がこう振る舞うようになれば通る」という形で書く。
-//! 配布版や無変更のソースビルドでは**失敗するのが正しい**（まだ変更が
-//! 入っていない）。clone に変更を当ててビルドし直し、通ったら上流に出す。
-//! CI では回さない（v0.1-design.md 6 章）。
+//! Each test is written in the form "passes once the upstream behaves this way".
+//! Against a distributed build or an unmodified source build, **failing is correct** (the change
+//! is not in yet). Apply the change to the clone, rebuild, and once it passes, send it upstream.
+//! Not run in CI (v0.1-design.md chapter 6).
 //!
-//! 対象:
-//! - pyright / typescript-language-server: `InitializeResult.serverInfo` を
-//!   返す（LSP 3.15 の標準項目。ADR 0011 決定 C）。返せば lsp-det は起動ログ
-//!   ではなく `serverInfo` で写像を選ぶ
-//! - rust-analyzer / gopls: サーバー状態プロトコルを自ら話す（仕様 3〜7 章。
-//!   vision.md 5 章の経路 2）。話せば lsp-det の上流側は恒等写像になり
-//!   （仕様 8.2 の 6、8.4 の 2）、宣言と状態は上流のものがそのまま流れる
+//! Targets:
+//! - pyright / typescript-language-server: return `InitializeResult.serverInfo` (a standard
+//!   field of LSP 3.15. ADR 0011 decision C). Once returned, lsp-det selects the mapping by
+//!   `serverInfo` rather than by the startup log
+//! - rust-analyzer / gopls: speak the server state protocol themselves (spec chapters 3 to 7.
+//!   Path 2 of vision.md chapter 5). Once they do, the upstream side of lsp-det becomes the
+//!   identity mapping (spec 8.2 item 6, 8.4 item 2), and the upstream's declaration and state
+//!   flow through as they are
 
 mod support;
 
 use serde_json::{Value, json};
 use support::{ConformanceClient, ServerUnderTest};
 
-/// 上流を lsp-det を挟まずに直接起動する被験者。
+/// A subject that launches the upstream directly, without lsp-det in between.
 fn direct(command: &str, args: &[&str], root: std::path::PathBuf) -> ServerUnderTest {
     ServerUnderTest {
         program: which(command),
@@ -34,7 +35,7 @@ fn direct(command: &str, args: &[&str], root: std::path::PathBuf) -> ServerUnder
     }
 }
 
-/// lsp-det 経由で起動する被験者。
+/// A subject launched via lsp-det.
 fn via_lsp_det(command: &str, args: &[&str], root: std::path::PathBuf) -> ServerUnderTest {
     let mut all = vec!["--".to_string(), command.to_string()];
     all.extend(args.iter().map(|a| a.to_string()));
@@ -45,20 +46,20 @@ fn via_lsp_det(command: &str, args: &[&str], root: std::path::PathBuf) -> Server
     }
 }
 
-/// PATH からコマンドを探す。`ServerUnderTest.program` は絶対パスでも名前でも
-/// よいが、どのビルドが使われたかを失敗時に見せるために解決しておく。
+/// Finds a command in PATH. `ServerUnderTest.program` may be either an absolute path or a name,
+/// but it is resolved so that a failure shows which build was used.
 fn which(command: &str) -> std::path::PathBuf {
-    let path = std::env::var_os("PATH").expect("PATH がない");
+    let path = std::env::var_os("PATH").expect("PATH is missing");
     let found = std::env::split_paths(&path)
         .flat_map(|dir| candidates(&dir, command))
         .find(|candidate| is_executable(candidate))
-        .unwrap_or_else(|| panic!("{command} が PATH にない"));
+        .unwrap_or_else(|| panic!("{command} is not in PATH"));
     eprintln!("upstream_dev: {command} -> {}", found.display());
     found
 }
 
-/// `dir` の中で `command` として実行されうるファイル名。Windows は拡張子を
-/// 補って探す (npm の起動子は `.cmd`)。
+/// The file names that could run as `command` inside `dir`. On Windows, searches with extensions
+/// added (npm's launchers are `.cmd`).
 fn candidates(dir: &std::path::Path, command: &str) -> Vec<std::path::PathBuf> {
     let mut found = vec![dir.join(command)];
     if cfg!(windows) {
@@ -90,13 +91,13 @@ fn server_info_of(server: &ServerUnderTest) -> Value {
 }
 
 // ---------------------------------------------------------------------------
-// serverInfo を返さないサーバーへの変更（ADR 0011 決定 C）
+// Changes to servers that do not return serverInfo (ADR 0011 decision C)
 // ---------------------------------------------------------------------------
 
-/// pyright: `InitializeResult.serverInfo` を `{name: "pyright", version}` で返す。
-/// basedpyright は既に返している（`{name: "basedpyright", version: "1.39.8"}`）。
+/// pyright: returns `InitializeResult.serverInfo` as `{name: "pyright", version}`.
+/// basedpyright already returns it (`{name: "basedpyright", version: "1.39.8"}`).
 #[test]
-#[ignore = "上流の変更の受け入れ条件。ローカル専用。PATH に target/upstream/bin を置いて cargo test --test upstream_dev -- --ignored"]
+#[ignore = "acceptance condition for an upstream change. Local only. Put target/upstream/bin in PATH and run cargo test --test upstream_dev -- --ignored"]
 fn pyright_names_itself_in_server_info() {
     let project = support::TempPyProject::with_cross_file_reference("upstream-dev");
     let info = server_info_of(&direct(
@@ -104,20 +105,20 @@ fn pyright_names_itself_in_server_info() {
         &["--stdio"],
         project.root.clone(),
     ));
-    // 上流は productName ("Pyright") を名乗る。lsp-det は大文字小文字を区別しない。
+    // The upstream calls itself by the productName ("Pyright"). lsp-det is case-insensitive.
     assert!(
         info["name"]
             .as_str()
             .is_some_and(|n| n.eq_ignore_ascii_case("pyright")),
-        "pyright が serverInfo で名乗っていない: {info}"
+        "pyright does not name itself in serverInfo: {info}"
     );
     assert!(
         info["version"].as_str().is_some_and(|v| !v.is_empty()),
-        "版を名乗っていない: {info}"
+        "does not name its version: {info}"
     );
 
-    // 名乗れば lsp-det は起動ログではなく serverInfo で写像を選ぶ。
-    // 版が pyright::TESTED_VERSIONS になければ保証は宣言しない（true）。
+    // Once it names itself, lsp-det selects the mapping by serverInfo rather than by the startup
+    // log. If the version is not in pyright::TESTED_VERSIONS, no guarantee is declared (true).
     let mut client = ConformanceClient::start(&via_lsp_det(
         "pyright-langserver",
         &["--stdio"],
@@ -126,15 +127,15 @@ fn pyright_names_itself_in_server_info() {
     let result = client.initialize_with_root(true, &project.root);
     assert!(
         !result["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null(),
-        "lsp-det が写像を選べていない: {result}"
+        "lsp-det could not select the mapping: {result}"
     );
     client.shutdown();
 }
 
-/// typescript-language-server: `InitializeResult.serverInfo` を
-/// `{name: "typescript-language-server", version}` で返す。
+/// typescript-language-server: returns `InitializeResult.serverInfo` as
+/// `{name: "typescript-language-server", version}`.
 #[test]
-#[ignore = "上流の変更の受け入れ条件。ローカル専用。PATH に target/upstream/bin を置いて cargo test --test upstream_dev -- --ignored"]
+#[ignore = "acceptance condition for an upstream change. Local only. Put target/upstream/bin in PATH and run cargo test --test upstream_dev -- --ignored"]
 fn typescript_language_server_names_itself_in_server_info() {
     let project = support::TempTsProject::with_cross_file_reference("upstream-dev");
     let info = server_info_of(&direct(
@@ -145,66 +146,67 @@ fn typescript_language_server_names_itself_in_server_info() {
     assert_eq!(
         info["name"],
         json!("typescript-language-server"),
-        "typescript-language-server が serverInfo で名乗っていない: {info}"
+        "typescript-language-server does not name itself in serverInfo: {info}"
     );
     assert!(
         info["version"].as_str().is_some_and(|v| !v.is_empty()),
-        "版を名乗っていない: {info}"
+        "does not name its version: {info}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// サーバー状態プロトコルを自ら話す変更（vision.md 5 章の経路 2）
+// Changes to speak the server state protocol themselves (path 2 of vision.md chapter 5)
 // ---------------------------------------------------------------------------
 
-/// 上流が自ら `serverStateProvider` を宣言し、`experimental/serverState` に答える。
-/// lsp-det を挟むと上流側は恒等写像になり、宣言と状態は上流のものがそのまま
-/// 流れる（仕様 8.4 の 2）。
+/// The upstream declares `serverStateProvider` on its own and answers `experimental/serverState`.
+/// With lsp-det in between, the upstream side becomes the identity mapping, and the upstream's
+/// declaration and state flow through as they are (spec 8.4 item 2).
 fn assert_upstream_speaks_the_protocol(command: &str, args: &[&str], root: std::path::PathBuf) {
-    // 直接: 宣言と応答がある。
+    // Direct: the declaration and the response are there.
     let mut upstream = ConformanceClient::start(&direct(command, args, root.clone()));
     let direct_result = upstream.initialize_with_root(true, &root);
     let declared =
         direct_result["result"]["capabilities"]["experimental"]["serverStateProvider"].clone();
     assert!(
         !declared.is_null() && declared != json!(false),
-        "{command} が serverStateProvider を宣言していない: {direct_result}"
+        "{command} does not declare serverStateProvider: {direct_result}"
     );
     let direct_state = upstream.request("experimental/serverState", json!({}));
     assert!(
         direct_state["error"].is_null() && !direct_state["result"]["readiness"].is_null(),
-        "{command} が experimental/serverState に答えない: {direct_state}"
+        "{command} does not answer experimental/serverState: {direct_state}"
     );
     upstream.shutdown();
 
-    // lsp-det 経由: 宣言は上流のものと一致し、状態も上流の答えがそのまま返る。
+    // Via lsp-det: the declaration matches the upstream's, and the state too is the upstream's
+    // answer returned as is.
     let mut client = ConformanceClient::start(&via_lsp_det(command, args, root.clone()));
     let result = client.initialize_with_root(true, &root);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"], declared,
-        "lsp-det が上流の宣言を書き換えた（仕様 8.4 の 2）: {result}"
+        "lsp-det rewrote the upstream's declaration (spec 8.4 item 2): {result}"
     );
     let state = client.request("experimental/serverState", json!({}));
     assert!(
         state["error"].is_null() && !state["result"]["readiness"].is_null(),
-        "lsp-det 経由で experimental/serverState が答えない: {state}"
+        "experimental/serverState is not answered via lsp-det: {state}"
     );
     client.shutdown();
 }
 
-/// rust-analyzer: `experimental/serverStatus` の後継として本プロトコルを話す
-/// （仕様 10 章。quiescent → readiness、health はそのまま、保証を宣言）。
+/// rust-analyzer: speaks this protocol as the successor of `experimental/serverStatus`
+/// (spec chapter 10. quiescent → readiness, health as is, declares the guarantees).
 #[test]
-#[ignore = "上流の変更の受け入れ条件。ローカル専用。PATH に target/upstream/bin を置いて cargo test --test upstream_dev -- --ignored"]
+#[ignore = "acceptance condition for an upstream change. Local only. Put target/upstream/bin in PATH and run cargo test --test upstream_dev -- --ignored"]
 fn rust_analyzer_speaks_the_server_state_protocol() {
     let project = support::TempCargoProject::with_cross_file_reference("upstream-dev");
     assert_upstream_speaks_the_protocol("rust-analyzer", &[], project.root.clone());
 }
 
-/// gopls: "Setting up workspace" の progress に加えて本プロトコルを話す
-/// （go.mod 変更後の再ロードも `indexing` として伝えられるようになる）。
+/// gopls: speaks this protocol in addition to the "Setting up workspace" progress
+/// (the reload after a go.mod change can then also be conveyed as `indexing`).
 #[test]
-#[ignore = "上流の変更の受け入れ条件。ローカル専用。PATH に target/upstream/bin を置いて cargo test --test upstream_dev -- --ignored"]
+#[ignore = "acceptance condition for an upstream change. Local only. Put target/upstream/bin in PATH and run cargo test --test upstream_dev -- --ignored"]
 fn gopls_speaks_the_server_state_protocol() {
     let project = support::TempGoProject::with_cross_file_reference("upstream-dev");
     assert_upstream_speaks_the_protocol("gopls", &[], project.root.clone());

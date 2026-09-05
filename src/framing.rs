@@ -1,7 +1,7 @@
-//! LSP の Content-Length フレーミング。
+//! LSP Content-Length framing.
 //!
-//! ボディは JSON として解釈せず、バイト列のまま読み書きする
-//! (v0.1-design.md 4.6: 完全パース+再シリアライズ禁止)。
+//! The body is not interpreted as JSON; it is read and written as a byte sequence
+//! (v0.1-design.md 4.6: no full parse + re-serialization).
 
 use std::io::{self, BufRead, Write};
 
@@ -19,15 +19,15 @@ pub enum FramingError {
     InvalidContentLength(String),
 }
 
-/// 1 メッセージのボディ。ヘッダは Content-Length のみを扱う
-/// (Content-Type 等の他ヘッダは読み捨て、書き込み時は再構成しない)。
+/// The body of one message. Only the Content-Length header is handled
+/// (other headers such as Content-Type are read and discarded, and not reconstructed on write).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RawMessage {
     pub body: Vec<u8>,
 }
 
-/// ストリームから 1 メッセージを読む。
-/// クリーンな EOF (ヘッダの先頭で切れている) なら `Ok(None)` を返す。
+/// Reads one message from the stream.
+/// Returns `Ok(None)` on a clean EOF (cut off at the start of a header).
 pub fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<RawMessage>, FramingError> {
     let content_length = match read_header(reader)? {
         Some(len) => len,
@@ -39,10 +39,10 @@ pub fn read_message<R: BufRead>(reader: &mut R) -> Result<Option<RawMessage>, Fr
     Ok(Some(RawMessage { body }))
 }
 
-/// ヘッダ部を読み、Content-Length を返す。
-/// ヘッダの先頭バイトを読む前に EOF に達した場合は `Ok(None)`
-/// (クリーンな切断)。ヘッダの途中で EOF に達した場合は `Io` エラーになる
-/// (`read_line` が `UnexpectedEof` を返す)。
+/// Reads the header part and returns the Content-Length.
+/// `Ok(None)` when EOF is reached before the first byte of a header is read
+/// (a clean disconnect). EOF in the middle of a header is an `Io` error
+/// (`read_line` returns `UnexpectedEof`).
 fn read_header<R: BufRead>(reader: &mut R) -> Result<Option<usize>, FramingError> {
     let mut content_length: Option<usize> = None;
     let mut line = String::new();
@@ -64,7 +64,7 @@ fn read_header<R: BufRead>(reader: &mut R) -> Result<Option<usize>, FramingError
             .ok_or_else(|| FramingError::MalformedHeaderLine(line.clone()))?;
 
         if text.is_empty() {
-            // ヘッダとボディを区切る空行。
+            // The empty line separating the header from the body.
             break;
         }
 
@@ -78,7 +78,7 @@ fn read_header<R: BufRead>(reader: &mut R) -> Result<Option<usize>, FramingError
                 .map_err(|_| FramingError::InvalidContentLength(value.to_string()))?;
             content_length = Some(len);
         }
-        // content-type やその他の未知ヘッダは寛容に読み捨てる。
+        // content-type and other unknown headers are leniently read and discarded.
     }
 
     content_length
@@ -86,7 +86,7 @@ fn read_header<R: BufRead>(reader: &mut R) -> Result<Option<usize>, FramingError
         .map(Some)
 }
 
-/// ストリームへ 1 メッセージを書く。Content-Length は body.len() から再計算する。
+/// Writes one message to the stream. Content-Length is recomputed from body.len().
 pub fn write_message<W: Write>(writer: &mut W, msg: &RawMessage) -> io::Result<()> {
     write!(writer, "Content-Length: {}\r\n\r\n", msg.body.len())?;
     writer.write_all(&msg.body)?;
@@ -144,7 +144,7 @@ mod tests {
 
     #[test]
     fn ignores_unknown_headers() {
-        // 将来サーバーが未知のヘッダを追加しても壊れないこと (寛容な読み取り)。
+        // Must not break if a server adds an unknown header in the future (lenient reading).
         let mut input = b"X-Future-Header: value\r\n".to_vec();
         input.extend_from_slice(format!("Content-Length: {}\r\n\r\n", 2).as_bytes());
         input.extend_from_slice(b"{}");
@@ -153,8 +153,8 @@ mod tests {
         assert_eq!(msg.body, b"{}");
     }
 
-    /// 分割到着のシミュレーション: 1 バイトずつしか返さない Reader でも
-    /// ヘッダ・ボディを正しく読めること (ADR 0005 チェックリスト #4 相当)。
+    /// Simulation of fragmented arrival: the header and body must be read correctly even with
+    /// a Reader that returns only one byte at a time (equivalent to ADR 0005 checklist #4).
     struct OneByteAtATimeReader {
         data: Vec<u8>,
         pos: usize,
@@ -185,7 +185,8 @@ mod tests {
 
     #[test]
     fn reads_large_message_split_across_tiny_reads() {
-        // ls_proxy で報告された「巨大メッセージの分割でパースが壊れる」実例への回帰テスト。
+        // Regression test for the real case reported in ls_proxy: "parsing breaks when a huge
+        // message is fragmented".
         let large_body = format!(r#"{{"data":"{}"}}"#, "x".repeat(500_000));
         let input = framed(&large_body);
         let mut reader = BufReader::new(OneByteAtATimeReader {
@@ -198,10 +199,10 @@ mod tests {
 
     #[test]
     fn write_then_read_roundtrips_bytes_exactly() {
-        // 完全パース+再シリアライズをしていないことの検証。
-        // キー順序・数値表記("1.0"等)が変化しないことを、素朴なJSON構造では
-        // 検出できないため、ここでは「書いたバイト列がそのまま読み返せる」ことで
-        // 非破壊転送を保証する。
+        // Verifies that no full parse + re-serialization happens.
+        // A naive JSON structure cannot detect that key order and number notation ("1.0" etc.)
+        // are unchanged, so here non-destructive forwarding is guaranteed by "the written bytes
+        // can be read back exactly as they are".
         let body = br#"{"z":1,"a":2.0,"m":"x"}"#.to_vec();
         let mut buf = Vec::new();
         write_message(&mut buf, &RawMessage { body: body.clone() }).unwrap();

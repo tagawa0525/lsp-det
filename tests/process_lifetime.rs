@@ -1,11 +1,12 @@
-//! プロセス寿命の 2 経路（設計 4.5、ADR 0012 決定 B）の多プロセス結合テスト。
+//! Multi-process integration tests for the 2 paths of process lifetime (design 4.5, ADR 0012
+//! decision B).
 //!
-//! 1 段目の stdin の EOF は OS に依らず働くので、ここでは EOF が届かない状況を
-//! 作り、2 段目（OS の機構）だけで終了することを確かめる。3 つの OS の CI で
-//! 同じテストを回す（ADR 0012 決定 D）。
+//! The 1st stage, EOF on stdin, works regardless of the OS, so here we create a situation where
+//! EOF does not arrive and check that the 2nd stage (the OS mechanism) alone terminates the
+//! process. The same tests run in CI on the 3 OSes (ADR 0012 decision D).
 //!
-//! 末尾の `#[ignore]` は実サーバーが stdin の EOF で終了するかの実測で、
-//! macOS の上流の追従が EOF に委ねられている根拠になる。
+//! The `#[ignore]` tests at the end measure whether real servers exit on EOF of stdin, which is
+//! the basis for leaving the upstream's lifetime tracking on macOS to EOF.
 
 mod support;
 
@@ -16,22 +17,24 @@ use std::time::Duration;
 
 use serde_json::json;
 
-/// 殺してから消えるまでを待つ上限。超えたら失敗（黙って通さない）。
+/// Limit for waiting from the kill until the process disappears. Exceeding it fails (never
+/// passes silently).
 const EXIT_WINDOW: Duration = Duration::from_secs(10);
 
-/// stderr の行を別スレッドで読み、`needle` を含む最初の行から pid を取り出す。
+/// Reads stderr lines on a separate thread, and extracts the pid from the first line containing
+/// `needle`.
 fn pid_from_stderr(lines: &Receiver<String>, needle: &str) -> u32 {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         let line = lines
             .recv_timeout(remaining)
-            .unwrap_or_else(|_| panic!("stderr に {needle:?} の行が来ない"));
+            .unwrap_or_else(|_| panic!("no line containing {needle:?} arrives on stderr"));
         if let Some(rest) = line.split(needle).nth(1) {
             return rest
                 .trim()
                 .parse()
-                .unwrap_or_else(|err| panic!("{line:?} から pid を読めない: {err}"));
+                .unwrap_or_else(|err| panic!("cannot read the pid from {line:?}: {err}"));
         }
     }
 }
@@ -49,12 +52,11 @@ fn spawn_stderr_lines<R: Read + Send + 'static>(stderr: R) -> Receiver<String> {
     rx
 }
 
-/// 経路 1: クライアントが不意に死んだら lsp-det も上流も終了する。
+/// Path 1: if the client dies unexpectedly, both lsp-det and the upstream exit.
 ///
-/// 擬似クライアント（`examples/pseudo_client.rs`）が lsp-det を起動し、stdin は
-/// 本テストが持つパイプを継承させる。擬似クライアントを殺しても lsp-det の
-/// stdin は閉じないので、EOF ではなく OS の機構だけが lsp-det を終了させる。
-/// 上流は lsp-det の終了に追従する。
+/// The pseudo client (`examples/pseudo_client.rs`) launches lsp-det, and makes it inherit a pipe
+/// held by this test as stdin. Killing the pseudo client does not close lsp-det's stdin, so only
+/// the OS mechanism, not EOF, terminates lsp-det. The upstream follows lsp-det's exit.
 #[test]
 fn lsp_det_and_upstream_exit_when_the_client_dies_without_closing_stdin() {
     let mut pseudo_client = Command::new(support::pseudo_client_binary())
@@ -65,8 +67,8 @@ fn lsp_det_and_upstream_exit_when_the_client_dies_without_closing_stdin() {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("擬似クライアントを起動できない");
-    // 書き込み側を持ち続ける。lsp-det の stdin はこのパイプの読み取り側。
+        .expect("cannot launch the pseudo client");
+    // Keep holding the write end. lsp-det's stdin is the read end of this pipe.
     let held_stdin = pseudo_client.stdin.take().expect("stdin is piped");
     let lines = spawn_stderr_lines(pseudo_client.stderr.take().expect("stderr is piped"));
 
@@ -75,28 +77,26 @@ fn lsp_det_and_upstream_exit_when_the_client_dies_without_closing_stdin() {
     assert!(support::process_is_alive(lsp_det_pid));
     assert!(support::process_is_alive(upstream_pid));
 
-    // クライアントの不意の死（SIGKILL / TerminateProcess）。片付けの機会はない。
-    pseudo_client.kill().expect("擬似クライアントを殺せない");
-    pseudo_client
-        .wait()
-        .expect("擬似クライアントを回収できない");
+    // The client's unexpected death (SIGKILL / TerminateProcess). No chance to clean up.
+    pseudo_client.kill().expect("cannot kill the pseudo client");
+    pseudo_client.wait().expect("cannot reap the pseudo client");
 
     assert!(
         support::wait_until_exited(lsp_det_pid, EXIT_WINDOW),
-        "クライアントが死んでも lsp-det (pid {lsp_det_pid}) が残っている"
+        "lsp-det (pid {lsp_det_pid}) remains even though the client died"
     );
     assert!(
         support::wait_until_exited(upstream_pid, EXIT_WINDOW),
-        "クライアントが死んでも上流 (pid {upstream_pid}) が残っている"
+        "the upstream (pid {upstream_pid}) remains even though the client died"
     );
     drop(held_stdin);
 }
 
-/// 経路 2: lsp-det が不意に死んだら上流も終了する。
+/// Path 2: if lsp-det dies unexpectedly, the upstream exits too.
 ///
-/// lsp-det の stdin は本テストが持ち続ける（EOF を送らない）。lsp-det を殺すと
-/// 上流の stdin の書き込み側は lsp-det と共に消えるので、上流は EOF でも
-/// OS の機構でも終了しうる。どちらでもよく、残らないことが要件である。
+/// This test keeps holding lsp-det's stdin (never sends EOF). When lsp-det is killed, the write
+/// end of the upstream's stdin disappears with lsp-det, so the upstream may exit by either EOF or
+/// the OS mechanism. Either is fine; the requirement is that it does not remain.
 #[test]
 fn upstream_exits_when_lsp_det_dies_abruptly() {
     let mut lsp_det = Command::new(support::lsp_det_binary())
@@ -106,32 +106,32 @@ fn upstream_exits_when_lsp_det_dies_abruptly() {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("lsp-det を起動できない");
+        .expect("cannot launch lsp-det");
     let held_stdin = lsp_det.stdin.take().expect("stdin is piped");
     let lines = spawn_stderr_lines(lsp_det.stderr.take().expect("stderr is piped"));
 
     let upstream_pid = pid_from_stderr(&lines, "fake-lsp-server: pid");
     assert!(support::process_is_alive(upstream_pid));
 
-    lsp_det.kill().expect("lsp-det を殺せない");
-    lsp_det.wait().expect("lsp-det を回収できない");
+    lsp_det.kill().expect("cannot kill lsp-det");
+    lsp_det.wait().expect("cannot reap lsp-det");
 
     assert!(
         support::wait_until_exited(upstream_pid, EXIT_WINDOW),
-        "lsp-det が死んでも上流 (pid {upstream_pid}) が残っている"
+        "the upstream (pid {upstream_pid}) remains even though lsp-det died"
     );
     drop(held_stdin);
 }
 
 // ---------------------------------------------------------------------------
-// 実サーバーが stdin の EOF で終了するか（ローカル専用）
+// Whether real servers exit on EOF of stdin (local only)
 // ---------------------------------------------------------------------------
 
-/// `initialize` の応答を受け取り `initialized` を送った後に stdin を閉じ、
-/// `window` 以内に終了するか。応答を待つのは、起動に失敗して即終了した
-/// ものを「EOF で終了した」と数えないため。終了コードは問わない（EOF を
-/// 異常終了として 1 を返すサーバーがある）。stdout は応答の後も捨て続ける
-/// （パイプが詰まって終了できない状態を作らない）。
+/// Whether the server exits within `window` after receiving the `initialize` response, sending
+/// `initialized`, and then closing stdin. The response is awaited so that a server that failed to
+/// start and exited at once is not counted as "exited on EOF". The exit code does not matter
+/// (some servers return 1, treating EOF as an abnormal exit). stdout keeps being discarded after
+/// the response (so as not to create a state where a clogged pipe prevents exiting).
 fn exits_on_stdin_eof(mut child: Child, root: &std::path::Path, window: Duration) -> bool {
     let mut stdin = child.stdin.take().expect("stdin is piped");
     let mut stdout = BufReader::new(child.stdout.take().expect("stdout is piped"));
@@ -143,11 +143,11 @@ fn exits_on_stdin_eof(mut child: Child, root: &std::path::Path, window: Duration
     write_lsp(&mut stdin, &initialize);
     loop {
         let message = lsp_det::framing::read_message(&mut stdout)
-            .expect("stdout を読めない")
-            .expect("initialize に答える前に stdout が閉じた");
+            .expect("cannot read stdout")
+            .expect("stdout closed before answering initialize");
         let value: serde_json::Value = serde_json::from_slice(&message.body).unwrap();
         if value["id"] == json!(1) {
-            assert!(value["error"].is_null(), "initialize が失敗した: {value}");
+            assert!(value["error"].is_null(), "initialize failed: {value}");
             break;
         }
     }
@@ -190,11 +190,11 @@ fn spawn_direct(program: &str, args: &[&str], root: &std::path::Path) -> Child {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .unwrap_or_else(|err| panic!("{program} を起動できない: {err}"))
+        .unwrap_or_else(|err| panic!("cannot launch {program}: {err}"))
 }
 
 #[test]
-#[ignore = "実 rust-analyzer が要る。ローカル専用"]
+#[ignore = "requires a real rust-analyzer. Local only"]
 fn real_rust_analyzer_exits_on_stdin_eof() {
     let project = support::TempCargoProject::with_cross_file_reference("eof");
     let child = spawn_direct("rust-analyzer", &[], &project.root);
@@ -206,7 +206,7 @@ fn real_rust_analyzer_exits_on_stdin_eof() {
 }
 
 #[test]
-#[ignore = "実 gopls が要る。ローカル専用"]
+#[ignore = "requires a real gopls. Local only"]
 fn real_gopls_exits_on_stdin_eof() {
     let project = support::TempGoProject::with_cross_file_reference("eof");
     let child = spawn_direct("gopls", &[], &project.root);
@@ -218,7 +218,7 @@ fn real_gopls_exits_on_stdin_eof() {
 }
 
 #[test]
-#[ignore = "実 pyright が要る。ローカル専用"]
+#[ignore = "requires a real pyright. Local only"]
 fn real_pyright_exits_on_stdin_eof() {
     let project = support::TempPyProject::with_cross_file_reference("eof");
     let child = spawn_direct("pyright-langserver", &["--stdio"], &project.root);
@@ -230,7 +230,7 @@ fn real_pyright_exits_on_stdin_eof() {
 }
 
 #[test]
-#[ignore = "実 typescript-language-server が要る。ローカル専用"]
+#[ignore = "requires a real typescript-language-server. Local only"]
 fn real_typescript_language_server_exits_on_stdin_eof() {
     let project = support::TempTsProject::with_cross_file_reference("eof");
     let child = spawn_direct("typescript-language-server", &["--stdio"], &project.root);

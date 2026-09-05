@@ -1,24 +1,27 @@
-//! gopls の写像 (v0.1-design.md 5.2)。
+//! The gopls mapping (v0.1-design.md 5.2).
 //!
-//! gopls は readiness の語彙を持たない。`$/progress` から合成する
-//! (gopls のソース `server/general.go`・`server/diagnostics.go`・
-//! `progress/progress.go` で確認):
+//! gopls has no readiness vocabulary. It is synthesized from `$/progress`
+//! (confirmed in the gopls source `server/general.go`, `server/diagnostics.go`,
+//! and `progress/progress.go`):
 //!
-//! - **readiness**: 初期化時にワークスペースフォルダごとに title
-//!   "Setting up workspace" の progress が begin し、`AwaitInitialized` の後に
-//!   "Finished loading packages." で end する (ロード失敗なら "Error loading
-//!   packages: ..." で end)。トークンはランダムなので title で識別し、
-//!   begin で覚えたトークンがすべて end したら `ready`。同じ title は
-//!   `didChangeWorkspaceFolders` でフォルダが足されたときにも出るので、
-//!   begin を見たら `indexing` に戻す (再武装)。go.mod の変更では出ない
-//! - **health**: 最初のロードが "Finished loading packages." で終わったら
-//!   `ok`、"Error loading packages:" で終わったら `error`。その後は title
-//!   "Error loading workspace" (`WorkspaceLoadFailure`) の progress が
-//!   begin したら `error` (message 付き)、report で message を更新、
-//!   "Done." で end したら `ok` に戻る
+//! - **readiness**: at initialization, a progress with title "Setting up
+//!   workspace" begins for each workspace folder, and after
+//!   `AwaitInitialized` it ends with "Finished loading packages." (or, on a
+//!   load failure, ends with "Error loading packages: ..."). Tokens are
+//!   random, so they are identified by title, and once every token
+//!   remembered at begin has ended, it is `ready`. The same title also
+//!   appears when a folder is added via `didChangeWorkspaceFolders`, so
+//!   seeing a begin reverts it to `indexing` (re-arming). It does not appear
+//!   for a go.mod change
+//! - **health**: `ok` once the first load ends with "Finished loading
+//!   packages.", `error` if it ends with "Error loading packages:". After
+//!   that, a progress with title "Error loading workspace"
+//!   (`WorkspaceLoadFailure`) beginning means `error` (with a message), a
+//!   report updates the message, and ending with "Done." reverts it to `ok`
 //!
-//! `coverage` / `freshness` は準拠テスト 7.2 / 7.3 を実 gopls に当てて
-//! 通した版 ([`TESTED_VERSIONS`]) にだけ宣言する (設計 5.2、仕様 8.2 の 5)。
+//! `coverage` / `freshness` are declared only for versions
+//! ([`TESTED_VERSIONS`]) for which conformance tests 7.2 / 7.3 were run
+//! against a real gopls and passed (design 5.2, spec 8.2 item 5).
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -28,30 +31,31 @@ use crate::peek::MessageView;
 use crate::state::{ALL_FILE_CHANGES, Health, Readiness, ServerState, ServerStateProvider};
 
 const PROGRESS_METHOD: &str = "$/progress";
-/// 初期ロード (`general.go` の `addFolders`)。
+/// The initial load (`addFolders` in `general.go`).
 const WORKSPACE_SETUP_TITLE: &str = "Setting up workspace";
-/// ワークスペースのロード失敗 (`diagnostics.go` の `WorkspaceLoadFailure`)。
+/// A workspace load failure (`WorkspaceLoadFailure` in `diagnostics.go`).
 const WORKSPACE_LOAD_FAILURE_TITLE: &str = "Error loading workspace";
-/// フォルダのロード失敗時の end メッセージの先頭 (`general.go`)。
+/// The start of the end message on a folder load failure (`general.go`).
 const FAILED_LOAD_PREFIX: &str = "Error loading packages";
 
-/// 準拠テスト 7.2 / 7.3 を実 gopls に当てて通した版。[`gopls_version`] で
-/// 正規化した名乗り (`v` を除いた `X.Y.Z`) と完全一致で突き合わせる。
+/// Versions for which conformance tests 7.2 / 7.3 were run against a real gopls and passed.
+/// Matched by exact equality against the identity string normalized by [`gopls_version`]
+/// (`X.Y.Z` with the `v` stripped).
 ///
-/// 一覧にない版には保証を宣言しない。足すときは、その版で
-/// `cargo test --test conformance -- --ignored gopls_` を通してから
-/// (守れない保証の宣言は仕様 5.1 違反)。
+/// No guarantee is declared for a version not in the list. When adding one, run
+/// `cargo test --test conformance -- --ignored gopls_` against that version first (declaring a
+/// guarantee that cannot be kept violates spec 5.1).
 ///
-/// 通した記録: v0.23.0 (nixpkgs、go1.26.7)、2026-09-03、5 回連続。
+/// Record of versions passed: v0.23.0 (nixpkgs, go1.26.7), 2026-09-03, 5 consecutive runs.
 pub const TESTED_VERSIONS: &[&str] = &["0.23.0"];
 
-/// gopls の `serverInfo.version` から版 (`X.Y.Z`) を取り出す。
+/// Extracts the version (`X.Y.Z`) from gopls's `serverInfo.version`.
 ///
-/// gopls はビルド情報 (`debug.BuildInfo`) を JSON にした文字列を名乗る。
-/// 版はその最上位の `"Version"` (`v0.23.0`)。`Main.Version` は nix ビルド
-/// では `(devel)` なので使えない。JSON でなければ文字列そのものを版とみなす。
-/// 前後の空白と先頭の `v` を落とし、`X.Y.Z` の形だけを受理する
-/// (`(devel)` 等は `None`)。
+/// gopls announces itself as a JSON-stringified build info (`debug.BuildInfo`). The version is
+/// its top-level `"Version"` (`v0.23.0`). `Main.Version` cannot be used because it is `(devel)`
+/// in a nix build. If it is not JSON, the string itself is treated as the version. Leading and
+/// trailing whitespace and a leading `v` are dropped, and only the `X.Y.Z` shape is accepted
+/// (`(devel)` and the like become `None`).
 pub fn gopls_version(version: &str) -> Option<String> {
     let raw = match serde_json::from_str::<Value>(version) {
         Ok(Value::Object(info)) => info.get("Version")?.as_str()?.to_string(),
@@ -84,15 +88,16 @@ struct ProgressValue {
 }
 
 pub struct GoplsAdapter {
-    /// 名乗った版が [`TESTED_VERSIONS`] に入っているか。保証を宣言する条件。
+    /// Whether the announced version is in [`TESTED_VERSIONS`]. The condition for declaring a
+    /// guarantee.
     version_is_tested: bool,
     state: ServerState,
-    /// begin を見て end を待っている "Setting up workspace" のトークン。
+    /// Tokens of "Setting up workspace" that have begun and are awaiting end.
     loading: Vec<Value>,
-    /// 今回のロード (最後に `loading` が空から増えてから) で失敗した
-    /// フォルダの end メッセージ。1 つでもあれば今回の結果は信頼できない。
+    /// The end message of a folder that failed during this load (since `loading` last grew from
+    /// empty). If there is even one, this round's result cannot be trusted.
     failed_in_round: Option<String>,
-    /// begin 中の "Error loading workspace" のトークン。
+    /// The token of an "Error loading workspace" that is in progress (begun).
     failure: Option<Value>,
 }
 
@@ -103,12 +108,13 @@ impl Default for GoplsAdapter {
 }
 
 impl GoplsAdapter {
-    /// 版を名乗らない (または読めない) gopls 向け。保証は宣言しない。
+    /// For a gopls that does not announce a version (or whose version cannot be read).
+    /// Declares no guarantee.
     pub fn new() -> Self {
         Self::for_version(None)
     }
 
-    /// `serverInfo.version` を見て、テスト済みの版なら保証を宣言する。
+    /// Looks at `serverInfo.version` and declares a guarantee if it is a tested version.
     pub fn for_version(version: Option<&str>) -> Self {
         let version_is_tested = version
             .and_then(gopls_version)
@@ -128,7 +134,7 @@ impl GoplsAdapter {
             "begin" => match value.title.as_deref() {
                 Some(WORKSPACE_SETUP_TITLE) => {
                     if self.loading.is_empty() {
-                        // 新しいロードの回。前回の失敗は持ち越さない。
+                        // A new load round. The previous failure is not carried over.
                         self.failed_in_round = None;
                     }
                     self.loading.push(token);
@@ -162,15 +168,16 @@ impl GoplsAdapter {
                     .as_deref()
                     .is_some_and(|m| m.starts_with(FAILED_LOAD_PREFIX));
                 if failed {
-                    // 試行は終わったが結果は信頼できない (仕様 6 章 5 項)。
+                    // The attempt has ended but the result cannot be trusted (spec chapter 6
+                    // item 5).
                     self.failed_in_round = value.message;
                 }
                 if self.loading.is_empty() {
-                    // 全フォルダのロードが終わって初めて ready。health も
-                    // ここで初めて決まる (途中で ok は観測なしの主張)。
-                    // 今回の回で 1 つでも失敗していれば error、全部成功なら
-                    // 観測できた成功に基づいて ok (前回の失敗は持ち越さない)。
-                    // ただし "Error loading workspace" が begin 中なら error のまま。
+                    // ready only once every folder's load has ended. health is also decided
+                    // only here (claiming ok in the middle would be an unobserved claim). If
+                    // even one failed this round, error; if all succeeded, ok based on the
+                    // observed success (the previous failure is not carried over). But it stays
+                    // error while "Error loading workspace" is in progress (begun).
                     self.state.readiness = Readiness::Ready;
                     if let Some(message) = &self.failed_in_round {
                         self.state.health = Health::Error;
@@ -192,10 +199,10 @@ impl Mapping for GoplsAdapter {
         ServerState::initializing()
     }
 
-    /// gopls はリクエストごとにスナップショットを取り、`didChange` の
-    /// オーバーレイを織り込む。準拠テスト 7.2 (完全性) と 7.3 (クロスファイル
-    /// 鮮度) を実 gopls に当てて確認済み (tests/conformance.rs の gopls_*
-    /// ignored)。宣言できるのはテストを当てた版だけ。
+    /// gopls takes a snapshot per request and incorporates `didChange` overlays. This has been
+    /// confirmed by running conformance tests 7.2 (completeness) and 7.3 (cross-file freshness)
+    /// against a real gopls (the gopls_* ignored tests in tests/conformance.rs). It can be
+    /// declared only for versions the tests have passed on.
     fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
             ServerStateProvider::workspace(&[("workspace/symbol", 100)], &ALL_FILE_CHANGES)
@@ -257,7 +264,11 @@ mod tests {
         let mut adapter = GoplsAdapter::new();
         let state = gopls_interpret(&mut adapter, &setup_begin("1")).expect("begin is a signal");
         assert_eq!(state.readiness, Readiness::Indexing);
-        assert_eq!(state.health, Health::Unknown, "begin は health を語らない");
+        assert_eq!(
+            state.health,
+            Health::Unknown,
+            "begin does not speak to health"
+        );
     }
 
     #[test]
@@ -280,7 +291,7 @@ mod tests {
             after_a
                 .as_ref()
                 .is_none_or(|s| s.readiness == Readiness::Indexing),
-            "1 つ目の end で ready を名乗った: {after_a:?}"
+            "claimed ready on the first end: {after_a:?}"
         );
         let after_b = gopls_interpret(&mut adapter, &setup_end("b", "Finished loading packages."))
             .expect("last end is a signal");
@@ -289,8 +300,8 @@ mod tests {
 
     #[test]
     fn gopls_successful_reload_after_a_failed_load_restores_ok() {
-        // フォルダ追加などで再ロードが成功したら、観測できた成功に基づいて
-        // health を ok に戻す (Copilot の指摘)。
+        // When a reload triggered by, say, adding a folder succeeds, health reverts to ok based
+        // on the observed success (per Copilot's feedback).
         let mut adapter = GoplsAdapter::new();
         gopls_interpret(&mut adapter, &setup_begin("1"));
         let failed = gopls_interpret(&mut adapter, &setup_end("1", "Error loading packages: x"))
@@ -301,14 +312,18 @@ mod tests {
         let state = gopls_interpret(&mut adapter, &setup_end("2", "Finished loading packages."))
             .expect("end is a signal");
         assert_eq!(state.readiness, Readiness::Ready);
-        assert_eq!(state.health, Health::Ok, "再ロードの成功で ok に戻る");
+        assert_eq!(
+            state.health,
+            Health::Ok,
+            "reverts to ok on a successful reload"
+        );
         assert_eq!(state.message, None);
     }
 
     #[test]
     fn gopls_a_round_with_one_failed_folder_stays_error() {
-        // 同じロードの中で 1 フォルダでも失敗していれば、後のフォルダが
-        // 成功しても error のまま (結果は信頼できない)。
+        // If even one folder fails within the same load, it stays error even when a later
+        // folder succeeds (the result cannot be trusted).
         let mut adapter = GoplsAdapter::new();
         gopls_interpret(&mut adapter, &setup_begin("a"));
         gopls_interpret(&mut adapter, &setup_begin("b"));
@@ -322,7 +337,8 @@ mod tests {
 
     #[test]
     fn gopls_end_of_an_unknown_token_is_ignored() {
-        // トークンは begin で覚えたものだけ。他の progress の end で ready にしない。
+        // Only tokens remembered at begin count. It does not become ready on the end of some
+        // other progress.
         let mut adapter = GoplsAdapter::new();
         assert!(
             gopls_interpret(
@@ -363,7 +379,11 @@ mod tests {
         let state = gopls_interpret(&mut adapter, &begin).expect("failure begin is a signal");
         assert_eq!(state.health, Health::Error);
         assert_eq!(state.message.as_deref(), Some("err: go.mod file not found"));
-        assert_eq!(state.readiness, Readiness::Ready, "readiness は変えない");
+        assert_eq!(
+            state.readiness,
+            Readiness::Ready,
+            "does not change readiness"
+        );
 
         let report = progress("e", r#"{"kind":"report","message":"err: still broken"}"#);
         let state = gopls_interpret(&mut adapter, &report).expect("report updates the message");
@@ -392,30 +412,30 @@ mod tests {
         );
         assert!(
             gopls_interpret(&mut adapter, &status("ok", true)).is_none(),
-            "rust-analyzer の語彙は読まない"
+            "does not read rust-analyzer's vocabulary"
         );
     }
 
-    /// nix ビルドの gopls v0.23.0 が名乗った文字列 (2026-09-03 実測)。
+    /// The string the nix-built gopls v0.23.0 announced (measured 2026-09-03).
     const GOPLS_VERSION_JSON: &str = r#"{"GoVersion":"go1.27.0","Path":"golang.org/x/tools/gopls","Main":{"Path":"golang.org/x/tools/gopls","Version":"(devel)"},"Deps":[{"Path":"golang.org/x/tools","Version":"v0.47.1-0.20260707181000-a299dadba899"}],"Settings":[{"Key":"GOOS","Value":"linux"}],"Version":"v0.23.0"}"#;
 
     #[test]
     fn gopls_reads_the_version_out_of_the_build_info_json() {
-        // serverInfo.version はビルド情報の JSON。最上位の "Version" が版で、
-        // Main.Version は nix ビルドでは "(devel)"。
+        // serverInfo.version is JSON-stringified build info. The top-level "Version" is the
+        // version; Main.Version is "(devel)" in a nix build.
         assert_eq!(gopls_version(GOPLS_VERSION_JSON).as_deref(), Some("0.23.0"));
         assert_eq!(gopls_version("v0.23.0").as_deref(), Some("0.23.0"));
         assert_eq!(gopls_version("0.23.0").as_deref(), Some("0.23.0"));
         assert_eq!(gopls_version(" v0.23.0 ").as_deref(), Some("0.23.0"));
-        assert_eq!(gopls_version("(devel)"), None, "X.Y.Z 以外は受理しない");
+        assert_eq!(gopls_version("(devel)"), None, "accepts nothing but X.Y.Z");
         assert_eq!(gopls_version("0.23"), None);
         assert_eq!(gopls_version(""), None);
     }
 
     #[test]
     fn gopls_declares_guarantees_only_for_versions_the_conformance_suite_passed_on() {
-        // 仕様 8.2 の 5。7.2 / 7.3 を実 gopls v0.23.0 に当てて通した
-        // (tests/conformance.rs の gopls_* ignored)。それ以外には宣言しない。
+        // Spec 8.2 item 5. 7.2 / 7.3 were run against a real gopls v0.23.0 and passed (the
+        // gopls_* ignored tests in tests/conformance.rs). No guarantee is declared otherwise.
         assert_eq!(
             GoplsAdapter::for_version(Some(GOPLS_VERSION_JSON)).guarantees(),
             ServerStateProvider::workspace(&[("workspace/symbol", 100)], &ALL_FILE_CHANGES)
@@ -429,7 +449,7 @@ mod tests {
             assert_eq!(
                 GoplsAdapter::for_version(untested).guarantees(),
                 ServerStateProvider::notifications_only(),
-                "テストを当てていない版 {untested:?} に保証を宣言した"
+                "declared a guarantee for untested version {untested:?}"
             );
         }
     }

@@ -1,19 +1,20 @@
-//! 上流プロセスの起動と寿命管理 (v0.1-design.md 4.5、ADR 0012)。
+//! Launching the upstream process and managing its lifetime (v0.1-design.md 4.5, ADR 0012).
 //!
-//! - 上流はプロキシの子。プロキシ終了時に確実に殺す
-//! - プロキシが `SIGKILL` 等で不意に死んでも上流が孤児化しないようにする
-//! - プロキシ自身は親 (クライアント) の不意の死に追従して終了する
-//!   (`exit_with_parent`。`main` の起動直後に呼ぶ)
+//! - The upstream is a child of the proxy. It is reliably killed when the proxy exits
+//! - The upstream must not be orphaned even when the proxy dies unexpectedly (`SIGKILL` etc.)
+//! - The proxy itself follows the unexpected death of its parent (the client) and exits
+//!   (`exit_with_parent`; called right after `main` starts)
 //!
-//! 1 段目の stdin の EOF (クライアントが死ねばプロキシの stdin が閉じ、
-//! プロキシが死ねば上流の stdin が閉じる) は OS に依らず働く。ここにあるのは
-//! EOF が届かない不意の死への 2 段目で、OS ごとの機構で実装する:
+//! The first stage, EOF on stdin (if the client dies the proxy's stdin closes, and if the
+//! proxy dies the upstream's stdin closes), works regardless of the OS. What is here is the
+//! second stage for unexpected deaths where no EOF arrives, implemented with per-OS
+//! mechanisms:
 //!
-//! | OS      | プロキシが親の死に追従する          | 上流がプロキシの死に追従する            |
-//! | ------- | ----------------------------------- | --------------------------------------- |
-//! | Linux   | `PR_SET_PDEATHSIG`                  | `PR_SET_PDEATHSIG`                      |
-//! | macOS   | `kqueue` の `EVFILT_PROC` で親を待つ | 機構がない。上流の stdin の EOF に委ねる |
-//! | Windows | 親プロセスのハンドルを待つ          | Job Object の `KILL_ON_JOB_CLOSE`       |
+//! | OS      | The proxy follows the parent's death          | The upstream follows the proxy's death    |
+//! | ------- | --------------------------------------------- | ----------------------------------------- |
+//! | Linux   | `PR_SET_PDEATHSIG`                            | `PR_SET_PDEATHSIG`                        |
+//! | macOS   | wait on the parent via `kqueue` `EVFILT_PROC` | none; left to EOF on the upstream's stdin |
+//! | Windows | wait on the parent process handle             | Job Object `KILL_ON_JOB_CLOSE`            |
 
 use std::io;
 use std::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
@@ -44,8 +45,9 @@ pub struct UpstreamHandles {
     pub stderr: ChildStderr,
 }
 
-/// 上流コマンドを起動する。stdin/stdout/stderr はすべて pipe で接続する。
-/// 起動した上流は、プロキシの不意の死に OS の機構で追従する (上表)。
+/// Launches the upstream command. stdin/stdout/stderr are all connected by pipes.
+/// The launched upstream follows an unexpected death of the proxy via the OS mechanism
+/// (table above).
 pub fn spawn(command: &str, args: &[String]) -> io::Result<UpstreamHandles> {
     let mut cmd = Command::new(command);
     cmd.args(args)
@@ -68,32 +70,32 @@ pub fn spawn(command: &str, args: &[String]) -> io::Result<UpstreamHandles> {
     })
 }
 
-/// 親 (クライアント) プロセスが不意に死んだら、このプロセスも終了するように
-/// する。`main` の最初に一度だけ呼ぶ。
+/// Makes this process exit too when the parent (client) process dies unexpectedly.
+/// Called once at the start of `main`.
 ///
-/// これは「呼び出し元プロセスの親が死んだら合図する」というプロセス自身に
-/// 対する設定であり、上流の起動 (`spawn`) とは独立している。
+/// This is a setting on the process itself, "signal when the calling process's parent dies",
+/// and is independent of launching the upstream (`spawn`).
 pub fn exit_with_parent() {
     platform::exit_with_parent();
 }
 
 impl Upstream {
-    /// 上流がまだ生きているか確認する。ブロックしない。
+    /// Checks whether the upstream is still alive. Does not block.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         self.child.try_wait()
     }
 
-    /// 上流の終了を待つ (ブロックする)。
+    /// Waits for the upstream to exit (blocks).
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         self.child.wait()
     }
 
-    /// 上流を殺して終了を待つ。既に終了していてもエラーにしない。
+    /// Kills the upstream and waits for it to exit. Not an error if it has already exited.
     pub fn kill_and_wait(&mut self) -> io::Result<()> {
         match self.child.kill() {
             Ok(()) => {}
             Err(err) if err.kind() == io::ErrorKind::InvalidInput => {
-                // 既に終了しているプロセスへの kill。無視してよい。
+                // kill on a process that has already exited. May be ignored.
             }
             Err(err) => return Err(err),
         }
@@ -102,11 +104,11 @@ impl Upstream {
     }
 }
 
-// 親の死への追従と上流の道連れは多プロセスのシナリオでしか検証できない。
-// `cargo test` はマルチスレッドで実行されるため、テストバイナリ内での
-// `fork()` はデッドロックの危険があり避けている。これらは結合テスト
-// `tests/process_lifetime.rs` (擬似クライアント越しに殺す) が、3 つの OS の
-// CI で確かめる (ADR 0012 決定 D)。
+// Following the parent's death and taking the upstream down with us can only be verified in a
+// multi-process scenario. Because `cargo test` runs multithreaded, `fork()` inside the test
+// binary risks deadlock and is avoided. These are verified by the integration test
+// `tests/process_lifetime.rs` (killing through a pseudo client) in CI on the 3 OSes
+// (ADR 0012 decision D).
 
 #[cfg(test)]
 mod tests {
@@ -115,7 +117,7 @@ mod tests {
     use std::thread;
     use std::time::Duration;
 
-    /// OS のシェルで 1 行のスクリプトを走らせる起動指定。
+    /// A launch specification that runs a one-line script in the OS shell.
     fn shell(script: &str) -> (&'static str, Vec<String>) {
         if cfg!(windows) {
             ("cmd", vec!["/C".to_string(), script.to_string()])
@@ -124,7 +126,7 @@ mod tests {
         }
     }
 
-    /// stdin を stdout へそのまま流すコマンド。
+    /// A command that passes stdin through to stdout as is.
     fn echo_stdin() -> (&'static str, Vec<String>) {
         if cfg!(windows) {
             (
@@ -140,7 +142,7 @@ mod tests {
         }
     }
 
-    /// 30 秒待つコマンド。
+    /// A command that waits 30 seconds.
     fn sleep_30() -> (&'static str, Vec<String>) {
         if cfg!(windows) {
             (
@@ -164,7 +166,7 @@ mod tests {
             .stdin
             .write_all(b"hello\n")
             .expect("write to child stdin");
-        drop(handles.stdin); // EOF を送って終了させる
+        drop(handles.stdin); // send EOF to make it exit
 
         let mut reader = BufReader::new(handles.stdout);
         let mut line = String::new();
@@ -184,7 +186,7 @@ mod tests {
         );
 
         handles.upstream.kill_and_wait().expect("kill_and_wait");
-        // kill_and_wait が返った時点で終了済み。
+        // Already exited by the time kill_and_wait returns.
         assert!(handles.upstream.try_wait().expect("try_wait").is_some());
     }
 
@@ -192,14 +194,14 @@ mod tests {
     fn kill_and_wait_is_idempotent_after_natural_exit() {
         let (program, args) = shell("exit 0");
         let mut handles = spawn(program, &args).expect("spawn exit 0");
-        // 自然終了を待つ。
+        // Wait for the natural exit.
         for _ in 0..50 {
             if handles.upstream.try_wait().unwrap().is_some() {
                 break;
             }
             thread::sleep(Duration::from_millis(10));
         }
-        // 既に死んでいるプロセスへの kill はエラーにならない。
+        // kill on an already dead process is not an error.
         handles
             .upstream
             .kill_and_wait()

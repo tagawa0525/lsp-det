@@ -1,28 +1,33 @@
-//! typescript-language-server の写像 (ADR 0010 決定 B の M6、設計 5.3)。
+//! The typescript-language-server mapping (M6 of ADR 0010 decision B, design 5.3).
 //!
-//! typescript-language-server は readiness の語彙を持たず、
-//! `InitializeResult.serverInfo` も返さない。信号は次のとおり
-//! (ソース `src/ts-client.ts`・`src/lsp-server.ts` と実測
+//! typescript-language-server has no readiness vocabulary, and does not
+//! return `InitializeResult.serverInfo` either. The signals are as follows
+//! (per the source `src/ts-client.ts`, `src/lsp-server.ts`, and the
+//! measurement in
 //! research/typescript-language-server-readiness-measurement.md):
 //!
-//! - **名乗り**: `initialize` 応答の直後に独自通知 `$/typescriptVersion`
-//!   `{version, source}` を送る。この通知は typescript-language-server 固有
-//!   なので写像の選択に使う ([`identity_from_typescript_version`])。版は
-//!   tsserver (TypeScript) の版で、typescript-language-server 自身の版は
-//!   ワイヤに出ない
-//! - **readiness**: tsserver の `projectLoadingStart` で title
-//!   "Initializing JS/TS language features…" の `$/progress` が begin し、
-//!   `projectLoadingFinish` 等で end する。プロジェクトはファイルを開いたとき
-//!   に逐次ロードされ、新しい begin は前の progress を end してから始まる。
-//!   begin で覚えたトークンがすべて end したら `ready`。tsconfig の変更でも
-//!   再発行される
-//! - **health**: 最初の end で `ok` (ロードの成功を観測した)。tsserver が
-//!   落ちると `window/logMessage` (error) に "[tsserver] Exited. Code: N.
-//!   Signal: S" が出る。言語サーバー自身は生き残って空配列を成功として返す
-//!   ので、このログで `error` にする。再起動はないので戻らない
+//! - **what the server calls itself**: right after the `initialize`
+//!   response, it sends its own `$/typescriptVersion` notification
+//!   `{version, source}`. This notification is specific to
+//!   typescript-language-server, so it is used to select the mapping
+//!   ([`identity_from_typescript_version`]). The version is tsserver's
+//!   (TypeScript's) version; typescript-language-server's own version never
+//!   appears on the wire
+//! - **readiness**: on tsserver's `projectLoadingStart`, a `$/progress` with
+//!   title "Initializing JS/TS language features…" begins, and it ends on
+//!   `projectLoadingFinish` etc. Projects are loaded one at a time as files
+//!   are opened, and a new begin starts only after ending the previous
+//!   progress. Once every token remembered at begin has ended, it is
+//!   `ready`. It is also reissued on a tsconfig change
+//! - **health**: `ok` on the first end (a successful load was observed). If
+//!   tsserver crashes, "[tsserver] Exited. Code: N. Signal: S" appears in a
+//!   `window/logMessage` (error). The language server itself survives and
+//!   returns an empty array as success, so this log is what drives `error`.
+//!   There is no restart, so it does not revert
 //!
-//! `coverage` / `freshness` は準拠テスト 7.2 / 7.3 を実サーバーに当てて
-//! 通した版 ([`TESTED_VERSIONS`]) にだけ宣言する (ADR 0009 決定 D-5)。
+//! `coverage` / `freshness` are declared only for versions
+//! ([`TESTED_VERSIONS`]) for which conformance tests 7.2 / 7.3 were run
+//! against a real server and passed (ADR 0009 decision D-5).
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -34,40 +39,42 @@ use crate::state::{FileChangeType, Health, Readiness, ServerState, ServerStatePr
 
 const PROGRESS_METHOD: &str = "$/progress";
 const LOG_MESSAGE_METHOD: &str = "window/logMessage";
-/// typescript-language-server 固有の通知。`initialize` 応答の後に届く。
+/// The notification specific to typescript-language-server. Arrives after the `initialize`
+/// response.
 const TYPESCRIPT_VERSION_METHOD: &str = "$/typescriptVersion";
-/// プロジェクトのロード (`ts-client.ts` の `ServerInitializingIndicator`)。
+/// Project loading (`ServerInitializingIndicator` in `ts-client.ts`).
 const PROJECT_LOAD_TITLE: &str = "Initializing JS/TS language features…";
-/// tsserver の終了 (`ts-client.ts` の `onExit`)。前に "[lspserver] [tsclient] "
-/// のタグが付く。
+/// tsserver exiting (`onExit` in `ts-client.ts`). Prefixed with the "[lspserver] [tsclient] "
+/// tag.
 const TSSERVER_EXITED: &str = "[tsserver] Exited. Code:";
-/// 起動ログの定型句 (`lsp-server.ts` の `initialize`)。
+/// The fixed phrase of the startup log (`initialize` in `lsp-server.ts`).
 const STARTUP_PREFIX: &str = "Using Typescript version (";
 const STARTUP_INFIX: &str = ") ";
 const STARTUP_SUFFIX_START: &str = " from path ";
 
-/// `serverInfo` の代わりに名乗りとして使う名前。
+/// The name used as an identity announcement in place of `serverInfo`.
 pub const SERVER_NAME: &str = "typescript-language-server";
 
-/// 準拠テスト 7.2 / 7.3 を通した **TypeScript (tsserver) の版**。
+/// The **TypeScript (tsserver) version** for which conformance tests 7.2 / 7.3 have passed.
 ///
-/// typescript-language-server 自身の版はワイヤに出ないので、名乗り
-/// (`$/typescriptVersion` の `version`) で突き合わせられるのはこちらだけ。
-/// 一覧にない版には保証を宣言しない。足すときは、その版で
-/// `cargo test --test conformance -- --ignored typescript_language_server_`
-/// を通してから (守れない保証の宣言は仕様 5.1 違反)。
+/// typescript-language-server's own version never appears on the wire, so this is the only
+/// thing that can be matched against what the server calls itself (the `version` in
+/// `$/typescriptVersion`). No guarantee is declared for a version not in the list. When adding
+/// one, run `cargo test --test conformance -- --ignored typescript_language_server_` against
+/// that version first (declaring a guarantee that cannot be kept violates spec 5.1).
 ///
-/// 通した記録: TypeScript 5.9.3 (typescript-language-server 5.3.0、node
-/// 24.19.0、いずれも nixpkgs)、2026-09-03、5 回連続。
+/// Record of versions passed: TypeScript 5.9.3 (typescript-language-server 5.3.0, node 24.19.0,
+/// all from nixpkgs), 2026-09-03, 5 consecutive runs.
 pub const TESTED_VERSIONS: &[&str] = &["5.9.3"];
 
-/// `initialize` 応答より先に届く `window/logMessage` (info) の名乗りを読む。
+/// Reads the identity announcement from the `window/logMessage` (info) that arrives before the
+/// `initialize` response.
 ///
-/// `lsp-server.ts` の `initialize` は応答を返す前に
-/// `Using Typescript version (${source}) ${version} from path "${path}"` を
-/// info に出す。`$/typescriptVersion` は応答の後に届くので、`InitializeResult`
-/// に保証を宣言するにはこちらで先に選ぶ必要がある。文言は
-/// typescript-language-server 固有。他の文言には `None`。
+/// `initialize` in `lsp-server.ts` emits an info
+/// `Using Typescript version (${source}) ${version} from path "${path}"` before returning its
+/// response. `$/typescriptVersion` arrives after the response, so declaring a guarantee in
+/// `InitializeResult` requires selecting the mapping from this one first. The wording is
+/// specific to typescript-language-server. `None` for any other wording.
 pub fn startup_identity(message: &str) -> Option<ServerInfo> {
     let rest = message.strip_prefix(STARTUP_PREFIX)?;
     let (_source, rest) = rest.split_once(STARTUP_INFIX)?;
@@ -82,7 +89,7 @@ pub fn startup_identity(message: &str) -> Option<ServerInfo> {
     })
 }
 
-/// `$/typescriptVersion` の params から名乗りを読む。
+/// Reads the identity announcement from the params of `$/typescriptVersion`.
 pub fn identity_from_typescript_version(params: &Value) -> Option<ServerInfo> {
     let params = params.as_object()?;
     let version = params
@@ -114,12 +121,13 @@ struct LogMessageParams {
     message: String,
 }
 
-/// typescript-language-server の写像。
+/// The typescript-language-server mapping.
 pub struct TypescriptLanguageServerAdapter {
-    /// 名乗った版が [`TESTED_VERSIONS`] に入っているか。保証を宣言する条件。
+    /// Whether the announced version is in [`TESTED_VERSIONS`]. The condition for declaring a
+    /// guarantee.
     version_is_tested: bool,
     state: ServerState,
-    /// begin を見て end を待っているプロジェクトロードのトークン。
+    /// Tokens of a project load that have begun and are awaiting end.
     loading: Vec<Value>,
 }
 
@@ -130,12 +138,13 @@ impl Default for TypescriptLanguageServerAdapter {
 }
 
 impl TypescriptLanguageServerAdapter {
-    /// 版を名乗らない上流向け。保証は宣言しない。
+    /// For an upstream that does not announce a version. Declares no guarantee.
     pub fn new() -> Self {
         Self::for_version(None)
     }
 
-    /// 名乗った版 (TypeScript の版) を見て、テスト済みなら保証を宣言する。
+    /// Looks at the announced version (TypeScript's version) and declares a guarantee if it is
+    /// a tested one.
     pub fn for_version(version: Option<&str>) -> Self {
         let version_is_tested = version.is_some_and(|v| TESTED_VERSIONS.contains(&v.trim()));
         TypescriptLanguageServerAdapter {
@@ -159,8 +168,9 @@ impl TypescriptLanguageServerAdapter {
                     return None;
                 }
                 self.state.readiness = Readiness::Ready;
-                // ロードの成功を観測した。ただし tsserver が落ちた後の end
-                // (indicator の reset) は成功ではない。再起動はないので戻さない。
+                // A successful load was observed. But an end after tsserver has crashed (the
+                // indicator resetting) is not a success. There is no restart, so it is not
+                // reverted.
                 if self.state.health != Health::Error {
                     self.state.health = Health::Ok;
                 }
@@ -193,9 +203,9 @@ impl Mapping for TypescriptLanguageServerAdapter {
         }
     }
 
-    /// serverInfo の版は包み紙 (typescript-language-server) の版で、保証が依存する
-    /// TypeScript の版ではない。根拠は起動ログと `$/typescriptVersion` から取る
-    /// ので、ここでは何もしない。
+    /// The serverInfo version is the wrapper's (typescript-language-server's) version, not the
+    /// TypeScript version the guarantee depends on. The basis is taken from the startup log and
+    /// `$/typescriptVersion`, so this does nothing.
     fn learn_identity(&mut self, info: &ServerInfo) {
         let _ = info;
     }
@@ -206,8 +216,9 @@ impl Mapping for TypescriptLanguageServerAdapter {
         }
         match view.method() {
             Some(TYPESCRIPT_VERSION_METHOD) => {
-                // 解析エンジンの版。起動ログが (設定で) 出なかったときの根拠。
-                // 版があるときだけ更新する (版のない通知で根拠を捨てない)。
+                // The analysis engine's version. The basis for when the startup log did not
+                // appear (due to settings). Updated only when a version is present (the basis
+                // is not discarded by a notification with no version).
                 #[derive(Deserialize)]
                 struct Envelope {
                     params: Value,
@@ -271,7 +282,7 @@ mod tests {
         )
     }
 
-    /// 実測の文言 (SIGKILL)。
+    /// The measured wording (SIGKILL).
     const EXITED: &str = "[lspserver] [tsclient] [tsserver] Exited. Code: null. Signal: SIGKILL";
 
     fn interpret(adapter: &mut TypescriptLanguageServerAdapter, body: &str) -> Option<ServerState> {
@@ -279,20 +290,21 @@ mod tests {
         adapter.interpret(&view, body.as_bytes())
     }
 
-    // --- 名乗り ----------------------------------------------------------------
+    // --- what the server calls itself -------------------------------------------
 
     #[test]
     fn reads_the_startup_log_as_the_identity_before_initialize_completes() {
-        // 実測の文言そのもの。initialize 応答より先に届く唯一の名乗り。
+        // The exact wording measured. The only identity announcement that arrives before the
+        // initialize response.
         let identity = startup_identity(
             r#"Using Typescript version (user-setting) 5.9.3 from path "/nix/store/x/lib/tsserver.js""#,
         )
-        .expect("起動ログは名乗り");
+        .expect("a startup log is an identity announcement");
         assert_eq!(identity.name, SERVER_NAME);
         assert_eq!(identity.version.as_deref(), Some("5.9.3"));
 
         let bundled = startup_identity(r#"Using Typescript version (bundled) 5.9.3 from path "x""#)
-            .expect("source が違っても名乗り");
+            .expect("still an identity announcement even with a different source");
         assert_eq!(bundled.version.as_deref(), Some("5.9.3"));
     }
 
@@ -307,18 +319,18 @@ mod tests {
         ] {
             assert!(
                 startup_identity(other).is_none(),
-                "名乗りでない行: {other:?}"
+                "not an identity announcement: {other:?}"
             );
         }
     }
 
     #[test]
     fn reads_the_typescript_version_as_the_identity() {
-        // 実測の params そのもの。名前は写像の鍵、版は tsserver の版。
+        // The exact params measured. The name is the mapping key; the version is tsserver's.
         let identity = identity_from_typescript_version(
             &json!({"version": "5.9.3", "source": "user-setting"}),
         )
-        .expect("$/typescriptVersion は名乗り");
+        .expect("$/typescriptVersion is an identity announcement");
         assert_eq!(identity.name, SERVER_NAME);
         assert_eq!(identity.version.as_deref(), Some("5.9.3"));
     }
@@ -326,12 +338,12 @@ mod tests {
     #[test]
     fn a_typescript_version_without_a_version_string_still_names_the_server() {
         let identity = identity_from_typescript_version(&json!({"source": "bundled"}))
-            .expect("版がなくても名乗り");
+            .expect("still an identity announcement without a version");
         assert_eq!(identity.name, SERVER_NAME);
         assert_eq!(identity.version, None);
         assert!(
             identity_from_typescript_version(&json!("5.9.3")).is_none(),
-            "オブジェクト以外は読まない"
+            "does not read anything but an object"
         );
     }
 
@@ -347,35 +359,41 @@ mod tests {
     #[test]
     fn begin_of_a_project_load_means_indexing() {
         let mut adapter = TypescriptLanguageServerAdapter::new();
-        let state = interpret(&mut adapter, &load_begin("1")).expect("begin は信号");
+        let state = interpret(&mut adapter, &load_begin("1")).expect("begin is a signal");
         assert_eq!(state.readiness, Readiness::Indexing);
-        assert_eq!(state.health, Health::Unknown, "begin は health を語らない");
+        assert_eq!(
+            state.health,
+            Health::Unknown,
+            "begin does not speak to health"
+        );
     }
 
     #[test]
     fn end_of_the_project_load_means_ready_and_ok() {
         let mut adapter = TypescriptLanguageServerAdapter::new();
         interpret(&mut adapter, &load_begin("1"));
-        let state = interpret(&mut adapter, &load_end("1")).expect("end は信号");
+        let state = interpret(&mut adapter, &load_end("1")).expect("end is a signal");
         assert_eq!(state.readiness, Readiness::Ready);
-        assert_eq!(state.health, Health::Ok, "ロードの成功を観測した");
+        assert_eq!(state.health, Health::Ok, "a successful load was observed");
     }
 
     #[test]
     fn sequential_project_loads_rearm() {
-        // 2 つ目のプロジェクトを開くと、1 つ目の end → 2 つ目の begin → end。
+        // Opening a second project: end of the first -> begin of the second -> end.
         let mut adapter = TypescriptLanguageServerAdapter::new();
         interpret(&mut adapter, &load_begin("a"));
         interpret(&mut adapter, &load_end("a"));
-        let state = interpret(&mut adapter, &load_begin("b")).expect("再ロードの begin は信号");
+        let state =
+            interpret(&mut adapter, &load_begin("b")).expect("the reload's begin is a signal");
         assert_eq!(state.readiness, Readiness::Indexing);
-        let state = interpret(&mut adapter, &load_end("b")).expect("end は信号");
+        let state = interpret(&mut adapter, &load_end("b")).expect("end is a signal");
         assert_eq!(state.readiness, Readiness::Ready);
     }
 
     #[test]
     fn waits_for_every_open_token() {
-        // 逐次ロードなので同時に 2 つは開かないはずだが、開いたら全部待つ。
+        // Since loading is sequential, two should not open at once, but if they do, all are
+        // waited for.
         let mut adapter = TypescriptLanguageServerAdapter::new();
         interpret(&mut adapter, &load_begin("a"));
         interpret(&mut adapter, &load_begin("b"));
@@ -384,11 +402,11 @@ mod tests {
             after_a
                 .as_ref()
                 .is_none_or(|s| s.readiness != Readiness::Ready),
-            "1 つ目の end で ready を名乗った: {after_a:?}"
+            "claimed ready on the first end: {after_a:?}"
         );
         assert_eq!(
             interpret(&mut adapter, &load_end("b"))
-                .expect("最後の end は信号")
+                .expect("the last end is a signal")
                 .readiness,
             Readiness::Ready
         );
@@ -407,23 +425,27 @@ mod tests {
         let mut adapter = TypescriptLanguageServerAdapter::new();
         interpret(&mut adapter, &load_begin("1"));
         interpret(&mut adapter, &load_end("1"));
-        let state = interpret(&mut adapter, &log(1, EXITED)).expect("クラッシュは信号");
+        let state = interpret(&mut adapter, &log(1, EXITED)).expect("a crash is a signal");
         assert_eq!(state.health, Health::Error);
         assert_eq!(state.message.as_deref(), Some(EXITED));
-        assert_eq!(state.readiness, Readiness::Ready, "readiness は変えない");
+        assert_eq!(
+            state.readiness,
+            Readiness::Ready,
+            "does not change readiness"
+        );
     }
 
     #[test]
     fn a_later_end_does_not_restore_ok_after_a_crash() {
-        // tsserver は再起動されない。クラッシュ時に indicator が reset (end)
-        // されても ok に戻さない。
+        // tsserver is not restarted. Even when the indicator resets (ends) on a crash, it is
+        // not reverted to ok.
         let mut adapter = TypescriptLanguageServerAdapter::new();
         interpret(&mut adapter, &load_begin("1"));
         interpret(&mut adapter, &log(1, EXITED));
         let state = interpret(&mut adapter, &load_end("1"));
         assert!(
             state.as_ref().is_none_or(|s| s.health == Health::Error),
-            "クラッシュ後の end で ok に戻した: {state:?}"
+            "reverted to ok on the end after a crash: {state:?}"
         );
     }
 
@@ -441,17 +463,18 @@ mod tests {
         ] {
             assert!(
                 interpret(&mut adapter, &other).is_none(),
-                "無関係なメッセージで状態が動いた: {other}"
+                "the state moved on an unrelated message: {other}"
             );
         }
     }
 
-    // --- 保証 ------------------------------------------------------------------
+    // --- guarantee ---------------------------------------------------------------
 
     #[test]
     fn a_typescript_version_notification_without_a_version_keeps_the_guarantee_basis() {
-        // 起動ログでテスト済みの版を確定した後、$/typescriptVersion が版を欠いて
-        // 届いても根拠を捨てない (Copilot の指摘)。版があればそれで更新する。
+        // After a tested version is settled by the startup log, the basis is not discarded even
+        // if $/typescriptVersion arrives lacking a version (per Copilot's feedback). If a
+        // version is present, it updates the basis.
         let mut adapter = TypescriptLanguageServerAdapter::for_version(Some("5.9.3"));
         assert_eq!(
             adapter.guarantees(),
@@ -464,7 +487,7 @@ mod tests {
         assert_eq!(
             adapter.guarantees(),
             ServerStateProvider::workspace(&[], &[FileChangeType::Changed]),
-            "版のない通知で根拠を捨てた"
+            "discarded the basis on a notification with no version"
         );
         interpret(
             &mut adapter,
@@ -473,14 +496,14 @@ mod tests {
         assert_eq!(
             adapter.guarantees(),
             ServerStateProvider::notifications_only(),
-            "版のある通知は根拠を更新する"
+            "a notification with a version updates the basis"
         );
     }
 
     #[test]
     fn declares_guarantees_only_for_typescript_versions_the_conformance_suite_passed_on() {
-        // 7.2 / 7.3 を typescript-language-server 5.3.0 + TypeScript 5.9.3 に
-        // 当てて通した。名乗りに出るのは TypeScript の版だけ。
+        // 7.2 / 7.3 were run against typescript-language-server 5.3.0 + TypeScript 5.9.3 and
+        // passed. Only TypeScript's version appears in the identity announcement.
         assert_eq!(
             TypescriptLanguageServerAdapter::for_version(Some("5.9.3")).guarantees(),
             ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
@@ -489,7 +512,7 @@ mod tests {
             assert_eq!(
                 TypescriptLanguageServerAdapter::for_version(version).guarantees(),
                 ServerStateProvider::notifications_only(),
-                "測っていない版 {version:?} に保証を宣言した"
+                "declared a guarantee for unmeasured version {version:?}"
             );
         }
     }

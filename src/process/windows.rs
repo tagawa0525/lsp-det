@@ -1,13 +1,14 @@
-//! Windows: 親プロセスのハンドルを待つスレッドと、Job Object。
+//! Windows: a thread waiting on the parent process handle, and a Job Object.
 //!
-//! - 自身の追従: 親の pid を `NtQueryInformationProcess` で取り、起動直後に
-//!   ハンドルを開いて (pid は再利用されるので、以後はハンドルで待つ)、
-//!   `WaitForSingleObject` で親の終了を待つスレッドを置く
-//! - 上流の追従: `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` を付けた Job Object に
-//!   上流を入れる。プロキシが死ぬと Job のハンドルが閉じ、カーネルが上流を
-//!   殺す。プロキシの正常終了でも同じ
+//! - Following on our own behalf: get the parent's pid with `NtQueryInformationProcess`, open
+//!   a handle right after startup (pids are reused, so from then on wait on the handle), and
+//!   place a thread that waits for the parent's exit with `WaitForSingleObject`
+//! - Following on the upstream's behalf: put the upstream into a Job Object with
+//!   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. When the proxy dies the Job handle closes and the
+//!   kernel kills the upstream. The same on a normal exit of the proxy
 //!
-//! 必要な関数だけを `kernel32` / `ntdll` から直接宣言する (ADR 0012 決定 C)。
+//! Only the needed functions are declared directly from `kernel32` / `ntdll`
+//! (ADR 0012 decision C).
 
 use std::ffi::c_void;
 use std::io;
@@ -98,23 +99,23 @@ unsafe extern "system" {
     ) -> i32;
 }
 
-/// スレッド間で持ち回るハンドル。カーネルオブジェクトのハンドルはどの
-/// スレッドから使ってもよい。
+/// A handle passed between threads. A kernel object handle may be used from any thread.
 struct SendHandle(Handle);
-// SAFETY: 上記のとおり。
+// SAFETY: as stated above.
 unsafe impl Send for SendHandle {}
 unsafe impl Sync for SendHandle {}
 
 impl SendHandle {
-    /// クロージャが構造体ごと捕捉するように、メソッド経由で取り出す
-    /// (フィールドだけを捕捉すると生ポインタになり Send でなくなる)。
+    /// Taken out through a method so that a closure captures the whole struct
+    /// (capturing only the field gives a raw pointer, which is not Send).
     fn raw(&self) -> Handle {
         self.0
     }
 }
 
-/// 上流を入れる Job。プロセスの寿命の間ずっと開いたままにし、閉じるのは
-/// プロセスの終了 (正常でも不意でも) に任せる。それが上流を殺す合図になる。
+/// The Job the upstream is put into. Kept open for the whole lifetime of the process; closing
+/// it is left to the process exit (normal or unexpected). That is the signal that kills the
+/// upstream.
 static JOB: OnceLock<Option<SendHandle>> = OnceLock::new();
 
 pub fn prepare_upstream(_cmd: &mut Command) {}
@@ -123,7 +124,7 @@ pub fn follow_upstream(child: &Child) {
     let Some(job) = JOB.get_or_init(create_job) else {
         return;
     };
-    // SAFETY: どちらも有効なハンドル。失敗は戻り値で分かる。
+    // SAFETY: both are valid handles. Failure is known from the return value.
     let assigned = unsafe { AssignProcessToJobObject(job.raw(), child.as_raw_handle() as Handle) };
     if assigned == 0 {
         eprintln!(
@@ -135,7 +136,7 @@ pub fn follow_upstream(child: &Child) {
 }
 
 fn create_job() -> Option<SendHandle> {
-    // SAFETY: 名前なし・既定の属性で作る。失敗は NULL で分かる。
+    // SAFETY: created unnamed with default attributes. Failure is known from NULL.
     let job = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
     if job.is_null() {
         eprintln!(
@@ -144,10 +145,10 @@ fn create_job() -> Option<SendHandle> {
         );
         return None;
     }
-    // SAFETY: 構造体はどのビットパターンでも有効。
+    // SAFETY: the struct is valid for any bit pattern.
     let mut info: JobObjectExtendedLimitInformation = unsafe { std::mem::zeroed() };
     info.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    // SAFETY: information は size_of ぶんの有効なメモリを指す。
+    // SAFETY: information points to size_of bytes of valid memory.
     let set = unsafe {
         SetInformationJobObject(
             job,
@@ -161,7 +162,7 @@ fn create_job() -> Option<SendHandle> {
             "lsp-det: SetInformationJobObject failed: {}; the upstream will not follow an abrupt death of lsp-det",
             io::Error::last_os_error()
         );
-        // SAFETY: 自分で作ったハンドルを、他に持ち手がないうちに閉じる。
+        // SAFETY: close the handle we created ourselves, while no one else holds it.
         unsafe {
             CloseHandle(job);
         }
@@ -175,7 +176,7 @@ pub fn exit_with_parent() {
         eprintln!("lsp-det: cannot find the parent process; will not follow its death");
         return;
     };
-    // SAFETY: 引数は定数と pid。失敗は NULL で分かる。
+    // SAFETY: the arguments are a constant and a pid. Failure is known from NULL.
     let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, parent) };
     if handle.is_null() {
         eprintln!(
@@ -186,21 +187,21 @@ pub fn exit_with_parent() {
     }
     let handle = SendHandle(handle);
     thread::spawn(move || {
-        // SAFETY: 開いたハンドルを、閉じずに待つ。
+        // SAFETY: wait on the opened handle without closing it.
         unsafe {
             WaitForSingleObject(handle.raw(), INFINITE);
         }
-        // Job Object が上流を道連れにする。
+        // The Job Object takes the upstream down with us.
         eprintln!("lsp-det: parent process exited; exiting");
         std::process::exit(1);
     });
 }
 
 fn parent_process_id() -> Option<u32> {
-    // SAFETY: 構造体はどのビットパターンでも有効。
+    // SAFETY: the struct is valid for any bit pattern.
     let mut info: ProcessBasicInformation = unsafe { std::mem::zeroed() };
     let mut returned = 0u32;
-    // SAFETY: information は size_of ぶんの有効なメモリを指す。
+    // SAFETY: information points to size_of bytes of valid memory.
     let status = unsafe {
         NtQueryInformationProcess(
             GetCurrentProcess(),
@@ -210,6 +211,6 @@ fn parent_process_id() -> Option<u32> {
             &mut returned,
         )
     };
-    // NTSTATUS は負なら失敗。
+    // A negative NTSTATUS is a failure.
     (status >= 0).then_some(info.inherited_from_unique_process_id as u32)
 }

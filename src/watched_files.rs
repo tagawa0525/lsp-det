@@ -1,14 +1,14 @@
-//! `workspace/didChangeWatchedFiles` の代行 (設計 4.3、ADR 0015 決定 A)。
+//! Standing in for `workspace/didChangeWatchedFiles` (design 4.3, ADR 0015 decision A).
 //!
-//! capability `workspace.didChangeWatchedFiles` を宣言せず、通知も送らない
-//! クライアント (Claude Code) に代わって、7.0 のリクエストが届くたびに
-//! ワークスペースのファイルの mtime を前回と比べ、差を Created / Changed /
-//! Deleted として 1 つの通知にまとめて上流へ送る。時計は使わず、引き金は
-//! 要求そのもの。
+//! On behalf of a client (Claude Code) that neither declares the capability
+//! `workspace.didChangeWatchedFiles` nor sends the notification, every time a 7.0 request
+//! arrives, compare the mtimes of the workspace files with the previous time, and send the
+//! difference upstream as one notification of Created / Changed / Deleted. No clock is used;
+//! the trigger is the request itself.
 //!
-//! 列挙は `git ls-files --cached --others --exclude-standard` に任せる
-//! (追跡中 + 無視されていない未追跡)。`.gitignore` の解釈も、言語ごとの
-//! 拡張子の一覧も持たない。git 管理外のルートでは代行しない。
+//! Enumeration is left to `git ls-files --cached --others --exclude-standard`
+//! (tracked + untracked but not ignored). There is no interpretation of `.gitignore` and no
+//! per-language list of extensions. Roots outside git management are not stood in for.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -18,21 +18,21 @@ use std::time::SystemTime;
 use crate::framing::RawMessage;
 use crate::uri::path_to_uri;
 
-/// LSP の `FileChangeType`。
+/// LSP's `FileChangeType`.
 const CREATED: u8 = 1;
 const CHANGED: u8 = 2;
 const DELETED: u8 = 3;
 
 pub struct WatchedFiles {
-    /// git 管理下のルート (そうでないルートは起動時に除く)。
+    /// Roots under git management (other roots are excluded at startup).
     roots: Vec<PathBuf>,
-    /// 前回の一覧 (パス → mtime)。
+    /// The previous listing (path -> mtime).
     snapshot: BTreeMap<PathBuf, SystemTime>,
 }
 
 impl WatchedFiles {
-    /// ルートごとに `git ls-files` を試し、使えるルートで最初の一覧を取る。
-    /// 使えるルートがなければ `None` (代行しない)。
+    /// Tries `git ls-files` per root and takes the first listing on the usable roots.
+    /// `None` if no root is usable (no stand-in).
     pub fn new(roots: &[PathBuf]) -> Option<Self> {
         let usable: Vec<PathBuf> = roots
             .iter()
@@ -60,9 +60,10 @@ impl WatchedFiles {
         Some(stand_in)
     }
 
-    /// 前回からの差を通知にする。差がなければ `None`。`git` が一時的に失敗
-    /// したときも `None` で、一覧は更新しない (失敗を「全部消えた」と
-    /// 誤認して Deleted を大量に送らないため)。
+    /// Turns the difference since the previous time into a notification. `None` if there is no
+    /// difference. Also `None` when `git` fails transiently, and the listing is not updated
+    /// (so that the failure is not mistaken for "everything is gone" and a flood of Deleted is
+    /// not sent).
     pub fn changes_since_last_scan(&mut self) -> Option<RawMessage> {
         let current = self.scan()?;
         let mut changes: Vec<serde_json::Value> = Vec::new();
@@ -88,11 +89,11 @@ impl WatchedFiles {
                 "method": "workspace/didChangeWatchedFiles",
                 "params": {"changes": changes},
             }))
-            .expect("通知は常にシリアライズできる"),
+            .expect("the notification is always serializable"),
         })
     }
 
-    /// 全ルートの一覧。どれかのルートで `git ls-files` が失敗したら `None`。
+    /// The listing of all roots. `None` if `git ls-files` fails on any root.
     fn scan(&self) -> Option<BTreeMap<PathBuf, SystemTime>> {
         let mut files = BTreeMap::new();
         for root in &self.roots {
@@ -111,8 +112,8 @@ fn change(path: &Path, kind: u8) -> serde_json::Value {
     serde_json::json!({"uri": path_to_uri(path), "type": kind})
 }
 
-/// `git ls-files --cached --others --exclude-standard -z` の一覧。git が
-/// 動かない・ルートが work tree でないなら `None`。
+/// The listing from `git ls-files --cached --others --exclude-standard -z`. `None` if git does
+/// not run or the root is not a work tree.
 fn list_files(root: &Path) -> Option<Vec<PathBuf>> {
     let output = Command::new("git")
         .args([
@@ -150,14 +151,14 @@ mod tests {
         root
     }
 
-    /// 費用の実測 (ADR 0015)。大きな git 管理下のワークスペースで、最初の
-    /// 一覧と 2 回目の走査 (変更なし) にかかる時間を出す。
+    /// Measurement of the cost (ADR 0015). On a large git-managed workspace, prints the time
+    /// taken by the first listing and by the second scan (no changes).
     #[test]
-    #[ignore = "reference/zed (1935 ファイル) が要る。ローカル専用"]
+    #[ignore = "needs reference/zed (1935 files). Local only"]
     fn measures_the_scan_cost_on_a_large_workspace() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("reference/zed");
         let started = std::time::Instant::now();
-        let mut watched = WatchedFiles::new(std::slice::from_ref(&root)).expect("git 管理下");
+        let mut watched = WatchedFiles::new(std::slice::from_ref(&root)).expect("under git");
         let first = started.elapsed();
         let files = watched.snapshot.len();
         let started = std::time::Instant::now();
@@ -185,8 +186,8 @@ mod tests {
                 .success()
         );
         std::fs::write(root.join("a.rs"), "a").unwrap();
-        let mut watched = WatchedFiles::new(std::slice::from_ref(&root)).expect("git 管理下");
-        assert!(watched.changes_since_last_scan().is_none(), "変更なし");
+        let mut watched = WatchedFiles::new(std::slice::from_ref(&root)).expect("under git");
+        assert!(watched.changes_since_last_scan().is_none(), "no changes");
 
         std::fs::write(root.join("b.rs"), "b").unwrap();
         let notification = watched.changes_since_last_scan().expect("Created");

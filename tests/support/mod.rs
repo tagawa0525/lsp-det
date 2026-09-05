@@ -1,11 +1,11 @@
-//! 準拠テストスイートの偽クライアント（v0.1-design.md 6 章）。
+//! The fake client for the conformance test suite (v0.1-design.md chapter 6).
 //!
-//! 被験者は「stdio で LSP を話すコマンド」であればなんでもよい。lsp-det は
-//! 最初の被験者に過ぎず、実サーバーにも同じスイートを当てられることが
-//! この成果物の要件である（設計 6 章）。そのため被験者は
-//! [`ServerUnderTest`] というコマンド記述として渡す。
+//! The subject can be any "command that speaks LSP over stdio". lsp-det is only the first
+//! subject; being able to apply the same suite to real servers is a requirement of this
+//! deliverable (design chapter 6). The subject is therefore passed as a command description,
+//! [`ServerUnderTest`].
 
-#![allow(dead_code)] // 被験者ごとに使うヘルパーが異なる
+#![allow(dead_code)] // which helpers are used differs per subject
 
 use std::io::Read;
 use std::io::{BufReader, Write};
@@ -19,26 +19,28 @@ use lsp_det::framing::{self, RawMessage};
 use lsp_det::state::{Health, Readiness, ServerState};
 use serde_json::{Value, json};
 
-/// 応答・通知を待つ既定の上限。超えたらテストは失敗する（黙って通さない）。
+/// Default limit for waiting on a response or notification. Exceeding it fails the test (never
+/// passes silently).
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 被験者となるサーバーの起動方法。
+/// How to launch the server that is the subject.
 pub struct ServerUnderTest {
     pub program: PathBuf,
     pub args: Vec<String>,
-    /// `rootUri` に使うディレクトリ。
+    /// The directory to use as `rootUri`.
     pub root: PathBuf,
 }
 
 impl ServerUnderTest {
-    /// lsp-det + rust-analyzer と名乗る偽上流。CI で決定的に動く既定の被験者。
-    /// lsp-det は `serverInfo.name` で rust-analyzer の写像を選ぶ (設計 4.2)。
+    /// lsp-det + a fake upstream that calls itself rust-analyzer. The default subject, which runs
+    /// deterministically in CI. lsp-det selects the rust-analyzer mapping by `serverInfo.name`
+    /// (design 4.2).
     pub fn lsp_det_with_fake_upstream() -> Self {
         Self::lsp_det_with_fake_upstream_flags(&[])
     }
 
-    /// 既知の写像がない名前 (`fake-lsp-server`) を名乗る偽上流 + lsp-det。
-    /// 両軸 `unknown` を報告する被験者（仕様 8.2 の 3、8.4 の 1）。
+    /// A fake upstream that calls itself by a name with no known mapping (`fake-lsp-server`) +
+    /// lsp-det. A subject that reports `unknown` on both axes (spec 8.2 item 3, 8.4 item 1).
     pub fn lsp_det_without_adapter() -> Self {
         Self::lsp_det_without_adapter_flags(&[])
     }
@@ -47,18 +49,20 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("fake-lsp-server", upstream_flags)
     }
 
-    /// 偽上流に起動フラグを渡す版（handshake 前後の境界を再現する）。
+    /// The variant that passes launch flags to the fake upstream (reproduces the boundary around
+    /// the handshake).
     pub fn lsp_det_with_fake_upstream_flags(upstream_flags: &[&str]) -> Self {
         Self::lsp_det_with_upstream("rust-analyzer", upstream_flags)
     }
 
-    /// gopls と名乗る偽上流 + lsp-det。lsp-det は gopls の写像を選ぶ。
+    /// A fake upstream that calls itself gopls + lsp-det. lsp-det selects the gopls mapping.
     pub fn lsp_det_with_fake_gopls() -> Self {
         Self::lsp_det_with_upstream("gopls", &[])
     }
 
-    /// pyright を演じる偽上流 + lsp-det。pyright は `serverInfo` を返さないので
-    /// 名乗りは起動ログだけ (ADR 0011 決定 A-2)。lsp-det は pyright の写像を選ぶ。
+    /// A fake upstream that plays pyright + lsp-det. pyright returns no `serverInfo`, so what the
+    /// server calls itself comes only from the startup log (ADR 0011 decision A-2). lsp-det
+    /// selects the pyright mapping.
     pub fn lsp_det_with_fake_pyright() -> Self {
         Self::lsp_det_with_upstream(
             "none",
@@ -66,8 +70,8 @@ impl ServerUnderTest {
         )
     }
 
-    /// typescript-language-server を演じる偽上流 + lsp-det。`serverInfo` を
-    /// 返さず、`initialize` 応答の直後に `$/typescriptVersion` を送る。
+    /// A fake upstream that plays typescript-language-server + lsp-det. It returns no
+    /// `serverInfo` and sends `$/typescriptVersion` right after the `initialize` response.
     pub fn lsp_det_with_fake_typescript_language_server() -> Self {
         Self::lsp_det_with_upstream(
             "none",
@@ -80,15 +84,16 @@ impl ServerUnderTest {
         )
     }
 
-    /// 本プロトコルに準拠した偽上流 + lsp-det。上流側は恒等写像になり、
-    /// 下流側は上流の状態を境界越しに読む（設計 4.1）。
+    /// A fake upstream conformant to this protocol + lsp-det. The upstream side becomes the
+    /// identity mapping, and the downstream side reads the upstream's state across the boundary
+    /// (design 4.1).
     pub fn lsp_det_with_conformant_upstream_flags(upstream_flags: &[&str]) -> Self {
         let mut flags = vec!["--declare-server-state-provider"];
         flags.extend_from_slice(upstream_flags);
         Self::lsp_det_with_upstream("fake-lsp-server", &flags)
     }
 
-    /// 名乗る名前と偽上流のフラグを指定する版。
+    /// The variant that specifies the name the server calls itself and the fake upstream's flags.
     pub fn lsp_det_with_upstream_flags(server_name: &str, upstream_flags: &[&str]) -> Self {
         Self::lsp_det_with_upstream(server_name, upstream_flags)
     }
@@ -113,8 +118,8 @@ pub fn lsp_det_binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_lsp-det"))
 }
 
-/// `target/<profile>/examples/fake_lsp_server`。
-/// テストバイナリは `target/<profile>/deps/` に置かれるので、そこから辿る。
+/// `target/<profile>/examples/fake_lsp_server`.
+/// Test binaries are placed in `target/<profile>/deps/`, so walk from there.
 pub fn fake_upstream_binary() -> PathBuf {
     let mut path = std::env::current_exe().expect("test binary path");
     path.pop(); // deps/
@@ -123,9 +128,9 @@ pub fn fake_upstream_binary() -> PathBuf {
     path.push(format!("fake_lsp_server{}", std::env::consts::EXE_SUFFIX));
     assert!(
         path.exists(),
-        "偽上流 {} が無い。examples をビルドしない起動方法\
-         (`cargo test --test conformance` 単体など) で走らせている。\
-         `cargo test` か `cargo build --examples` を先に実行すること",
+        "fake upstream {} is missing. It is being run in a way that does not build the examples \
+         (such as `cargo test --test conformance` alone). \
+         Run `cargo test` or `cargo build --examples` first",
         path.display()
     );
     path
@@ -135,21 +140,21 @@ pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// `target/<profile>/examples/pseudo_client`（プロセス寿命のテスト専用の
-/// 擬似クライアント）。探し方は `fake_upstream_binary` と同じ。
+/// `target/<profile>/examples/pseudo_client` (the pseudo client used only by the process
+/// lifetime tests). Found the same way as `fake_upstream_binary`.
 pub fn pseudo_client_binary() -> PathBuf {
     let mut path = fake_upstream_binary();
     path.set_file_name(format!("pseudo_client{}", std::env::consts::EXE_SUFFIX));
     assert!(
         path.exists(),
-        "擬似クライアント {} が無い。`cargo test` か `cargo build --examples` を先に実行すること",
+        "pseudo client {} is missing. Run `cargo test` or `cargo build --examples` first",
         path.display()
     );
     path
 }
 
-/// `pid` のプロセスが `window` 以内に消えたら true。10ms ごとに見る。
-/// 手元に `Child` がないプロセス（殺した親の子）の終了を確かめるためのもの。
+/// True if the process `pid` disappears within `window`. Checks every 10ms.
+/// For confirming the exit of a process we have no `Child` for (a child of a killed parent).
 pub fn wait_until_exited(pid: u32, window: Duration) -> bool {
     let deadline = std::time::Instant::now() + window;
     while process_is_alive(pid) {
@@ -161,24 +166,25 @@ pub fn wait_until_exited(pid: u32, window: Duration) -> bool {
     true
 }
 
-/// `pid` のプロセスがまだ存在するか。シグナル 0 は届け先の存在確認だけをする。
+/// Whether the process `pid` still exists. Signal 0 only checks that the recipient exists.
 #[cfg(unix)]
 pub fn process_is_alive(pid: u32) -> bool {
-    // SAFETY: シグナル 0 は何も送らず、対象の存在と権限だけを確かめる。
+    // SAFETY: signal 0 sends nothing; it only checks that the target exists and that we have
+    // permission.
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
-/// 同上 (Windows)。終了したプロセスはハンドルが開けないか、終了コードが
-/// `STILL_ACTIVE` でなくなる。
+/// Same as above (Windows). An exited process either cannot have its handle opened, or its exit
+/// code is no longer `STILL_ACTIVE`.
 #[cfg(windows)]
 pub fn process_is_alive(pid: u32) -> bool {
     win::process_is_alive(pid)
 }
 
-/// `pid` に SIGKILL (Windows は TerminateProcess) を送る。送れたら true。
+/// Sends SIGKILL (TerminateProcess on Windows) to `pid`. True if it could be sent.
 #[cfg(unix)]
 fn force_kill(pid: u32) -> bool {
-    // SAFETY: 自分が起動した被験者の子孫にだけ送る。
+    // SAFETY: sent only to descendants of a subject we launched ourselves.
     unsafe { libc::kill(pid as i32, libc::SIGKILL) == 0 }
 }
 
@@ -187,8 +193,8 @@ fn force_kill(pid: u32) -> bool {
     win::force_kill(pid)
 }
 
-/// テスト補助が使う Windows API。本体 (`src/process/windows.rs`) と同じく
-/// 必要な関数だけを直接宣言する。
+/// The Windows API used by the test support. Like the main code (`src/process/windows.rs`),
+/// declares only the functions it needs directly.
 #[cfg(windows)]
 mod win {
     use std::ffi::c_void;
@@ -207,7 +213,7 @@ mod win {
     }
 
     pub fn process_is_alive(pid: u32) -> bool {
-        // SAFETY: 引数は定数と pid。ハンドルは必ず閉じる。
+        // SAFETY: the arguments are constants and a pid. The handle is always closed.
         unsafe {
             let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
             if handle.is_null() {
@@ -221,7 +227,8 @@ mod win {
     }
 
     pub fn force_kill(pid: u32) -> bool {
-        // SAFETY: 自分が起動した被験者の子孫にだけ送る。ハンドルは必ず閉じる。
+        // SAFETY: sent only to descendants of a subject we launched ourselves. The handle is
+        // always closed.
         unsafe {
             let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
             if handle.is_null() {
@@ -239,15 +246,15 @@ enum Incoming {
     Closed,
 }
 
-/// 本プロトコルの準拠を確かめる偽クライアント。
+/// The fake client that checks conformance to this protocol.
 pub struct ConformanceClient {
     child: Child,
     stdin: ChildStdin,
-    /// 被験者の stderr。失敗の診断にだけ使う (読むのは被験者が終わった後)。
+    /// The subject's stderr. Used only to diagnose failures (read after the subject has exited).
     stderr: Option<ChildStderr>,
     incoming: Receiver<Incoming>,
-    /// 受信済みだが取り出されていないメッセージ（通知・応答・サーバー発
-    /// リクエスト）。
+    /// Messages received but not yet taken out (notifications, responses, and server-initiated
+    /// requests).
     pending_notifications: Vec<Value>,
     next_id: i64,
 }
@@ -261,7 +268,7 @@ impl ConformanceClient {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .unwrap_or_else(|err| panic!("被験者 {:?} を起動できない: {err}", server.program));
+            .unwrap_or_else(|err| panic!("cannot launch subject {:?}: {err}", server.program));
 
         let stdin = child.stdin.take().expect("stdin is piped");
         let stdout = child.stdout.take().expect("stdout is piped");
@@ -279,18 +286,18 @@ impl ConformanceClient {
         }
     }
 
-    /// `initialize` → `initialized` を済ませ、`InitializeResult` を返す。
+    /// Completes `initialize` → `initialized` and returns the `InitializeResult`.
     ///
-    /// `declare_server_state` は仕様 5.2 のクライアント宣言
-    /// （`experimental.serverState: true`）を送るかどうか。
+    /// `declare_server_state` is whether to send the client declaration of spec 5.2
+    /// (`experimental.serverState: true`).
     pub fn initialize(&mut self, declare_server_state: bool) -> Value {
         let result = self.initialize_raw(declare_server_state);
         self.notify("initialized", json!({}));
         result
     }
 
-    /// `initialized` を送らずに `initialize` の応答だけを受け取る。
-    /// handshake が成立しない場合の検証に使う。
+    /// Receives only the `initialize` response, without sending `initialized`.
+    /// Used to check the case where the handshake does not complete.
     pub fn initialize_raw(&mut self, declare_server_state: bool) -> Value {
         let mut capabilities = json!({"textDocument": {"hover": {}}});
         if declare_server_state {
@@ -299,9 +306,9 @@ impl ConformanceClient {
         self.initialize_raw_with_capabilities(capabilities)
     }
 
-    /// `rootUri` と `workspaceFolders` を指定して `initialize` → `initialized`
-    /// を済ませる。gopls はワークスペースフォルダごとに progress を出すので、
-    /// フォルダなしだと "Setting up workspace" が出ない。
+    /// Completes `initialize` → `initialized` with `rootUri` and `workspaceFolders` specified.
+    /// gopls emits progress per workspace folder, so without a folder "Setting up workspace"
+    /// does not appear.
     pub fn initialize_with_root(
         &mut self,
         declare_server_state: bool,
@@ -325,7 +332,7 @@ impl ConformanceClient {
         result
     }
 
-    /// 指定した通知を `window` の間だけ待ち、届けば params を返す。
+    /// Waits for the given notification only for `window`, and returns its params if it arrives.
     pub fn await_notification_within(&mut self, method: &str, window: Duration) -> Option<Value> {
         if let Some(index) = self
             .pending_notifications
@@ -353,8 +360,8 @@ impl ConformanceClient {
         }
     }
 
-    /// 任意の `ClientCapabilities` で `initialize` → `initialized` を済ませる。
-    /// `initializationOptions` 付きの `initialize` → `initialized`。
+    /// Completes `initialize` → `initialized` with arbitrary `ClientCapabilities`.
+    /// `initialize` → `initialized` with `initializationOptions`.
     pub fn initialize_with_initialization_options(
         &mut self,
         declare_server_state: bool,
@@ -377,7 +384,7 @@ impl ConformanceClient {
         result
     }
 
-    /// `rootUri` と capabilities を指定する `initialize` → `initialized`。
+    /// `initialize` → `initialized` specifying `rootUri` and capabilities.
     pub fn initialize_with_root_and_capabilities(
         &mut self,
         root: &std::path::Path,
@@ -426,7 +433,8 @@ impl ConformanceClient {
         self.await_response(id)
     }
 
-    /// 応答を待たずにリクエストを送り、id を返す。保留の検証に使う。
+    /// Sends a request without waiting for the response and returns its id. Used to check
+    /// holding.
     pub fn send_request(&mut self, method: &str, params: Value) -> i64 {
         let id = self.next_id;
         self.next_id += 1;
@@ -436,18 +444,19 @@ impl ConformanceClient {
         id
     }
 
-    /// `send_request` で送ったリクエストへの応答を待つ。
+    /// Waits for the response to a request sent with `send_request`.
     pub fn await_response_to(&mut self, id: i64) -> Value {
         self.await_response(id)
     }
 
-    /// `$/cancelRequest` を送る。
+    /// Sends `$/cancelRequest`.
     pub fn cancel(&mut self, id: i64) {
         self.notify("$/cancelRequest", json!({"id": id}));
     }
 
-    /// `id` への応答が `window` の間に届かないことを確かめる。
-    /// 届いたら `Some(応答)` を返す（保留されずに通ったことの検出）。
+    /// Checks that the response to `id` does not arrive within `window`.
+    /// If it arrives, returns `Some(response)` (detects that it passed through without being
+    /// held).
     pub fn response_within(&mut self, id: i64, window: Duration) -> Option<Value> {
         if let Some(index) = self.pending_notifications.iter().position(|m| {
             m.get("id").and_then(Value::as_i64) == Some(id) && m.get("method").is_none()
@@ -470,14 +479,14 @@ impl ConformanceClient {
                     self.stash(message);
                 }
                 Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => {
-                    panic!("id={id} への応答を待つ間に被験者が沈黙した")
+                    panic!("the subject went silent while waiting for the response to id={id}")
                 }
                 Err(RecvTimeoutError::Timeout) => return None,
             }
         }
     }
 
-    /// `textDocument/references` を送るだけ（応答は待たない）。
+    /// Only sends `textDocument/references` (does not wait for the response).
     pub fn send_references(&mut self) -> i64 {
         self.send_request(
             "textDocument/references",
@@ -489,7 +498,7 @@ impl ConformanceClient {
         )
     }
 
-    /// `textDocument/hover` を送るだけ（応答は待たない）。
+    /// Only sends `textDocument/hover` (does not wait for the response).
     pub fn send_hover(&mut self) -> i64 {
         self.send_request(
             "textDocument/hover",
@@ -500,8 +509,8 @@ impl ConformanceClient {
         )
     }
 
-    /// 準拠した偽上流に `experimental/serverStateChanged` を送らせる
-    /// （偽上流専用の制御）。
+    /// Makes the conformant fake upstream send `experimental/serverStateChanged`
+    /// (a control specific to the fake upstream).
     pub fn make_upstream_emit_server_state_changed(&mut self, health: &str, readiness: &str) {
         self.notify(
             "$/fake/emitServerStateChanged",
@@ -513,7 +522,8 @@ impl ConformanceClient {
         self.send(json!({"jsonrpc": "2.0", "method": method, "params": params}));
     }
 
-    /// 偽上流に `experimental/serverStatus` を送らせる（偽上流専用の制御）。
+    /// Makes the fake upstream send `experimental/serverStatus` (a control specific to the fake
+    /// upstream).
     pub fn make_upstream_emit_status(&mut self, health: &str, quiescent: bool) {
         self.notify(
             "$/fake/emitServerStatus",
@@ -521,13 +531,13 @@ impl ConformanceClient {
         );
     }
 
-    /// 偽上流に `$/progress` を送らせる（偽上流専用の制御）。gopls の
-    /// `{"token", "value": {"kind", "title", "message"}}` をそのまま渡す。
+    /// Makes the fake upstream send `$/progress` (a control specific to the fake upstream). Passes
+    /// gopls's `{"token", "value": {"kind", "title", "message"}}` as is.
     pub fn make_upstream_emit_progress(&mut self, params: Value) {
         self.notify("$/fake/emitProgress", params);
     }
 
-    /// 偽上流に `window/logMessage` を送らせる。
+    /// Makes the fake upstream send `window/logMessage`.
     pub fn make_upstream_emit_log_message(&mut self, kind: u8, message: &str) {
         self.notify(
             "$/fake/emitLogMessage",
@@ -535,17 +545,17 @@ impl ConformanceClient {
         );
     }
 
-    /// pyright 風の "Starting service instance" (フォルダごとに 1 回、info)。
+    /// pyright-style "Starting service instance" (once per folder, info).
     pub fn make_upstream_start_service_instance(&mut self, folder: &str) {
         self.make_upstream_emit_log_message(3, &format!("Starting service instance \"{folder}\""));
     }
 
-    /// pyright 風のファイル列挙完了 (info)。
+    /// pyright-style completion of file enumeration (info).
     pub fn make_upstream_finish_enumeration(&mut self, message: &str) {
         self.make_upstream_emit_log_message(3, message);
     }
 
-    /// typescript-language-server 風のプロジェクトロードの begin。
+    /// typescript-language-server-style begin of a project load.
     pub fn make_upstream_begin_project_load(&mut self, token: &str) {
         self.make_upstream_emit_progress(json!({
             "token": token,
@@ -553,7 +563,7 @@ impl ConformanceClient {
         }));
     }
 
-    /// 同じく end。
+    /// Likewise, end.
     pub fn make_upstream_end_project_load(&mut self, token: &str) {
         self.make_upstream_emit_progress(json!({
             "token": token,
@@ -561,12 +571,12 @@ impl ConformanceClient {
         }));
     }
 
-    /// 被験者 (lsp-det) の pid。子孫プロセスを探すのに使う。
+    /// The pid of the subject (lsp-det). Used to find descendant processes.
     pub fn server_pid(&self) -> u32 {
         self.child.id()
     }
 
-    /// gopls 風の "Setting up workspace" の begin。
+    /// gopls-style begin of "Setting up workspace".
     pub fn make_upstream_begin_workspace_load(&mut self, token: &str) {
         self.make_upstream_emit_progress(json!({
             "token": token,
@@ -574,7 +584,7 @@ impl ConformanceClient {
         }));
     }
 
-    /// gopls 風の "Setting up workspace" の end。
+    /// gopls-style end of "Setting up workspace".
     pub fn make_upstream_end_workspace_load(&mut self, token: &str, message: &str) {
         self.make_upstream_emit_progress(json!({
             "token": token,
@@ -582,7 +592,7 @@ impl ConformanceClient {
         }));
     }
 
-    /// `message` 付きで `experimental/serverStatus` を送らせる。
+    /// Makes the upstream send `experimental/serverStatus` with a `message`.
     pub fn make_upstream_emit_status_with_message(
         &mut self,
         health: &str,
@@ -595,26 +605,27 @@ impl ConformanceClient {
         );
     }
 
-    /// 本プロトコルの状態を問い合わせる（仕様 4.1）。
+    /// Requests the state of this protocol (spec 4.1).
     pub fn server_state(&mut self) -> ServerState {
         let response = self.request("experimental/serverState", json!(null));
         let result = response.get("result").unwrap_or_else(|| {
-            panic!("experimental/serverState への応答に result がない: {response}")
+            panic!("the response to experimental/serverState has no result: {response}")
         });
         serde_json::from_value(result.clone())
-            .unwrap_or_else(|err| panic!("ServerState として読めない ({err}): {result}"))
+            .unwrap_or_else(|err| panic!("cannot read as ServerState ({err}): {result}"))
     }
 
-    /// 次の `experimental/serverStateChanged` を待つ（仕様 4.2）。
+    /// Waits for the next `experimental/serverStateChanged` (spec 4.2).
     pub fn await_state_changed(&mut self) -> ServerState {
         let params = self
             .await_notification("experimental/serverStateChanged")
-            .unwrap_or_else(|| panic!("experimental/serverStateChanged が届かなかった"));
+            .unwrap_or_else(|| panic!("experimental/serverStateChanged did not arrive"));
         serde_json::from_value(params.clone())
-            .unwrap_or_else(|err| panic!("ServerState として読めない ({err}): {params}"))
+            .unwrap_or_else(|err| panic!("cannot read as ServerState ({err}): {params}"))
     }
 
-    /// 指定した通知を待ち、その params を返す。時間内に来なければ `None`。
+    /// Waits for the given notification and returns its params. `None` if it does not arrive in
+    /// time.
     pub fn await_notification(&mut self, method: &str) -> Option<Value> {
         if let Some(index) = self
             .pending_notifications
@@ -632,12 +643,12 @@ impl ConformanceClient {
         }
     }
 
-    /// 指定した通知が `window` の間に届かないことを確かめる。
-    /// 「届かないこと」の検証なので、待ち時間は短く固定する。
+    /// Checks that the given notification does not arrive within `window`.
+    /// This checks "that it does not arrive", so the wait is short and fixed.
     ///
-    /// 観測窓の途中で被験者が死んだ場合は panic する。沈黙していたのか
-    /// 落ちたのかを区別せずに成功とすると、クラッシュした被験者が
-    /// この検査を通ってしまう。
+    /// Panics if the subject dies in the middle of the observation window. Counting that as
+    /// success without distinguishing silence from a crash would let a crashed subject pass this
+    /// check.
     pub fn expect_no_notification(&mut self, method: &str, window: Duration) -> bool {
         if self
             .pending_notifications
@@ -660,26 +671,26 @@ impl ConformanceClient {
                     self.stash(message);
                 }
                 Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => {
-                    panic!("{method} が来ないことを確かめている途中で被験者が沈黙した")
+                    panic!("the subject went silent while checking that {method} does not arrive")
                 }
                 Err(RecvTimeoutError::Timeout) => return true,
             }
         }
     }
 
-    /// `readiness` が `ready` になるまで `serverStateChanged` を待つ。
-    /// 実サーバーは自分のペースで ready になるため、時間ではなく状態で待つ。
+    /// Waits for `serverStateChanged` until `readiness` becomes `ready`.
+    /// Real servers become ready at their own pace, so wait on the state rather than on time.
     ///
-    /// `health` が `error` になったら待つのをやめて失敗する（仕様 6 章 5 項、
-    /// 9 章 2 項。待ち続けるのは ADR 0008 が警告する永久待ちそのもの）。
-    /// `readiness` が `unknown` の被験者には使えない（永遠に来ない）。
+    /// Stops waiting and fails if `health` becomes `error` (spec chapter 6 item 5, chapter 9
+    /// item 2. Waiting on would be exactly the endless wait that ADR 0008 warns about).
+    /// Cannot be used with a subject whose `readiness` is `unknown` (it never arrives).
     pub fn wait_until_ready(&mut self) {
         let mut state = self.server_state();
         loop {
-            // health を先に見る (仕様 3 章の推奨解釈)。
+            // Look at health first (the recommended interpretation of spec chapter 3).
             assert!(
                 state.health != Health::Error,
-                "ready を待つ間に被験者が壊れた: {state:?}"
+                "the subject broke while waiting for ready: {state:?}"
             );
             if state.readiness == Readiness::Ready {
                 return;
@@ -687,18 +698,19 @@ impl ConformanceClient {
             assert_ne!(
                 state.readiness,
                 Readiness::Unknown,
-                "readiness を観測しない被験者に ready を待たせている"
+                "waiting for ready on a subject that does not observe readiness"
             );
             state = self.await_state_changed();
         }
     }
 
-    /// 被験者が接続を閉じるまで読み、その間に `method` が届かなかったことを
-    /// 確かめる。死んでいく被験者に対する「沈黙の検証」に使う
-    /// (`expect_no_notification` は閉じると panic するため使えない)。
+    /// Reads until the subject closes the connection, and checks that `method` did not arrive in
+    /// the meantime. Used to "check silence" of a subject that is dying
+    /// (`expect_no_notification` cannot be used because it panics on close).
     ///
-    /// 閉じた後は終了コードが 0 であることも確かめる。panic や異常終了で
-    /// stdout が閉じただけの被験者を「意図して沈黙した」と誤認しないため。
+    /// After the close, also checks that the exit code is 0, so that a subject whose stdout merely
+    /// closed by a panic or an abnormal exit is not mistaken for one that "went silent on
+    /// purpose".
     pub fn expect_silence_until_closed(&mut self, method: &str) -> bool {
         if self
             .pending_notifications
@@ -719,21 +731,24 @@ impl ConformanceClient {
                 }
                 Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => break,
                 Err(RecvTimeoutError::Timeout) => {
-                    panic!("{method} の沈黙を確かめている間、被験者が閉じなかった")
+                    panic!("the subject did not close while checking the silence of {method}")
                 }
             }
         }
-        let status = self.child.wait().expect("被験者の終了を待てない");
+        let status = self
+            .child
+            .wait()
+            .expect("cannot wait for the subject to exit");
         assert!(
             status.success(),
-            "被験者が異常終了した ({status})。沈黙ではなく墜落である"
+            "the subject exited abnormally ({status}). That is a crash, not silence"
         );
         true
     }
 
-    /// 被験者が接続を閉じるまで読み、その間に**応答**（id 付きで method の
-    /// ないメッセージ）が届かなかったことを確かめる。応答済みの id に
-    /// 二重応答しないことの検証に使う。
+    /// Reads until the subject closes the connection, and checks that no **response** (a message
+    /// with an id and no method) arrived in the meantime. Used to check that an already answered
+    /// id is not answered twice.
     pub fn expect_no_response_until_closed(&mut self) -> bool {
         let deadline = std::time::Instant::now() + DEFAULT_TIMEOUT;
         loop {
@@ -747,14 +762,14 @@ impl ConformanceClient {
                 }
                 Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => return true,
                 Err(RecvTimeoutError::Timeout) => {
-                    panic!("応答が来ないことを確かめている間、被験者が閉じなかった")
+                    panic!("the subject did not close while checking that no response arrives")
                 }
             }
         }
     }
 
     pub fn did_open(&mut self, path: &std::path::Path, language_id: &str) {
-        let text = std::fs::read_to_string(path).expect("開くファイルを読めない");
+        let text = std::fs::read_to_string(path).expect("cannot read the file to open");
         self.notify(
             "textDocument/didOpen",
             json!({"textDocument": {
@@ -764,9 +779,10 @@ impl ConformanceClient {
         );
     }
 
-    /// 全文置換の `didChange`。仕様 6.2 の鮮度保証が対象とする通知。
-    /// `workspace/didChangeWatchedFiles`。`kind` は LSP の FileChangeType
-    /// (1 = Created, 2 = Changed, 3 = Deleted)。
+    /// Full-text replacement `didChange`. The notification covered by the freshness guarantee of
+    /// spec 6.2.
+    /// `workspace/didChangeWatchedFiles`. `kind` is the LSP FileChangeType
+    /// (1 = Created, 2 = Changed, 3 = Deleted).
     pub fn did_change_watched_files(&mut self, changes: &[(&std::path::Path, u8)]) {
         let changes: Vec<Value> = changes
             .iter()
@@ -788,7 +804,7 @@ impl ConformanceClient {
         );
     }
 
-    /// `textDocument/references`。宣言は含めない（利用箇所だけ数える）。
+    /// `textDocument/references`. Excludes the declaration (counts only the uses).
     pub fn references(&mut self, path: &std::path::Path, line: u32, character: u32) -> Vec<Value> {
         let params = json!({
             "textDocument": {"uri": file_uri(path)},
@@ -797,15 +813,16 @@ impl ConformanceClient {
         });
         let mut response = self.request("textDocument/references", params.clone());
         if response["error"]["code"] == json!(-32801) {
-            // ContentModified: サーバーが変更中の計算を捨てた。LSP はクライアントに
-            // 再送を求める (rust-analyzer は didChangeWatchedFiles 直後の要求を
-            // これで拒む)。応答ではないので一度だけ送り直す。
+            // ContentModified: the server discarded a computation during a change. LSP asks the
+            // client to resend (rust-analyzer rejects requests right after didChangeWatchedFiles
+            // with this). It is not a response, so resend exactly once.
             response = self.request("textDocument/references", params);
         }
         response["result"].as_array().cloned().unwrap_or_default()
     }
 
-    /// 偽上流が受信した method の一覧。転送の有無を確かめるのに使う。
+    /// The list of methods the fake upstream received. Used to check whether forwarding
+    /// happened.
     pub fn upstream_methods_seen(&mut self) -> Vec<String> {
         self.upstream_report()["methodsSeen"]
             .as_array()
@@ -818,8 +835,8 @@ impl ConformanceClient {
             .unwrap_or_default()
     }
 
-    /// 偽上流が `initialize` で受け取った `ClientCapabilities`。
-    /// 上流に届いた `method` の通知の params (届いた順)。
+    /// The `ClientCapabilities` the fake upstream received in `initialize`.
+    /// The params of the `method` notifications that reached the upstream (in arrival order).
     pub fn upstream_notifications(&mut self, method: &str) -> Vec<Value> {
         self.upstream_report()["notifications"][method]
             .as_array()
@@ -831,7 +848,7 @@ impl ConformanceClient {
         self.upstream_report()["initializeParams"]["capabilities"].clone()
     }
 
-    /// 偽上流が送った `window/workDoneProgress/create` に応答が返ったか。
+    /// Whether the `window/workDoneProgress/create` the fake upstream sent was answered.
     pub fn upstream_progress_create_answered(&mut self) -> bool {
         self.upstream_report()["progressCreateAnswered"] == json!(true)
     }
@@ -848,8 +865,8 @@ impl ConformanceClient {
     fn send(&mut self, value: Value) {
         let body = serde_json::to_vec(&value).expect("client payloads are serializable");
         if let Err(err) = framing::write_message(&mut self.stdin, &RawMessage { body }) {
-            // 診断のために stderr を EOF まで読む。生きている被験者を相手に
-            // 読むとハングするので、先に終了を確定させる。
+            // Read stderr to EOF for diagnosis. Reading it against a live subject would hang, so
+            // make sure it has exited first.
             let status = self.child.try_wait();
             let _ = self.child.kill();
             let _ = self.child.wait();
@@ -858,7 +875,8 @@ impl ConformanceClient {
                 let _ = stderr.read_to_string(&mut log);
             }
             panic!(
-                "被験者の stdin へ書けない: {err} (書き込み時点の被験者の状態: {status:?})\n被験者の stderr:\n{log}"
+                "cannot write to the subject's stdin: {err} (the subject's status at the time of \
+                 the write: {status:?})\nthe subject's stderr:\n{log}"
             );
         }
     }
@@ -870,9 +888,9 @@ impl ConformanceClient {
             return self.pending_notifications.remove(index);
         }
         loop {
-            let message = self
-                .recv()
-                .unwrap_or_else(|| panic!("id={id} への応答を待つ間に被験者が沈黙した"));
+            let message = self.recv().unwrap_or_else(|| {
+                panic!("the subject went silent while waiting for the response to id={id}")
+            });
             if message.get("id").and_then(Value::as_i64) == Some(id)
                 && message.get("method").is_none()
             {
@@ -883,8 +901,8 @@ impl ConformanceClient {
     }
 
     fn stash(&mut self, message: Value) {
-        // 通知も、他 id への応答も、サーバー発リクエストも取っておく。
-        // 保留の検証では「後から届く応答」を拾う必要がある。
+        // Keep notifications, responses to other ids, and server-initiated requests alike.
+        // Checking holding requires picking up a "response that arrives later".
         self.pending_notifications.push(message);
     }
 
@@ -926,27 +944,28 @@ fn spawn_reader(stdout: ChildStdout, tx: Sender<Incoming>) {
     });
 }
 
-/// `file://` URI。テスト用なのでパーセントエンコードは扱わない
-/// (一時ディレクトリ名を ASCII に限る前提)。
-/// パスの `file:` URI。lsp-det 本体と同じ変換 (Windows は `file:///C:/...`、
-/// パーセントエンコード)。実サーバーが返す uri と突き合わせるので、形を揃える。
+/// A `file://` URI. This is for tests, so percent-encoding is not handled
+/// (assumes temporary directory names are ASCII-only).
+/// The `file:` URI of a path. The same conversion as the lsp-det main code (`file:///C:/...` and
+/// percent-encoding on Windows). It is matched against the uri a real server returns, so the
+/// form must match.
 pub fn file_uri(path: &std::path::Path) -> String {
     lsp_det::uri::path_to_uri(path)
 }
 
-/// 一時的な cargo プロジェクト。クロスファイルの問い合わせには、
-/// 別ファイルから参照されるシンボルを持つ実プロジェクトが要る。
+/// A temporary cargo project. Cross-file queries need a real project with a symbol that is
+/// referenced from another file.
 pub struct TempCargoProject {
     pub root: PathBuf,
 }
 
 impl TempCargoProject {
-    /// `a::target` を `b::caller` から呼ぶ 2 ファイル構成を作る。
+    /// Creates a 2-file layout in which `b::caller` calls `a::target`.
     pub fn with_cross_file_reference(tag: &str) -> Self {
         let root =
             std::env::temp_dir().join(format!("lsp-det-conformance-{tag}-{}", std::process::id()));
         let src = root.join("src");
-        std::fs::create_dir_all(&src).expect("一時プロジェクトを作れない");
+        std::fs::create_dir_all(&src).expect("cannot create the temporary project");
         std::fs::write(
             root.join("Cargo.toml"),
             "[package]\nname = \"conformance-fixture\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\n[dependencies]\n",
@@ -964,8 +983,8 @@ impl TempCargoProject {
 }
 
 impl TempCargoProject {
-    /// 接頭辞 `wsymprobe` を共有する `n` 個のトップレベル関数 (3 ファイルに分ける)。
-    /// 仕様 7.2 の 2 (件数の上限) の fixture。
+    /// `n` top-level functions sharing the prefix `wsymprobe` (split across 3 files).
+    /// The fixture for spec 7.2 item 2 (the cap on the count).
     pub fn with_many_symbols(tag: &str, n: usize) -> Self {
         let project = Self::with_cross_file_reference(tag);
         let src = project.root.join("src");
@@ -989,7 +1008,7 @@ impl Drop for TempCargoProject {
     }
 }
 
-/// 一時的な Go モジュール。`fixture.Target` を `b.go` の `Caller` から呼ぶ。
+/// A temporary Go module. `Caller` in `b.go` calls `fixture.Target`.
 pub struct TempGoProject {
     pub root: PathBuf,
 }
@@ -1000,7 +1019,7 @@ impl TempGoProject {
             "lsp-det-conformance-go-{tag}-{}",
             std::process::id()
         ));
-        std::fs::create_dir_all(&root).expect("一時モジュールを作れない");
+        std::fs::create_dir_all(&root).expect("cannot create the temporary module");
         std::fs::write(root.join("go.mod"), "module fixture\n\ngo 1.21\n").unwrap();
         std::fs::write(root.join("a.go"), GO_A).unwrap();
         std::fs::write(root.join("b.go"), GO_B_WITH_CALL).unwrap();
@@ -1035,16 +1054,17 @@ impl Drop for TempGoProject {
     }
 }
 
-/// `pid` の子孫のうち、コマンドラインに `needle` を含むものに SIGKILL
-/// (Windows は TerminateProcess) を送る。実 typescript-language-server の
-/// tsserver (孫プロセス) を落とすのに使う。殺した pid を返す。
+/// Sends SIGKILL (TerminateProcess on Windows) to the descendants of `pid` whose command line
+/// contains `needle`. Used to bring down the tsserver (a grandchild process) of a real
+/// typescript-language-server. Returns the pids that were killed.
 pub fn kill_descendants_matching(pid: u32, needle: &str) -> Vec<u32> {
     let mut killed = Vec::new();
     let mut frontier = vec![pid];
     while let Some(parent) = frontier.pop() {
         for (child, cmdline) in children_of(parent) {
             frontier.push(child);
-            // 送れたときだけ「殺した」と数える (既に消えていれば失敗する)。
+            // Count as "killed" only when it could be sent (it fails if the process is already
+            // gone).
             if cmdline.contains(needle) && force_kill(child) {
                 killed.push(child);
             }
@@ -1053,7 +1073,7 @@ pub fn kill_descendants_matching(pid: u32, needle: &str) -> Vec<u32> {
     killed
 }
 
-/// `parent` の直接の子と、そのコマンドライン。親が消えていれば空。
+/// The direct children of `parent` and their command lines. Empty if the parent is gone.
 #[cfg(target_os = "linux")]
 fn children_of(parent: u32) -> Vec<(u32, String)> {
     pgrep_children(parent)
@@ -1101,8 +1121,8 @@ fn children_of(parent: u32) -> Vec<(u32, String)> {
         .collect()
 }
 
-/// `pgrep -P` で直接の子を列挙する。pgrep が失敗しても (その親が消えて
-/// いても) 空を返して残りの探索は続く。
+/// Enumerates the direct children with `pgrep -P`. Even if pgrep fails (even if that parent is
+/// gone), returns empty and the rest of the search continues.
 #[cfg(unix)]
 fn pgrep_children(parent: u32) -> Vec<u32> {
     let Ok(out) = std::process::Command::new("pgrep")
@@ -1117,7 +1137,7 @@ fn pgrep_children(parent: u32) -> Vec<u32> {
         .collect()
 }
 
-/// 一時的な TypeScript プロジェクト。`a.ts` の `target` を `b.ts` の `caller` から呼ぶ。
+/// A temporary TypeScript project. `caller` in `b.ts` calls `target` in `a.ts`.
 pub struct TempTsProject {
     pub root: PathBuf,
 }
@@ -1128,7 +1148,7 @@ impl TempTsProject {
             "lsp-det-conformance-ts-{tag}-{}",
             std::process::id()
         ));
-        std::fs::create_dir_all(&root).expect("一時プロジェクトを作れない");
+        std::fs::create_dir_all(&root).expect("cannot create the temporary project");
         std::fs::write(root.join("tsconfig.json"), TSCONFIG).unwrap();
         std::fs::write(root.join("a.ts"), TS_A).unwrap();
         std::fs::write(root.join("b.ts"), TS_B_WITH_CALL).unwrap();
@@ -1163,9 +1183,9 @@ impl Drop for TempTsProject {
 }
 
 pub const TSCONFIG: &str = r#"{"compilerOptions":{"strict":true,"module":"esnext","target":"es2020","moduleResolution":"bundler"},"include":["**/*.ts"]}"#;
-/// `target` は 1 行目の 17 文字目 (0 起点で line 0, character 16) にある。
+/// `target` is at the 17th character of line 1 (0-based: line 0, character 16).
 pub const TS_A: &str = "export function target(): number {\n  return 1;\n}\n";
-/// 呼び出しは 4 行目 (0 起点で line 3)。1 行目の import も参照として数えられる。
+/// The call is on line 4 (0-based: line 3). The import on line 1 is also counted as a reference.
 pub const TS_B_WITH_CALL: &str =
     "import { target } from './a';\n\nexport function caller(): number {\n  return target();\n}\n";
 pub const TS_B_WITHOUT_CALL: &str = "export function caller(): number {\n  return 1;\n}\n";
@@ -1173,9 +1193,9 @@ pub const TS_B_WITH_TWO_CALLS: &str = "import { target } from './a';\n\nexport f
 pub const TS_C_WITH_CALL: &str =
     "import { target } from './a';\n\nexport function other(): number {\n  return target();\n}\n";
 
-/// 一時的な Python プロジェクト。`a.py` の `target` を `b.py` の `caller` から呼ぶ。
-/// pyright は `initialize` の `workspaceFolders` をフォルダごとの service
-/// instance にし、そのフォルダ以下を列挙する。
+/// A temporary Python project. `caller` in `b.py` calls `target` in `a.py`.
+/// pyright turns the `workspaceFolders` of `initialize` into a service instance per folder, and
+/// enumerates everything under that folder.
 pub struct TempPyProject {
     pub root: PathBuf,
 }
@@ -1186,7 +1206,7 @@ impl TempPyProject {
             "lsp-det-conformance-py-{tag}-{}",
             std::process::id()
         ));
-        std::fs::create_dir_all(&root).expect("一時プロジェクトを作れない");
+        std::fs::create_dir_all(&root).expect("cannot create the temporary project");
         std::fs::write(root.join("a.py"), PY_A).unwrap();
         std::fs::write(root.join("b.py"), PY_B_WITH_CALL).unwrap();
         TempPyProject { root }
@@ -1217,53 +1237,53 @@ impl Drop for TempPyProject {
     }
 }
 
-/// `target` は 1 行目の 5 文字目 (0 起点で line 0, character 4) にある。
+/// `target` is at the 5th character of line 1 (0-based: line 0, character 4).
 pub const PY_A: &str = "def target():\n    return 1\n";
-/// 呼び出しは 5 行目 (0 起点で line 4)。1 行目の import も参照として数えられる。
+/// The call is on line 5 (0-based: line 4). The import on line 1 is also counted as a reference.
 pub const PY_B_WITH_CALL: &str = "from a import target\n\n\ndef caller():\n    return target()\n";
 pub const PY_B_WITHOUT_CALL: &str = "def caller():\n    return 1\n";
 pub const PY_B_WITH_TWO_CALLS: &str =
     "from a import target\n\n\ndef caller():\n    target()\n    return target()\n";
 pub const PY_C_WITH_CALL: &str = "import a\n\n\ndef other():\n    return a.target()\n";
 
-/// `Target` は 3 行目の 6 文字目 (0 起点で line 2, character 5) にある。
+/// `Target` is at the 6th character of line 3 (0-based: line 2, character 5).
 pub const GO_A: &str = "package fixture\n\nfunc Target() {}\n";
-/// 呼び出しは 4 行目 (0 起点で line 3)。
+/// The call is on line 4 (0-based: line 3).
 pub const GO_B_WITH_CALL: &str = "package fixture\n\nfunc Caller() {\n\tTarget()\n}\n";
 pub const GO_B_WITHOUT_CALL: &str = "package fixture\n\nfunc Caller() {}\n";
 pub const GO_B_WITH_TWO_CALLS: &str =
     "package fixture\n\nfunc Caller() {\n\tTarget()\n\tTarget()\n}\n";
 pub const GO_C_WITH_CALL: &str = "package fixture\n\nfunc Other() {\n\tTarget()\n}\n";
 
-/// `target` は 1 行目の 8 文字目 (0 起点で line 0, character 7) にある。
+/// `target` is at the 8th character of line 1 (0-based: line 0, character 7).
 pub const A_RS: &str = "pub fn target() {}\n";
 pub const B_WITH_CALL: &str = "use crate::a::target;\n\npub fn caller() {\n    target();\n}\n";
 pub const B_WITHOUT_CALL: &str = "pub fn caller() {}\n";
-/// ディスク上の変更 (仕様 7.3 の 2): 呼び出しを 1 つ足す。
+/// A change on disk (spec 7.3 item 2): adds one call.
 pub const B_WITH_TWO_CALLS: &str =
     "use crate::a::target;\n\npub fn caller() {\n    target();\n    target();\n}\n";
-/// 新規ファイル (仕様 7.3 の 2): 別のファイルからも呼ぶ。Rust では `mod` で
-/// 名指しされるまで crate に入らないので、lib.rs も変える。
+/// A new file (spec 7.3 item 2): also calls from another file. In Rust a file does not enter the
+/// crate until it is named by `mod`, so lib.rs changes too.
 pub const C_RS_WITH_CALL: &str = "pub fn other() {\n    crate::a::target();\n}\n";
 pub const LIB_RS_WITH_C: &str = "pub mod a;\npub mod b;\npub mod c;\n";
 
-/// `write!` を使うため。
+/// For using `write!`.
 pub fn flush<W: Write>(writer: &mut W) {
     let _ = writer.flush();
 }
 
-/// fixture を git 管理下に置く (下流側の代行は git ls-files で列挙する)。
+/// Puts the fixture under git (the downstream side's stand-in enumerates with git ls-files).
 pub fn git_init(root: &std::path::Path) {
     let status = Command::new("git")
         .args(["init", "-q"])
         .current_dir(root)
         .status()
-        .expect("git を起動できない");
-    assert!(status.success(), "git init に失敗: {}", root.display());
+        .expect("cannot launch git");
+    assert!(status.success(), "git init failed: {}", root.display());
 }
 
-/// 一時的な git 管理下のワークスペース (下流側の代行のテスト用)。
-/// `git init` して `a.rs` を置く。追跡はしない (`--others` で拾われる)。
+/// A temporary workspace under git (for testing the downstream side's stand-in).
+/// Runs `git init` and places `a.rs`. Does not track it (picked up by `--others`).
 pub struct TempGitWorkspace {
     pub root: PathBuf,
 }
@@ -1273,20 +1293,20 @@ impl TempGitWorkspace {
         let root =
             std::env::temp_dir().join(format!("lsp-det-stand-in-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("一時ワークスペースを作れない");
+        std::fs::create_dir_all(&root).expect("cannot create the temporary workspace");
         git_init(&root);
         std::fs::write(root.join("a.rs"), "pub fn target() {}\n").unwrap();
         TempGitWorkspace { root }
     }
 
-    /// git 管理外の一時ディレクトリ。
+    /// A temporary directory outside git.
     pub fn without_git(tag: &str) -> Self {
         let root = std::env::temp_dir().join(format!(
             "lsp-det-stand-in-nogit-{tag}-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("一時ディレクトリを作れない");
+        std::fs::create_dir_all(&root).expect("cannot create the temporary directory");
         std::fs::write(root.join("a.rs"), "pub fn target() {}\n").unwrap();
         TempGitWorkspace { root }
     }

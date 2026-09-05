@@ -1,13 +1,13 @@
-//! argv 完結の起動インターフェース (v0.1-design.md 3 章)。
+//! The launch interface, complete within argv (v0.1-design.md chapter 3).
 //!
 //! ```text
-//! lsp-det -- <上流コマンド> [args...]
+//! lsp-det -- <upstream command> [args...]
 //! ```
 //!
-//! フラグは持たない。どの写像を使うかは上流が `InitializeResult.serverInfo`
-//! で名乗る名前で決まり (設計 4.2)、時間の非常口もゲートの切り替えもない
-//! (ADR 0009 決定 D-10・D-11)。起動指定は呼び出し側の設定ファイル
-//! (`.lsp.json` / `ls_args`) に常在させる。
+//! There are no flags. Which mapping is used is decided by the name the upstream calls itself
+//! in `InitializeResult.serverInfo` (design 4.2); there is no time-based escape hatch and no
+//! gate switch (ADR 0009 decisions D-10 and D-11). The launch specification lives permanently
+//! in the caller's configuration file (`.lsp.json` / `ls_args`).
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Args {
@@ -65,7 +65,7 @@ mod tests {
 
     #[test]
     fn passes_flag_like_arguments_after_the_separator_to_the_upstream() {
-        // `--` 以降は上流のもの。lsp-det のフラグと衝突しない。
+        // Everything after `--` belongs to the upstream. It does not collide with lsp-det flags.
         let args = parse_args(&s(&["--", "gopls", "--adapter", "x"])).unwrap();
         assert_eq!(
             args.command_args,
@@ -75,9 +75,9 @@ mod tests {
 
     #[test]
     fn rejects_the_removed_flags() {
-        // ADR 0009 決定 D-11: CLI は `lsp-det -- <上流コマンド>` のみ。
-        // 写像は上流の serverInfo.name で選び (D-2)、時間の非常口も
-        // ゲートの切り替えも持たない (D-10、D-1)。
+        // ADR 0009 decision D-11: the CLI is only `lsp-det -- <upstream command>`.
+        // The mapping is chosen by the upstream's serverInfo.name (D-2); there is no
+        // time-based escape hatch and no gate switch (D-10, D-1).
         for argv in [
             &["--adapter", "rust-analyzer", "--", "rust-analyzer"][..],
             &["--gate-timeout", "300", "--", "gopls"][..],
@@ -86,7 +86,7 @@ mod tests {
         ] {
             assert!(
                 parse_args(&s(argv)).is_err(),
-                "削除済みのフラグを受理した: {argv:?}"
+                "accepted a removed flag: {argv:?}"
             );
         }
     }

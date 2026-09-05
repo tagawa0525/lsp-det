@@ -1,8 +1,9 @@
-//! クライアントと上流言語サーバーを中継するイベントループ (v0.1-design.md 4.6)。
+//! The event loop that relays between the client and the upstream language server
+//! (v0.1-design.md 4.6).
 //!
-//! 全状態はこのモジュールの単一ループに閉じ、ロックを持たない。読み取りは
-//! std スレッド + `mpsc` で行い、判断はループ内でのみ行う。上流側
-//! ([`UpstreamSide`]) がここに住む。下流側 (M3) も同じループに載せる。
+//! All state is confined to the single loop in this module, and there are no locks. Reading is
+//! done by std threads + `mpsc`, and decisions are made only inside the loop. The upstream side
+//! ([`UpstreamSide`]) lives here. The downstream side (M3) rides on the same loop.
 
 use std::io::{self, BufReader, Read, Write};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -20,9 +21,10 @@ use crate::state::{self, ServerState, ServerStateProvider};
 use crate::tracker::Tracker;
 use crate::watched_files::WatchedFiles;
 
-/// 上流の生死をポーリングする間隔。`Upstream` の所有権 (kill する権利) を
-/// main ループ 1 箇所に保つため、別スレッドで `wait()` させず `recv_timeout`
-/// のたびに `try_wait()` する (v0.1-design.md 4.8: タイマーは `recv_timeout`)。
+/// The interval for polling whether the upstream is alive. To keep ownership of `Upstream`
+/// (the right to kill it) in the one place that is the main loop, no separate thread calls
+/// `wait()`; instead `try_wait()` runs on every `recv_timeout` (v0.1-design.md 4.8: timers are
+/// `recv_timeout`).
 const UPSTREAM_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 enum Event {
@@ -30,19 +32,20 @@ enum Event {
     ClientClosed,
     ClientReadError(io::Error),
     FromUpstream(RawMessage),
-    /// 上流の stdout が閉じた。生死のポーリング (`try_wait`) は
-    /// `recv_timeout` のタイムアウト時にしか回らないため、クライアントが
-    /// 絶え間なく喋っていると死の検出が遅れる。読み手が明示的に知らせる。
+    /// The upstream's stdout closed. Polling for liveness (`try_wait`) runs only when
+    /// `recv_timeout` times out, so detecting death is delayed while the client keeps talking
+    /// without pause. The reader reports it explicitly.
     UpstreamClosed,
 }
 
-/// クライアントと上流を中継し、プロキシ自身の終了コードを返す。
+/// Relays between the client and the upstream, and returns the proxy's own exit code.
 ///
-/// 写像は上流が `InitializeResult.serverInfo` で名乗る名前で選ぶ
-/// (v0.1-design.md 4.2)。既知でなければ上流側は保証なしで宣言し、両軸
-/// `unknown` を報告する (仕様 8.2 の 3)。上流の消失は通知ではなく接続の
-/// 終了で伝える (仕様 8.2 の 7)。下流側 ([`Gate`]) は境界の上の状態を見て
-/// 横断リクエストを代行する (設計 4.3)。
+/// The mapping is selected by the name the upstream calls itself in
+/// `InitializeResult.serverInfo` (v0.1-design.md 4.2). If it is not known, the upstream side
+/// declares no guarantees and reports `unknown` on both axes (spec 8.2 item 3). The
+/// disappearance of the upstream is conveyed by closing the connection, not by a notification
+/// (spec 8.2 item 7). The downstream side ([`Gate`]) looks at the state on the boundary and
+/// stands in for cross-workspace requests (design 4.3).
 pub fn run<R, W>(client_in: R, client_out: W, command: &str, args: &[String]) -> io::Result<i32>
 where
     R: Read + Send + 'static,
@@ -60,8 +63,8 @@ where
     spawn_client_reader(client_in, tx.clone());
     spawn_upstream_reader(handles.stdout, tx);
 
-    // 書き込みの失敗は無視して続行する。クライアントが読み取りをやめていても、
-    // 上流の stdin が閉じていても、次のポーリングで exit を検出する。
+    // Write failures are ignored and we continue. Even if the client has stopped reading, or
+    // the upstream's stdin is closed, the next poll detects the exit.
     let mut deliver = |outs: Vec<Out>| {
         for out in outs {
             match out {
@@ -80,8 +83,8 @@ where
             Ok(Event::FromClient(msg)) => deliver(upstream_side.on_client(msg, &mut gate)),
             Ok(Event::FromUpstream(msg)) => deliver(upstream_side.on_upstream(msg, &mut gate)),
             Ok(Event::UpstreamClosed) => {
-                // stdout を閉じた上流はもう応答しない。クライアントが
-                // 喋り続けていてもここで閉じる。
+                // An upstream that closed its stdout no longer answers. Close here even if
+                // the client keeps talking.
                 deliver(close_pending(&mut upstream_side, &mut gate));
                 break reap(&mut handles.upstream);
             }
@@ -106,8 +109,8 @@ where
                 }
             }
             Err(RecvTimeoutError::Disconnected) => {
-                // client_reader・upstream_reader の両方が終了済み。
-                // 上流の最終状態を確認して終了する。
+                // Both client_reader and upstream_reader have finished.
+                // Check the upstream's final status and exit.
                 let code = handles
                     .upstream
                     .wait()
@@ -124,16 +127,16 @@ where
     Ok(exit_code)
 }
 
-/// 中継の出力。どちらへ書くか。
+/// The output of the relay. Which side to write to.
 enum Out {
     ToClient(RawMessage),
     ToUpstream(RawMessage),
 }
 
-/// クライアントから来たメッセージの種類。
+/// The kind of message that came from the client.
 ///
-/// 覗き見の借用を `RawMessage` の所有権から切り離すために、判定結果だけを
-/// 所有データとして取り出す。
+/// To detach the borrow of the peek from the ownership of `RawMessage`, only the result of
+/// the judgment is extracted as owned data.
 enum ClientKind {
     ServerStateRequest(RequestId),
     InitializeRequest(Option<RequestId>),
@@ -143,40 +146,41 @@ enum ClientKind {
         id: RequestId,
         method: String,
     },
-    /// クライアントの `initialized` 通知。恒等写像の初期状態の問い合わせは
-    /// これを流した後に送る。
+    /// The client's `initialized` notification. Under the identity mapping, the query for the
+    /// initial state is sent after this has been forwarded.
     Initialized,
-    /// その他の通知。写像がクライアントの通知から先読みした変化があれば持つ
-    /// (ADR 0014 追補 決定 D)。
+    /// Any other notification. Carries the change the mapping predicted from the client's
+    /// notification, if any (ADR 0014 addendum decision D).
     Notification(Option<ServerState>),
-    /// `textDocument/didOpen`。既に開いている uri なら、全文の `didChange` に
-    /// 書き換えたメッセージを持つ (ADR 0015 決定 B)。
+    /// `textDocument/didOpen`. If the uri is already open, carries the message rewritten into
+    /// a full-text `didChange` (ADR 0015 decision B).
     DidOpen(Option<RawMessage>),
     Other,
 }
 
-/// 注入した `window.workDoneProgress` に由来するサーバー発リクエスト。
-/// クライアントが自分で宣言していなければ上流側が答える (設計 4.2)。
+/// A server-initiated request that stems from the injected `window.workDoneProgress`.
+/// If the client did not declare it itself, the upstream side answers (design 4.2).
 const WORK_DONE_PROGRESS_CREATE: &str = "window/workDoneProgress/create";
 
-/// 上流への `initialize` に注入する、本プロトコルの購読宣言 (設計 4.2)。
-/// 上流が自ら本プロトコルを話すとき、その通知を下流側が読むために要る。
-/// クライアントが宣言していなければ、届いた通知はクライアントへ流さない。
+/// The subscription declaration for this protocol, injected into the `initialize` sent to the
+/// upstream (design 4.2). Needed so that the downstream side can read the notifications when
+/// the upstream speaks this protocol itself. If the client did not declare it, the
+/// notifications that arrive are not forwarded to the client.
 const SERVER_STATE_CLIENT_CAPABILITY: &str = "experimental.serverState";
 
-/// 恒等写像のとき、上流の初期状態を lsp-det 自身が問い合わせるリクエストの
-/// id。上流の通知は変化のときにしか来ないので、最初の状態は聞くしかない。
-/// JSON-RPC の id は文字列も許すので衝突しない保証はないが、`lsp-det:` を
-/// 予約 prefix として使うことで実用上衝突しない。
+/// The id of the request with which lsp-det itself queries the upstream's initial state under
+/// the identity mapping. The upstream's notifications come only on a change, so the first
+/// state can only be asked for. JSON-RPC allows string ids too, so there is no guarantee
+/// against a collision, but using `lsp-det:` as a reserved prefix avoids one in practice.
 const SELF_STATE_REQUEST_ID: &str = "lsp-det:serverState";
 
-/// 終了コードを取り、居座る上流は道連れにする。
+/// Takes the exit code, and takes an upstream that lingers down with it.
 ///
-/// stdout を閉じてから実際に exit するまでには僅かな間があるため、
-/// 即断せず短く待つ。待ち切っても終わらない上流は kill する
-/// (プロキシが吊られるとクライアントも吊られる)。
+/// There is a slight gap between closing stdout and actually exiting, so wait briefly instead
+/// of deciding at once. An upstream that still has not exited after the wait is killed
+/// (if the proxy hangs, the client hangs too).
 fn reap(upstream: &mut process::Upstream) -> i32 {
-    const ATTEMPTS: u32 = 50; // 20ms x 50 = 最大 1 秒
+    const ATTEMPTS: u32 = 50; // 20ms x 50 = at most 1 second
     for _ in 0..ATTEMPTS {
         match upstream.try_wait() {
             Ok(Some(status)) => return status.code().unwrap_or(1),
@@ -189,12 +193,14 @@ fn reap(upstream: &mut process::Upstream) -> i32 {
     1
 }
 
-/// 上流が消えた。未応答のリクエストにエラーを応答してから接続を閉じる
-/// (仕様 8.2 の 7、設計 4.2「上流の消失」)。`initialize` に答えないまま
-/// 消えたならそれも、下流側が保留していた横断リクエストもすべて閉じる。
+/// The upstream is gone. Answer the unanswered requests with errors, then close the connection
+/// (spec 8.2 item 7, design 4.2 "disappearance of the upstream"). If it disappeared without
+/// answering `initialize`, that is closed too, as are all the cross-workspace requests the
+/// downstream side was holding.
 ///
-/// 死を表す通知は送らない。プロセスの消失は本プロトコルの値ではなく、
-/// この後の EOF が伝える。ループを抜ける前に書き切る必要がある。
+/// No notification representing death is sent. The disappearance of the process is not a
+/// value of this protocol; the EOF that follows conveys it. Everything must be written out
+/// before leaving the loop.
 fn close_pending(upstream_side: &mut UpstreamSide, gate: &mut Gate) -> Vec<Out> {
     let mut outs = Vec::new();
     if let Some(response) = upstream_side.fail_pending_initialize() {
@@ -208,42 +214,46 @@ fn close_pending(upstream_side: &mut UpstreamSide, gate: &mut Gate) -> Vec<Out> 
     outs
 }
 
-/// 上流側: 言語サーバーを代行して本プロトコルを提供する (v0.1-design.md 4.2)。
+/// The upstream side: stands in for the language server and provides this protocol
+/// (v0.1-design.md 4.2).
 ///
-/// アダプタの有無によらず存在する。アダプタなしでは両軸 `unknown` を
-/// 報告する (仕様 8.2 の 3)。境界の上の状態 ([`Self::boundary_state`]) を
-/// 下流側に渡す役目も持つ。
+/// Exists regardless of whether there is an adapter. Without an adapter it reports `unknown`
+/// on both axes (spec 8.2 item 3). It also has the role of handing the state on the boundary
+/// ([`Self::boundary_state`]) to the downstream side.
 struct UpstreamSide {
     tracker: StateTracker,
-    /// クライアントが仕様 5.2 の宣言をしたか。通知を送る条件。
+    /// Whether the client made the declaration of spec 5.2. The condition for sending
+    /// notifications.
     client_declared: bool,
-    /// クライアントが `window.workDoneProgress` を自分で宣言していたか。
-    /// していなければ `window/workDoneProgress/create` は上流側が答える。
+    /// Whether the client declared `window.workDoneProgress` itself.
+    /// If not, the upstream side answers `window/workDoneProgress/create`.
     client_declared_progress: bool,
     initialize_id: Option<RequestId>,
-    /// `InitializeResult` を転送済みか。写像の選択もこの時点で行うので、
-    /// これより前に状態が動くことはない (LSP はサーバー発の通知を
-    /// `InitializeResult` の後に限っている)。
+    /// Whether `InitializeResult` has been forwarded. The mapping is also selected at that
+    /// point, so the state never moves before this (LSP limits server-initiated notifications
+    /// to after `InitializeResult`).
     handshake_done: bool,
-    /// 上流自身が本プロトコルを宣言している (`InitializeResult` に
-    /// `serverStateProvider` がある)。以後、上流側は恒等写像になる: 宣言を
-    /// 足さず、リクエストを転送し、自前の通知を出さない。同一接続に送信者の
-    /// 異なる 2 系統を流さないため (仕様 8.2 の 6、ADR 0009 決定 D-1)。
+    /// The upstream itself declares this protocol (`InitializeResult` has
+    /// `serverStateProvider`). From then on the upstream side becomes the identity mapping: it
+    /// adds no declaration, forwards the requests, and emits no notifications of its own. This
+    /// is so that two streams from different senders do not flow on the same connection
+    /// (spec 8.2 item 6, ADR 0009 decision D-1).
     identity: bool,
-    /// 恒等写像のときの境界の状態。上流の `serverStateChanged` と、lsp-det
-    /// 自身の問い合わせの応答で更新する。最初の応答が届くまでは
-    /// 「initialize 直後」の `initializing` (下流側は待つ)。
+    /// The state on the boundary under the identity mapping. Updated from the upstream's
+    /// `serverStateChanged` and from the response to lsp-det's own query. Until the first
+    /// response arrives, it is the `initializing` of "right after initialize" (the downstream
+    /// side waits).
     identity_state: ServerState,
-    /// 恒等写像になったが、初期状態の問い合わせをまだ送っていない。送るのは
-    /// クライアントの `initialized` を上流へ流した後 (LSP はサーバーが
-    /// `initialized` まで他のリクエストを受けないことを許し、rust-analyzer は
-    /// 規約違反として終了する)。
+    /// Became the identity mapping, but the query for the initial state has not been sent yet.
+    /// It is sent after the client's `initialized` has been forwarded to the upstream (LSP
+    /// allows a server to accept no other requests until `initialized`, and rust-analyzer
+    /// exits, treating it as a protocol violation).
     identity_query_pending: bool,
-    /// `workspace/didChangeWatchedFiles` の代行 (ADR 0015 決定 A)。クライアントが
-    /// capability を宣言せず、git 管理下のルートがあるときだけ `Some`。
-    /// クライアントが自分で通知を送ったら `None` に戻す。
+    /// The stand-in for `workspace/didChangeWatchedFiles` (ADR 0015 decision A). `Some` only
+    /// when the client does not declare the capability and there is a git-managed root.
+    /// Reverts to `None` once the client sends the notification itself.
     watched_files: Option<WatchedFiles>,
-    /// 開いている文書 (重複した `didOpen` の書き換え。ADR 0015 決定 B)。
+    /// The open documents (rewriting of duplicate `didOpen`. ADR 0015 decision B).
     documents: OpenDocuments,
 }
 
@@ -263,7 +273,7 @@ impl UpstreamSide {
         }
     }
 
-    /// 境界の上の状態。下流側はこれだけを見る (設計 4.1)。
+    /// The state on the boundary. The downstream side looks only at this (design 4.1).
     fn boundary_state(&self) -> &ServerState {
         if self.identity {
             &self.identity_state
@@ -302,7 +312,8 @@ impl UpstreamSide {
                     ClientKind::Other
                 }
                 Some("workspace/didChangeWatchedFiles") => {
-                    // クライアントが自分で送る。以後は代行しない (ADR 0015 決定 A)。
+                    // The client sends it itself. No longer stand in from now on
+                    // (ADR 0015 decision A).
                     self.watched_files = None;
                     let predicted = if self.identity {
                         None
@@ -322,10 +333,11 @@ impl UpstreamSide {
         match kind {
             ClientKind::ServerStateRequest(id) => {
                 if self.identity {
-                    // 上流が本プロトコルを話す。上流の仕事 (仕様 8.2 の 6)。
+                    // The upstream speaks this protocol. It is the upstream's job
+                    // (spec 8.2 item 6).
                     vec![Out::ToUpstream(msg)]
                 } else {
-                    // 仕様 5.2: このリクエストは宣言の有無によらず応答する。
+                    // Spec 5.2: this request is answered regardless of the declaration.
                     vec![Out::ToClient(self.state_response(&id))]
                 }
             }
@@ -333,15 +345,16 @@ impl UpstreamSide {
                 self.initialize_id = id;
                 self.tracker.remember_initialize(&msg.body);
                 if !initialize::client_declares_watched_files(&msg.body) {
-                    // 宣言しないクライアントにだけ代行する (ADR 0015 決定 A)。
+                    // Stand in only for a client that does not declare it
+                    // (ADR 0015 decision A).
                     self.watched_files = WatchedFiles::new(&initialize::workspace_roots(&msg.body));
                 }
                 self.client_declared = initialize::client_declares_server_state(&msg.body);
                 self.client_declared_progress =
                     initialize::client_declares_work_done_progress(&msg.body);
                 gate.set_client_decides(self.client_declared);
-                // 上流が誰かはまだ分からない。既知の写像ぶんと、本プロトコルの
-                // 購読宣言を全部注入する。
+                // Who the upstream is is not known yet. Inject all of them: the capabilities
+                // for the known mappings, and the subscription declaration for this protocol.
                 let mut paths: Vec<&str> = adapter::CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS.to_vec();
                 paths.push(SERVER_STATE_CLIENT_CAPABILITY);
                 let injected = initialize::inject_client_capabilities(&msg.body, &paths);
@@ -351,8 +364,8 @@ impl UpstreamSide {
                 })]
             }
             ClientKind::ShutdownRequest => {
-                // 保留分すべてにエラーを応答してから shutdown を流す
-                // (仕様 9 章 6 項)。応答を返さないリクエストを作らない。
+                // Answer every held request with an error, then forward the shutdown
+                // (spec chapter 9 item 6). Never create a request that gets no response.
                 let mut outs: Vec<Out> = gate
                     .drain(DrainReason::Shutdown)
                     .into_iter()
@@ -362,12 +375,13 @@ impl UpstreamSide {
                 outs
             }
             ClientKind::CancelRequest(id) => match gate.on_cancel(&id) {
-                // 保留中だった。キューから外して応答し、上流には送らない。
+                // It was held. Remove it from the queue and answer; do not send it upstream.
                 Some(response) => vec![Out::ToClient(response)],
                 None => vec![Out::ToUpstream(msg)],
             },
             ClientKind::Request { id, method } => {
-                // 横断リクエストの前に、ディスク上の変更を上流に知らせる (代行)。
+                // Before a cross-workspace request, tell the upstream about the changes on
+                // disk (stand-in).
                 let mut outs = Vec::new();
                 if gate::is_cross_workspace(&method)
                     && let Some(watched) = self.watched_files.as_mut()
@@ -391,7 +405,8 @@ impl UpstreamSide {
                 outs
             }
             ClientKind::Notification(predicted) => {
-                // 通知は先に上流へ流し、先読みした変化はその後に伝える。
+                // The notification is forwarded to the upstream first; the predicted change
+                // is conveyed after it.
                 let mut outs = vec![Out::ToUpstream(msg)];
                 if let Some(state) = predicted {
                     outs.extend(releases(gate, &state));
@@ -406,13 +421,14 @@ impl UpstreamSide {
         }
     }
 
-    /// 上流のメッセージを観測し、出力列を返す。
+    /// Observe a message from the upstream and return the sequence of outputs.
     fn on_upstream(&mut self, msg: RawMessage, gate: &mut Gate) -> Vec<Out> {
-        // handshake 後、恒等写像でなく progress の肩代わりも要らず、上流が
-        // 既知の写像で観測されているなら、覗き見はその写像のために要る。
-        // 写像がまだないときも省けない: 名乗りは `initialize` 応答の後に届く
-        // ことがある (typescript-language-server の `$/typescriptVersion`。
-        // ADR 0011 決定 A-3)。省けるのは、名乗りを読んで既知でないと分かった後。
+        // After the handshake, when this is not the identity mapping, no stand-in for
+        // progress is needed either, and the upstream is observed under a known mapping, the
+        // peek is needed for that mapping. It cannot be skipped while there is no mapping yet
+        // either: what the server calls itself can arrive after the `initialize` response
+        // (typescript-language-server's `$/typescriptVersion`. ADR 0011 decision A-3). It can
+        // be skipped only after reading what the server calls itself and finding it unknown.
         if self.handshake_done
             && !self.identity
             && self.tracker.upstream_is_unmapped()
@@ -421,8 +437,8 @@ impl UpstreamSide {
             return vec![Out::ToClient(msg)];
         }
 
-        // 覗き見は 1 回だけ。上流のメッセージは大きくなりうる (diagnostics
-        // 等) ので、判定ごとにパースし直すと透過経路の負荷が倍になる。
+        // Peek only once. Upstream messages can be large (diagnostics etc.), so re-parsing
+        // for each judgment would double the load on the transparent path.
         let Ok(view) = peek::peek(&msg.body) else {
             return vec![Out::ToClient(msg)];
         };
@@ -431,9 +447,10 @@ impl UpstreamSide {
             && view.method() == Some(WORK_DONE_PROGRESS_CREATE)
             && !self.client_declared_progress
         {
-            // 注入した宣言に由来するリクエスト。クライアントは扱えないので
-            // 上流側が成功応答する。id は上流のものをそのまま返す。
-            let id = view.id.clone().expect("is_request は id を持つ");
+            // A request that stems from the injected declaration. The client cannot handle
+            // it, so the upstream side answers with success. The id is returned as the
+            // upstream's, unchanged.
+            let id = view.id.clone().expect("is_request has an id");
             return vec![Out::ToUpstream(null_response(&id))];
         }
 
@@ -466,19 +483,20 @@ impl UpstreamSide {
         outs
     }
 
-    /// 上流の `InitializeResult`。写像を選び、宣言を足すか恒等写像に切り替える。
+    /// The upstream's `InitializeResult`. Select the mapping, and either add the declaration
+    /// or switch to the identity mapping.
     fn on_initialize_result(&mut self, msg: RawMessage) -> Vec<Out> {
         use initialize::InitializeResultAction::*;
-        // 上流が名乗った名前で写像を選ぶ。宣言する保証はその写像に聞く。
+        // Select the mapping by the name the upstream calls itself. Ask that mapping for the
+        // guarantees to declare.
         self.tracker
             .select_mapping(initialize::server_info(&msg.body).as_ref());
         let provider = self.tracker.provider();
         match initialize::declare_server_state_provider(&msg.body, &provider) {
             NotASuccess => {
-                // エラー応答。handshake は完了しておらず、クライアントは
-                // initialize を再試行しうる。この id には応答済みなので、
-                // 宙に浮いたリクエストではなくなる (上流が消えても二重に
-                // 応答しない)。
+                // An error response. The handshake is not complete, and the client may retry
+                // initialize. This id has been answered, so it is no longer a request left
+                // hanging (no double response even if the upstream disappears).
                 self.initialize_id = None;
                 vec![Out::ToClient(msg)]
             }
@@ -489,15 +507,15 @@ impl UpstreamSide {
                     "lsp-det: the upstream declares serverStateProvider itself; \
                      the upstream side becomes an identity mapping"
                 );
-                // 上流の通知は変化のときにしか来ない。初期状態は自分で聞くが、
-                // クライアントの `initialized` を流してから。
+                // The upstream's notifications come only on a change. Ask for the initial
+                // state ourselves, but after forwarding the client's `initialized`.
                 self.identity_query_pending = true;
                 vec![Out::ToClient(msg)]
             }
             Unrewritable => {
-                // capabilities / experimental がオブジェクトでない。宣言
-                // できないまま上流側として振る舞うことになるので、黙って
-                // 進まず理由を残す。
+                // capabilities / experimental is not an object. We would go on acting as the
+                // upstream side without being able to declare, so leave the reason instead
+                // of proceeding silently.
                 self.handshake_done = true;
                 eprintln!(
                     "lsp-det: cannot declare serverStateProvider; \
@@ -512,9 +530,10 @@ impl UpstreamSide {
         }
     }
 
-    /// 恒等写像のとき。上流の状態は上流の通知と自分の問い合わせから読む。
-    /// 通知はクライアントが宣言していれば流し、していなければ下流側だけが読む
-    /// (仕様 5.2)。自分の問い合わせの応答はクライアントに見せない。
+    /// Under the identity mapping. The upstream's state is read from the upstream's
+    /// notifications and from our own query. Notifications are forwarded if the client
+    /// declared, and otherwise only the downstream side reads them (spec 5.2). The response to
+    /// our own query is not shown to the client.
     fn on_upstream_under_identity(
         &mut self,
         msg: RawMessage,
@@ -526,8 +545,8 @@ impl UpstreamSide {
             match parse_state_response(&msg.body) {
                 Some(state) => return self.adopt_identity_state(state, gate),
                 None => {
-                    // 準拠を名乗る上流が初期状態に答えなかった。待つ根拠が
-                    // ないので、観測できない状態に落とす。
+                    // An upstream that claims conformance did not answer the initial state.
+                    // There is no basis for waiting, so fall to the unobservable state.
                     eprintln!(
                         "lsp-det: the upstream did not answer {}; treating its state as unknown",
                         state::SERVER_STATE_METHOD
@@ -538,8 +557,8 @@ impl UpstreamSide {
         }
 
         if is_state_changed {
-            // 先に状態を読み、流す必要があるときだけ元のメッセージを渡す
-            // (ボディを複製しない)。
+            // Read the state first, and hand over the original message only when it needs
+            // to be forwarded (do not duplicate the body).
             let state = parse_state_notification(&msg.body);
             let mut outs = Vec::new();
             if self.client_declared {
@@ -554,16 +573,17 @@ impl UpstreamSide {
         vec![Out::ToClient(msg)]
     }
 
-    /// 恒等写像のときの境界の状態を更新し、下流側に再評価させる。
+    /// Update the state on the boundary under the identity mapping and have the downstream
+    /// side re-evaluate.
     fn adopt_identity_state(&mut self, state: ServerState, gate: &mut Gate) -> Vec<Out> {
         self.tracker.log_boundary(&state);
         self.identity_state = state.clone();
         releases(gate, &state)
     }
 
-    /// handshake が終わる前に上流が消えた。宙に浮いた `initialize` を
-    /// エラーで閉じる。これをしないとクライアントは応答を永久に待つ。
-    /// handshake 後なら何も返さない (EOF が伝える)。
+    /// The upstream disappeared before the handshake finished. Close the hanging `initialize`
+    /// with an error. Without this the client waits for the response forever.
+    /// After the handshake, return nothing (the EOF conveys it).
     fn fail_pending_initialize(&mut self) -> Option<RawMessage> {
         if self.handshake_done {
             return None;
@@ -571,8 +591,8 @@ impl UpstreamSide {
         self.initialize_id.take().map(|id| initialize_failed(&id))
     }
 
-    /// 仕様 4.2 の通知を作る。宣言していないクライアントには送らない
-    /// (仕様 5.2)。恒等写像中は上流が送信者なので送らない。
+    /// Build the notification of spec 4.2. Not sent to a client that did not declare
+    /// (spec 5.2). Not sent under the identity mapping, since the upstream is the sender.
     fn notify(&self, state: &ServerState) -> Option<RawMessage> {
         if !self.client_declared || self.identity {
             return None;
@@ -581,19 +601,20 @@ impl UpstreamSide {
     }
 
     fn state_response(&self, id: &RequestId) -> RawMessage {
-        // 宣言の有無によらず応答する (仕様 5.2)。
+        // Answered regardless of the declaration (spec 5.2).
         RawMessage {
             body: serde_json::to_vec(&serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": self.tracker.state(),
             }))
-            .expect("ServerState は常にシリアライズできる"),
+            .expect("ServerState can always be serialized"),
         }
     }
 }
 
-/// 状態変化で下流側が解放・拒否した保留分を出力列にする。
+/// Turn the held requests the downstream side released or rejected on a state change into
+/// the sequence of outputs.
 fn releases(gate: &mut Gate, state: &ServerState) -> Vec<Out> {
     gate.on_state(state)
         .into_iter()
@@ -604,7 +625,7 @@ fn releases(gate: &mut Gate, state: &ServerState) -> Vec<Out> {
         .collect()
 }
 
-/// 恒等写像のとき、上流の初期状態を問い合わせるリクエスト。
+/// The request that queries the upstream's initial state under the identity mapping.
 fn self_state_request() -> RawMessage {
     RawMessage {
         body: serde_json::to_vec(&serde_json::json!({
@@ -612,7 +633,7 @@ fn self_state_request() -> RawMessage {
             "id": SELF_STATE_REQUEST_ID,
             "method": state::SERVER_STATE_METHOD,
         }))
-        .expect("固定の構造なので常にシリアライズできる"),
+        .expect("a fixed structure, so it can always be serialized"),
     }
 }
 
@@ -636,7 +657,7 @@ fn parse_state_notification(body: &[u8]) -> Option<ServerState> {
         .map(|e| e.params)
 }
 
-/// 上流発リクエストへの成功応答 (`result: null`)。
+/// A success response (`result: null`) to an upstream-initiated request.
 fn null_response(id: &RequestId) -> RawMessage {
     RawMessage {
         body: serde_json::to_vec(&serde_json::json!({
@@ -644,7 +665,7 @@ fn null_response(id: &RequestId) -> RawMessage {
             "id": id,
             "result": null,
         }))
-        .expect("固定の構造なので常にシリアライズできる"),
+        .expect("a fixed structure, so it can always be serialized"),
     }
 }
 
@@ -655,14 +676,14 @@ fn changed_notification(state: &ServerState) -> RawMessage {
             "method": state::SERVER_STATE_CHANGED_METHOD,
             "params": state,
         }))
-        .expect("ServerState は常にシリアライズできる"),
+        .expect("ServerState can always be serialized"),
     }
 }
 
-/// 上流が `initialize` に答えないまま消えたときの応答。
+/// The response when the upstream disappeared without answering `initialize`.
 ///
-/// 沈黙させるとクライアントは応答を永久に待つ。応答を返さないリクエストを
-/// 作らない (設計 4.2「上流の消失」)。
+/// Staying silent makes the client wait for the response forever. Never create a request that
+/// gets no response (design 4.2 "disappearance of the upstream").
 fn initialize_failed(id: &RequestId) -> RawMessage {
     RawMessage {
         body: serde_json::to_vec(&serde_json::json!({
@@ -673,15 +694,15 @@ fn initialize_failed(id: &RequestId) -> RawMessage {
                 "message": "lsp-det: the upstream language server exited before answering initialize",
             },
         }))
-        .expect("固定の構造なので常にシリアライズできる"),
+        .expect("a fixed structure, so it can always be serialized"),
     }
 }
 
-/// 上流の状態追跡と、その遷移の記録。
+/// Tracking of the upstream's state, and the record of its transitions.
 ///
-/// 遷移の時刻と直前の状態の滞在時間を stderr に出す。ゲート導入後は
-/// 「どの状態にどれだけ留まったか」が保留時間そのものになるため、
-/// 待たされたときに原因を追える唯一の記録になる。
+/// Prints the time of each transition and how long the previous state lasted to stderr. Once
+/// the gate is in place, "how long it stayed in which state" is the hold time itself, so this
+/// is the only record for tracing the cause when a request was made to wait.
 struct StateTracker {
     tracker: Tracker,
     started: Instant,
@@ -696,14 +717,15 @@ impl StateTracker {
             started: now,
             entered_state: now,
         };
-        // 開始状態を最初の 1 行に出す。これがないと滞在時間の系列が
-        // 起点を失い、フラップの実測に使えない。
+        // Print the starting state as the first line. Without it the series of durations
+        // loses its origin and cannot be used to measure flaps.
         let initial = tracker.tracker.state().clone();
         tracker.log(&initial);
         tracker
     }
 
-    /// 上流が名乗った。写像が選べたら開始状態をログして返す。
+    /// The upstream called itself a name. If a mapping could be selected, log the starting
+    /// state and return it.
     fn select_mapping(&mut self, info: Option<&initialize::ServerInfo>) -> Option<ServerState> {
         match self.tracker.select_mapping(info) {
             Some(state) => {
@@ -712,7 +734,8 @@ impl StateTracker {
                 Some(state)
             }
             None if info.is_none() && self.tracker.observes_upstream() => {
-                // serverInfo を返さない上流 (pyright)。起動ログで選んだ写像を保つ。
+                // An upstream that returns no serverInfo (pyright). Keep the mapping selected
+                // from its startup log.
                 eprintln!(
                     "lsp-det: the upstream InitializeResult has no serverInfo; \
                      keeping the mapping selected from its startup log"
@@ -741,25 +764,26 @@ impl StateTracker {
         self.tracker.upstream_is_unmapped()
     }
 
-    /// クライアントの `initialize` を写像に渡す (`initializationOptions`)。
+    /// Hand the client's `initialize` to the mapping (`initializationOptions`).
     fn remember_initialize(&mut self, body: &[u8]) {
         self.tracker.remember_initialize(body);
     }
 
-    /// クライアントの通知から写像が先読みした変化をログして返す。
+    /// Log and return the change the mapping predicted from the client's notification.
     fn observe_client(&mut self, view: &peek::MessageView, body: &[u8]) -> Option<ServerState> {
         let state = self.tracker.observe_client(view, body)?;
         self.log(&state);
         Some(state)
     }
 
-    /// 恒等写像のとき、上流から読んだ境界の状態をログする。
+    /// Under the identity mapping, log the state on the boundary read from the upstream.
     fn log_boundary(&mut self, state: &ServerState) {
         self.log(state);
     }
 
-    /// 状態が変わったらログして新しい状態を返す。写像がこの通知で選ばれた
-    /// (上流が起動ログで名乗った) ときはその旨も残す。
+    /// If the state changed, log it and return the new state. When the mapping was selected
+    /// by this notification (the upstream called itself a name in its startup log), record
+    /// that too.
     fn observe(&mut self, view: &peek::MessageView, body: &[u8]) -> Option<ServerState> {
         let had_mapping = self.tracker.observes_upstream();
         let changed = self.tracker.observe_upstream(view, body);
@@ -858,8 +882,9 @@ mod tests {
     use crate::framing::write_message;
     use std::time::Duration;
 
-    /// `cat` を上流にすると client -> proxy -> cat -> proxy -> client と
-    /// 往復するため、「プロキシが上流へ書いたバイト列」をそのまま観測できる。
+    /// With `cat` as the upstream, a message makes the round trip client -> proxy -> cat ->
+    /// proxy -> client, so "the bytes the proxy wrote to the upstream" can be observed as they
+    /// are.
     fn spawn_with_cat() -> (
         io::PipeWriter,
         BufReader<io::PipeReader>,
@@ -884,8 +909,8 @@ mod tests {
 
     #[test]
     fn injects_the_capabilities_of_every_known_mapping_before_knowing_the_upstream() {
-        // 設計 4.2: serverInfo は initialize の応答で分かるので、注入は
-        // 上流が誰か分かる前に、既知の写像ぶんを無条件に行う。
+        // Design 4.2: serverInfo becomes known in the initialize response, so the injection
+        // is done unconditionally, for the known mappings, before knowing who the upstream is.
         let (mut client_in, mut client_out, handle) = spawn_with_cat();
 
         send(
@@ -910,7 +935,8 @@ mod tests {
 
     #[test]
     fn forwards_observed_upstream_messages_byte_for_byte() {
-        // 状態を追跡しても、クライアントへ届くのは原文のまま (設計 4.4)。
+        // Even while the state is tracked, what reaches the client is the original text
+        // (design 4.4).
         let (mut client_in, mut client_out, handle) = spawn_with_cat();
 
         let status = r#"{"jsonrpc":"2.0","method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"message":null}}"#;
@@ -925,7 +951,7 @@ mod tests {
 
     #[test]
     fn only_rewrites_the_initialize_request() {
-        // 同じ method でも通知なら書き換えない。
+        // Even with the same method, a notification is not rewritten.
         let (mut client_in, mut client_out, handle) = spawn_with_cat();
 
         let notification =
@@ -941,16 +967,16 @@ mod tests {
 
     #[test]
     fn round_trips_a_message_through_a_real_upstream_process() {
-        // upstream に `cat` を使う: client -> proxy -> cat(echo) -> proxy -> client
-        // というラウンドトリップで、バイト列が非破壊で往復することを検証する。
+        // Use `cat` as the upstream: the round trip client -> proxy -> cat(echo) -> proxy ->
+        // client verifies that the bytes make the round trip unmodified.
         let (client_out_reader, client_out_writer) = io::pipe().unwrap();
         let (client_in_reader, mut client_in_writer) = io::pipe().unwrap();
 
         let handle =
             thread::spawn(move || run(client_in_reader, client_out_writer, "cat", &[]).unwrap());
 
-        // initialize は capability 注入で書き換わる (設計 4.2) ので、それ以外の
-        // リクエストで測る。
+        // initialize is rewritten by the capability injection (design 4.2), so measure with
+        // a different request.
         let sent = RawMessage {
             body: br#"{"jsonrpc":"2.0","id":1,"method":"textDocument/hover","params":{}}"#.to_vec(),
         };
@@ -960,7 +986,7 @@ mod tests {
         let received = framing::read_message(&mut reader).unwrap().unwrap();
         assert_eq!(received.body, sent.body);
 
-        drop(client_in_writer); // クライアント切断 -> プロキシは終了するはず
+        drop(client_in_writer); // client disconnects -> the proxy should exit
         let code = handle.join().unwrap();
         assert_eq!(code, 0);
     }
@@ -980,12 +1006,13 @@ mod tests {
             .unwrap()
         });
 
-        // client_in_writer を drop せず保持したまま upstream が自然終了するのを待つ。
+        // Wait for the upstream to exit on its own while holding client_in_writer without
+        // dropping it.
         let code = handle.join().unwrap();
         assert_eq!(code, 7);
         drop(client_in_writer);
 
-        // client_out はプロキシの終了とともに閉じられ、読み取り側は EOF になる。
+        // client_out is closed when the proxy exits, and the reading side sees EOF.
         let mut buf = Vec::new();
         let mut reader = client_out_reader;
         reader.read_to_end(&mut buf).unwrap();
@@ -996,7 +1023,7 @@ mod tests {
     fn client_disconnect_kills_upstream_and_exits_cleanly() {
         let (client_out_reader, client_out_writer) = io::pipe().unwrap();
         let (client_in_reader, client_in_writer) = io::pipe().unwrap();
-        drop(client_out_reader); // クライアント側は読まない (関心の対象外)
+        drop(client_out_reader); // the client side does not read (not of interest)
 
         let handle = thread::spawn(move || {
             run(
@@ -1008,10 +1035,10 @@ mod tests {
             .unwrap()
         });
 
-        drop(client_in_writer); // クライアントが接続を切る
+        drop(client_in_writer); // the client cuts the connection
 
-        // プロキシは上流(sleep 30)を kill して速やかに終了するはず。
-        // 30秒待たされたら kill が効いていない。
+        // The proxy should kill the upstream (sleep 30) and exit promptly.
+        // If we are made to wait 30 seconds, the kill did not take effect.
         let start = std::time::Instant::now();
         let code = handle.join().unwrap();
         assert!(

@@ -1,10 +1,11 @@
-//! `ServerState` の保持と遷移 (v0.1-design.md 4.2、ADR 0008)。
+//! Holding `ServerState` and its transitions (v0.1-design.md 4.2, ADR 0008).
 //!
-//! 写像 (上流メッセージの解釈) と状態の保持を分ける。写像は上流が
-//! 名乗るまで選べないので、それまでは両軸 `unknown`。名乗りは
-//! `InitializeResult.serverInfo` か、それを返さない上流では起動時の
-//! `window/logMessage` (ADR 0011 決定 A)。既知の名前なら写像に切り替え、
-//! そうでなければ `unknown` のまま正直に報告する (仕様 8.2 の 3)。
+//! The mapping (the interpretation of upstream messages) and the holding of the state are
+//! separated. The mapping cannot be selected until the upstream calls itself a name, so until
+//! then both axes are `unknown`. What the server calls itself comes from
+//! `InitializeResult.serverInfo`, or, for an upstream that does not return it, from the
+//! `window/logMessage` at startup (ADR 0011 decision A). If the name is known, switch to the
+//! mapping; otherwise report `unknown` honestly, as it is (spec 8.2 item 3).
 
 use crate::adapter::{self, Mapping};
 use crate::initialize::ServerInfo;
@@ -16,13 +17,14 @@ use crate::state::{ServerState, ServerStateProvider};
 pub struct Tracker {
     state: ServerState,
     adapter: Option<Box<dyn Mapping>>,
-    /// 写像を選ぶ根拠になった名乗り。
+    /// What the server called itself, which was the basis for selecting the mapping.
     identity: Option<ServerInfo>,
-    /// 上流が `serverInfo` で名乗ったが既知の写像がなかった。以後、上流の
-    /// 通知から名乗りを探す必要はない。
+    /// The upstream called itself a name in `serverInfo`, but there was no known mapping. From
+    /// then on there is no need to look for the name in the upstream's notifications.
     named_but_unknown: bool,
-    /// クライアントの `initialize` の `initializationOptions`。写像は名乗りの
-    /// 後に選ばれるので、それまで保持して選んだ写像に渡す。
+    /// The `initializationOptions` of the client's `initialize`. The mapping is selected after
+    /// the upstream calls itself a name, so hold it until then and hand it to the selected
+    /// mapping.
     initialization_options: Option<serde_json::Value>,
 }
 
@@ -33,7 +35,7 @@ impl Default for Tracker {
 }
 
 impl Tracker {
-    /// 上流が名乗るまでは写像がなく、両軸 `unknown`。
+    /// Until the upstream calls itself a name there is no mapping, and both axes are `unknown`.
     pub fn new() -> Self {
         Tracker {
             state: ServerState::unobserved(),
@@ -44,7 +46,7 @@ impl Tracker {
         }
     }
 
-    /// クライアントの `initialize` を覚える (`initializationOptions` を写像に渡す)。
+    /// Remember the client's `initialize` (hand `initializationOptions` to the mapping).
     pub fn remember_initialize(&mut self, body: &[u8]) {
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
             return;
@@ -59,32 +61,35 @@ impl Tracker {
         self.initialization_options = Some(options);
     }
 
-    /// クライアント→上流方向のメッセージを観測して状態を更新する。
-    /// 通知を要する変化があった場合のみ新しい状態を返す。
+    /// Observe a message in the client-to-upstream direction and update the state.
+    /// Returns the new state only when there was a change that requires a notification.
     pub fn observe_client(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
         let adapter = self.adapter.as_mut()?;
         let next = adapter.observe_client(view, body)?;
         self.apply(next)
     }
 
-    /// 上流は名乗ったが既知の写像がない (両軸 `unknown` で確定)。透過経路は
-    /// 覗き見を省いてよい。名乗りがまだない間は省けない (名乗りは
-    /// `initialize` 応答の後に届くことがある)。
+    /// The upstream called itself a name, but there is no known mapping (settled as `unknown`
+    /// on both axes). The transparent path may skip the peek. It cannot be skipped while there
+    /// is no name yet (what the server calls itself can arrive after the `initialize`
+    /// response).
     pub fn upstream_is_unmapped(&self) -> bool {
         self.adapter.is_none() && self.named_but_unknown
     }
 
-    /// 写像を選ぶ根拠になった名乗り (`serverInfo` または起動ログ)。
+    /// What the server called itself, which was the basis for selecting the mapping
+    /// (`serverInfo` or the startup log).
     pub fn identity(&self) -> Option<&ServerInfo> {
         self.identity.as_ref()
     }
 
-    /// 上流が `InitializeResult` で名乗った。既知の名前なら写像を選び、
-    /// その開始状態 (「initialize 直後」の `initializing`) に移る。
-    /// 名乗りがない・既知でない場合は何もしない。
+    /// The upstream called itself a name in `InitializeResult`. If the name is known, select
+    /// the mapping and move to its starting state (the `initializing` of "right after
+    /// initialize"). If there is no name, or it is not known, do nothing.
     ///
-    /// 開始状態・保証は写像の値に聞く。「写像がある」ことを rust-analyzer と
-    /// 同一視すると、M4 で gopls を足したときに match を書き直すことになる。
+    /// The starting state and the guarantees are asked of the mapping's values. Equating
+    /// "there is a mapping" with rust-analyzer would mean rewriting the match when gopls is
+    /// added in M4.
     pub fn select_mapping(&mut self, server_info: Option<&ServerInfo>) -> Option<ServerState> {
         let server_info = server_info?;
         if self.adapter.is_none() && adapter::select(&server_info.name, None).is_none() {
@@ -93,10 +98,11 @@ impl Tracker {
         if let Some(current) = &self.identity
             && current.name.eq_ignore_ascii_case(&server_info.name)
         {
-            // 起動ログで既に同じ写像を選んでいる (basedpyright は両方で名乗る)。
-            // 選び直すと起動ログの後に読んだ観測 ("Starting service instance"
-            // の数) が消えるので、写像はそのまま、新しい名乗りを写像に知らせる
-            // (保証の根拠にする版をどう更新するかは写像が決める)。
+            // The same mapping has already been selected from the startup log (basedpyright
+            // calls itself a name in both). Reselecting would lose the observations read after
+            // the startup log (the count of "Starting service instance"), so keep the mapping
+            // and tell it the new name (how to update the version used as the basis for the
+            // guarantees is up to the mapping).
             if let Some(adapter) = self.adapter.as_mut() {
                 adapter.learn_identity(server_info);
             }
@@ -121,17 +127,17 @@ impl Tracker {
         &self.state
     }
 
-    /// 上流のメッセージから読み取るものがあるか (アダプタがあるか)。
-    /// なければ透過経路は覗き見を省ける。
+    /// Whether there is something to read from the upstream's messages (whether there is an
+    /// adapter). If not, the transparent path can skip the peek.
     pub fn observes_upstream(&self) -> bool {
         self.adapter.is_some()
     }
 
-    /// `InitializeResult` に宣言する保証 (仕様 5 章)。
-    /// 写像がなければ保証なしの宣言 (`{}`)。
+    /// The guarantees to declare in `InitializeResult` (spec chapter 5).
+    /// Without a mapping, a declaration of no guarantees (`{}`).
     pub fn provider(&self) -> ServerStateProvider {
-        // 保証は写像に聞く (仕様 8.2 の 5)。どの名乗りのどの版を根拠にするかは
-        // 写像が決める (`Mapping::learn_identity`)。
+        // The guarantees are asked of the mapping (spec 8.2 item 5). Which version of which
+        // name is used as the basis is up to the mapping (`Mapping::learn_identity`).
         self.adapter
             .as_ref()
             .map_or(ServerStateProvider::notifications_only(), |adapter| {
@@ -139,19 +145,21 @@ impl Tracker {
             })
     }
 
-    /// 上流→クライアント方向のメッセージを観測して状態を更新する。
-    /// 通知を要する変化 (仕様 4.2) があった場合のみ新しい状態を返す。
+    /// Observe a message in the upstream-to-client direction and update the state.
+    /// Returns the new state only when there was a change that requires a notification
+    /// (spec 4.2).
     ///
-    /// アダプタがなければ何も読まない。rust-analyzer の語彙を知っているのは
-    /// アダプタだけで、なしのときに勝手に読むと他のサーバーの同名通知を
-    /// 誤読する。
+    /// Without an adapter, nothing is read. Only the adapter knows rust-analyzer's vocabulary,
+    /// and reading on our own without one would misread a same-named notification from another
+    /// server.
     pub fn observe_upstream(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
         let Some(adapter) = self.adapter.as_mut() else {
-            // 写像がまだない。上流が起動時のログで名乗っていれば、それで選ぶ
-            // (ADR 0011 決定 A-2)。`serverInfo` が後から来ればそれで選び直す。
-            // 選択は開始状態を置くだけで、通知する変化ではない。`serverInfo` で
-            // 選んだときと同じ。起動ログは `initialize` 応答より先に届き、LSP は
-            // 応答前のサーバー→クライアント通知を (logMessage 等を除き) 禁じる。
+            // There is no mapping yet. If the upstream called itself a name in its startup
+            // log, select by that (ADR 0011 decision A-2). If `serverInfo` comes later,
+            // reselect by it. The selection only places the starting state and is not a change
+            // to notify. The same as when selected by `serverInfo`. The startup log arrives
+            // before the `initialize` response, and LSP forbids server-to-client notifications
+            // (except logMessage etc.) before the response.
             let identity = adapter::identity_from_notification(view, body)?;
             self.adopt(identity);
             return None;
@@ -160,8 +168,8 @@ impl Tracker {
         self.apply(next)
     }
 
-    /// 新しい状態を取り込み、通知を要する変化なら新しい状態を返す。
-    /// `message` だけの変化は通知しないが、状態としては更新する。
+    /// Take in the new state, and return it if the change requires a notification.
+    /// A change of `message` alone is not notified, but the state is updated.
     fn apply(&mut self, next: ServerState) -> Option<ServerState> {
         let notifiable = next.notifiable_change_from(&self.state);
         self.state = next;
@@ -186,7 +194,8 @@ mod tests {
         )
     }
 
-    /// 準拠テストを通した版 (adapter::TESTED_VERSIONS) を名乗る serverInfo。
+    /// A serverInfo that calls itself a version that passed the conformance tests
+    /// (adapter::TESTED_VERSIONS).
     fn info(name: &str) -> ServerInfo {
         ServerInfo {
             name: name.to_string(),
@@ -206,7 +215,7 @@ mod tests {
         tracker
     }
 
-    // --- 起動ログからの選択 (ADR 0011 決定 A) ----------------------------------
+    // --- Selection from the startup log (ADR 0011 decision A) ------------------------------
 
     const PYRIGHT_STARTUP: &str = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Pyright language server 1.1.412 starting"}}"#;
     const PYRIGHT_STARTED: &str = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Starting service instance \"pyfix\""}}"#;
@@ -214,14 +223,15 @@ mod tests {
 
     #[test]
     fn a_startup_log_selects_the_mapping_before_the_upstream_answers_initialize() {
-        // pyright は serverInfo を返さない。起動ログの名乗りで写像を選び、
-        // 開始状態 (initializing) に移る。選択は通知する変化ではない
-        // (serverInfo で選んだときと同じ。起動ログは initialize 応答より先に
-        // 届き、LSP は応答前のサーバー→クライアント通知を禁じる)。
+        // pyright returns no serverInfo. Select the mapping by the name in the startup log and
+        // move to the starting state (initializing). The selection is not a change to notify
+        // (the same as when selected by serverInfo. The startup log arrives before the
+        // initialize response, and LSP forbids server-to-client notifications before the
+        // response).
         let mut tracker = Tracker::new();
         assert!(
             observe(&mut tracker, PYRIGHT_STARTUP).is_none(),
-            "選択は通知しない"
+            "the selection does not notify"
         );
         let state = tracker.state();
         assert_eq!(state.readiness, Readiness::Initializing);
@@ -229,9 +239,10 @@ mod tests {
         assert!(tracker.observes_upstream());
         assert_eq!(tracker.identity().map(|i| i.name.as_str()), Some("pyright"));
 
-        // 写像はその後の通知を読む。
+        // The mapping reads the notifications that follow.
         observe(&mut tracker, PYRIGHT_STARTED);
-        let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("列挙の完了で ready");
+        let ready =
+            observe(&mut tracker, PYRIGHT_FOUND).expect("ready when the enumeration completes");
         assert_eq!(ready.readiness, Readiness::Ready);
     }
 
@@ -241,7 +252,7 @@ mod tests {
         observe(&mut tracker, PYRIGHT_STARTUP);
         assert!(
             tracker.select_mapping(None).is_none(),
-            "名乗りがなければ選び直さない"
+            "does not reselect without a name"
         );
         assert!(tracker.observes_upstream());
         assert_eq!(tracker.state().readiness, Readiness::Initializing);
@@ -249,8 +260,8 @@ mod tests {
 
     #[test]
     fn server_info_is_the_stronger_identity_and_reselects() {
-        // basedpyright は起動ログと serverInfo の両方を出す。serverInfo が来たら
-        // それで選び直す (同じ写像を指すので状態は開始状態のまま)。
+        // basedpyright emits both the startup log and serverInfo. When serverInfo comes,
+        // reselect by it (it points to the same mapping, so the state stays the starting state).
         let mut tracker = Tracker::new();
         let based = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"basedpyright language server 1.39.8 starting"}}"#;
         observe(&mut tracker, based);
@@ -259,17 +270,17 @@ mod tests {
                 name: "basedpyright".to_string(),
                 version: Some("1.39.8".to_string()),
             }))
-            .expect("serverInfo で選び直す");
+            .expect("reselects by serverInfo");
         assert_eq!(state.readiness, Readiness::Initializing);
         assert!(tracker.observes_upstream());
     }
 
     #[test]
     fn reselecting_the_same_mapping_from_server_info_keeps_what_it_observed() {
-        // basedpyright は起動ログで名乗り、"Starting service instance" を出して
-        // から initialize に serverInfo 付きで応答する。serverInfo で選び直す
-        // ときに数えたフォルダを捨てると、完了ログが数える相手を失い ready に
-        // ならない (実 basedpyright 1.39.8 で観測)。
+        // basedpyright calls itself a name in the startup log, emits "Starting service
+        // instance", and then answers initialize with serverInfo. If the counted folders are
+        // discarded when reselecting by serverInfo, the completion log has nothing to count
+        // against and it never becomes ready (observed with real basedpyright 1.39.8).
         let mut tracker = Tracker::new();
         let based = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"basedpyright language server 1.39.8 starting"}}"#;
         observe(&mut tracker, based);
@@ -278,15 +289,17 @@ mod tests {
             name: "basedpyright".to_string(),
             version: Some("1.39.8".to_string()),
         }));
-        let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("数えたフォルダの完了で ready");
+        let ready =
+            observe(&mut tracker, PYRIGHT_FOUND).expect("ready when the counted folders complete");
         assert_eq!(ready.readiness, Readiness::Ready);
     }
 
     #[test]
     fn server_info_updates_the_declared_guarantees_even_when_the_mapping_is_kept() {
-        // 起動ログが版を省いていても、serverInfo がテスト済みの版を名乗れば
-        // 保証を宣言する (Copilot の指摘)。保証は名乗り (名前と版) の関数で、
-        // 観測 (数えたフォルダ) は保つ。
+        // Even if the startup log omits the version, declare the guarantees if serverInfo
+        // calls itself a tested version (pointed out by Copilot). The guarantees are a function
+        // of what the server calls itself (name and version), and the observations (the counted
+        // folders) are kept.
         let mut tracker = Tracker::new();
         let unversioned = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"basedpyright language server starting"}}"#;
         observe(&mut tracker, unversioned);
@@ -303,18 +316,19 @@ mod tests {
         assert_eq!(
             tracker.provider(),
             ServerStateProvider::workspace(&[], &[FileChangeType::Changed]),
-            "serverInfo の版で保証を宣言し直していない"
+            "the guarantees were not redeclared from the serverInfo version"
         );
-        let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("観測は保たれている");
+        let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("the observations are kept");
         assert_eq!(ready.readiness, Readiness::Ready);
     }
 
     #[test]
     fn typescript_language_server_keeps_the_engine_version_as_the_guarantee_basis() {
-        // typescript-language-server に serverInfo を足す上流の変更は、包み紙自身の
-        // 版 (6.0.0) を名乗る。保証が依存するのは解析エンジン (TypeScript) の版で、
-        // それは起動ログと $/typescriptVersion に出る。serverInfo の版で保証の根拠を
-        // 置き換えない (どの版を根拠にするかは写像が決める)。
+        // The upstream change that adds serverInfo to typescript-language-server calls itself
+        // by the wrapper's own version (6.0.0). What the guarantees depend on is the version of
+        // the analysis engine (TypeScript), which appears in the startup log and in
+        // $/typescriptVersion. The serverInfo version does not replace the basis for the
+        // guarantees (which version is the basis is up to the mapping).
         let mut tracker = Tracker::new();
         let startup = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Using Typescript version (user-setting) 5.9.3 from path \"/x/tsserver.js\""}}"#;
         observe(&mut tracker, startup);
@@ -329,14 +343,15 @@ mod tests {
         assert_eq!(
             tracker.provider(),
             ServerStateProvider::workspace(&[], &[FileChangeType::Changed]),
-            "包み紙の版で保証を落とした"
+            "the guarantees were dropped because of the wrapper's version"
         );
     }
 
     #[test]
     fn the_same_name_in_another_case_keeps_the_mapping_too() {
-        // pyright に serverInfo を足す上流の変更は productName "Pyright" を名乗る。
-        // 起動ログで "pyright" と読んだ写像と同じものなので、選び直さず観測を保つ。
+        // The upstream change that adds serverInfo to pyright calls itself by the productName
+        // "Pyright". It is the same mapping as the one read as "pyright" from the startup log,
+        // so do not reselect, and keep the observations.
         let mut tracker = Tracker::new();
         observe(&mut tracker, PYRIGHT_STARTUP);
         observe(&mut tracker, PYRIGHT_STARTED);
@@ -348,22 +363,24 @@ mod tests {
             tracker.provider(),
             ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
         );
-        let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("数えたフォルダの完了で ready");
+        let ready =
+            observe(&mut tracker, PYRIGHT_FOUND).expect("ready when the counted folders complete");
         assert_eq!(ready.readiness, Readiness::Ready);
     }
 
     #[test]
     fn a_different_name_in_server_info_replaces_the_mapping() {
-        // 名前が違えば serverInfo が強い。起動ログの写像は捨てて選び直す。
+        // If the name differs, serverInfo is stronger. Discard the startup log's mapping and
+        // reselect.
         let mut tracker = Tracker::new();
         observe(&mut tracker, PYRIGHT_STARTUP);
         let state = tracker
             .select_mapping(Some(&info("rust-analyzer")))
-            .expect("serverInfo で選び直す");
+            .expect("reselects by serverInfo");
         assert_eq!(state.readiness, Readiness::Initializing);
         assert!(
             observe(&mut tracker, &status("ok", true)).is_some(),
-            "rust-analyzer の写像"
+            "rust-analyzer's mapping"
         );
         assert_eq!(
             tracker.identity().map(|i| i.name.as_str()),
@@ -381,32 +398,33 @@ mod tests {
 
     #[test]
     fn a_startup_log_does_not_replace_a_mapping_chosen_from_server_info() {
-        // 既に写像があるなら、起動ログの名乗りで選び直さない (serverInfo が強い)。
+        // If there is already a mapping, do not reselect by the name in the startup log
+        // (serverInfo is stronger).
         let mut tracker = with_adapter();
         assert!(observe(&mut tracker, PYRIGHT_STARTUP).is_none());
         assert!(
             observe(&mut tracker, &status("ok", true)).is_some(),
-            "rust-analyzer の写像のまま"
+            "still rust-analyzer's mapping"
         );
     }
 
-    // --- 開始状態 -----------------------------------------------------------
+    // --- Starting state ------------------------------------------------------------------
 
     #[test]
     fn starts_unobserved_before_the_upstream_names_itself() {
-        // 写像は serverInfo で選ぶ。それまでは何も観測していない。
+        // The mapping is selected by serverInfo. Until then nothing has been observed.
         assert_eq!(Tracker::new().state(), &ServerState::unobserved());
     }
 
     #[test]
     fn selecting_a_known_mapping_moves_to_initializing() {
-        // readiness は「initialize 直後」という既知の局面なので initializing。
-        // health は最初の serverStatus が届くまで何も観測していないので
-        // unknown (仕様 8.2 の 2)。ok を名乗るのは観測なしの主張になる。
+        // readiness is initializing, because "right after initialize" is a known phase.
+        // health is unknown, because nothing has been observed until the first serverStatus
+        // arrives (spec 8.2 item 2). Claiming ok would be an assertion without observation.
         let mut tracker = Tracker::new();
         let state = tracker
             .select_mapping(Some(&info("rust-analyzer")))
-            .expect("既知の名前なら開始状態に移る");
+            .expect("a known name moves to the starting state");
         assert_eq!(state.readiness, Readiness::Initializing);
         assert_eq!(state.health, Health::Unknown);
         assert!(tracker.observes_upstream());
@@ -421,8 +439,8 @@ mod tests {
 
     #[test]
     fn stays_unobserved_when_the_name_is_unknown_or_absent() {
-        // 仕様 8.2 の 3: 信号のないサーバーは両軸 unknown。initializing からも
-        // ok からも始めない。
+        // Spec 8.2 item 3: a server with no signal is unknown on both axes. Start neither
+        // from initializing nor from ok.
         let mut tracker = Tracker::new();
         assert!(tracker.select_mapping(None).is_none());
         assert!(tracker.select_mapping(Some(&info("clangd"))).is_none());
@@ -442,7 +460,7 @@ mod tests {
         );
     }
 
-    // --- 遷移 (アダプタあり) -----------------------------------------------
+    // --- Transitions (with an adapter) ----------------------------------------------------
 
     #[test]
     fn applies_what_the_adapter_reads() {
@@ -461,8 +479,8 @@ mod tests {
 
     #[test]
     fn losing_quiescence_returns_to_indexing() {
-        // 再インデックス (v0.1-design 4.3、仕様 6 章 3 項)。readiness の後退も
-        // 2 軸の変化なので通知する。
+        // Reindexing (v0.1-design 4.3, spec chapter 6 item 3). A regression of readiness is
+        // also a change of the two axes, so it is notified.
         let mut tracker = with_adapter();
         observe(&mut tracker, &status("ok", true));
         let changed = observe(&mut tracker, &status("ok", false)).expect("re-index should notify");
@@ -471,8 +489,8 @@ mod tests {
 
     #[test]
     fn a_message_only_change_updates_state_without_notifying() {
-        // 仕様 4.2: 通知するのは 2 軸が変わったときだけ。ただし message は
-        // 次の serverState 応答に載るよう更新しておく。
+        // Spec 4.2: notify only when the two axes change. But message is updated so that it
+        // appears in the next serverState response.
         let mut tracker = with_adapter();
         observe(&mut tracker, &status("ok", false));
 
@@ -481,12 +499,12 @@ mod tests {
         assert_eq!(tracker.state().message.as_deref(), Some("loading crates"));
     }
 
-    // --- 遷移 (アダプタなし) -----------------------------------------------
+    // --- Transitions (without an adapter) -------------------------------------------------
 
     #[test]
     fn does_not_interpret_upstream_status_without_an_adapter() {
-        // rust-analyzer の語彙を知っているのはアダプタだけ。なしのときに
-        // 勝手に読むと、他のサーバーの同名通知を誤読する。
+        // Only the adapter knows rust-analyzer's vocabulary. Reading on our own without one
+        // would misread a same-named notification from another server.
         let mut tracker = without_adapter();
         assert!(observe(&mut tracker, &status("ok", true)).is_none());
         assert_eq!(tracker.state(), &ServerState::unobserved());

@@ -1,15 +1,18 @@
-//! サーバー状態プロトコルの上流側の準拠テストスイート
-//! （docs/spec/server-state.md 7 章と 8.4）。
+//! Conformance test suite for the upstream side of the server state protocol
+//! (docs/spec/server-state.md chapter 7 and 8.4).
 //!
-//! 仕様 7 章（サーバーの義務）と 8.4（観測者の準拠要件）を実行可能にした
-//! もので、被験者は「stdio で LSP を話すコマンド」であればなんでもよい。
-//! lsp-det は最初の被験者に過ぎない（v0.1-design.md 6 章）。
+//! This makes chapter 7 of the spec (server obligations) and 8.4 (observer
+//! conformance requirements) executable, and the subject under test can be
+//! anything that is "a command that speaks LSP over stdio". lsp-det is only
+//! the first subject (v0.1-design.md chapter 6).
 //!
-//! 各テスト名は仕様の条番号に対応させてある。仕様が変わったらここが落ちる。
+//! Each test name corresponds to a spec item number. If the spec changes,
+//! this file should fail.
 //!
-//! 7.2（coverage）と 7.3（freshness）は、被験者が保証を宣言している
-//! ときだけ意味を持つ。lsp-det + 偽上流で回すのは下流側（M3）の後。
-//! 下流側の準拠要件（仕様 9.1）は別のスイートで扱う。
+//! 7.2 (coverage) and 7.3 (freshness) only make sense when the subject
+//! declares a guarantee. Running lsp-det + fake upstream comes after the
+//! downstream side (M3). Downstream conformance requirements (spec 9.1)
+//! are handled by a separate suite.
 
 mod support;
 
@@ -19,7 +22,7 @@ use lsp_det::state::{Health, Readiness};
 use serde_json::{Value, json};
 use support::{ConformanceClient, ServerUnderTest};
 
-/// 「届かないこと」を確かめるときの観測窓。
+/// The observation window used to confirm that something does NOT arrive.
 const NEGATIVE_WINDOW: Duration = Duration::from_millis(750);
 
 fn client(declare_server_state: bool) -> (ConformanceClient, Value) {
@@ -30,7 +33,7 @@ fn client(declare_server_state: bool) -> (ConformanceClient, Value) {
 }
 
 // ---------------------------------------------------------------------------
-// 5 章: capability
+// chapter 5: capability
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -39,14 +42,14 @@ fn spec_5_declares_the_server_state_provider_capability() {
     let provider = &result["result"]["capabilities"]["experimental"]["serverStateProvider"];
     assert!(
         !provider.is_null(),
-        "InitializeResult に experimental.serverStateProvider がない: {result}"
+        "InitializeResult is missing experimental.serverStateProvider: {result}"
     );
     client.shutdown();
 }
 
 #[test]
 fn spec_5_keeps_the_upstream_capabilities_intact() {
-    // 宣言を足すのであって、上流の宣言を置き換えてはならない。
+    // This adds a declaration; it must not replace the upstream's own declarations.
     let (mut client, result) = client(true);
     let capabilities = &result["result"]["capabilities"];
     assert_eq!(capabilities["hoverProvider"], json!(true));
@@ -54,20 +57,21 @@ fn spec_5_keeps_the_upstream_capabilities_intact() {
     assert_eq!(
         capabilities["experimental"]["fakeUpstreamMarker"],
         json!(true),
-        "上流の experimental が失われた: {capabilities}"
+        "the upstream's experimental was lost: {capabilities}"
     );
     client.shutdown();
 }
 
 // ---------------------------------------------------------------------------
-// 7.1 保証なしの宣言
+// 7.1 declaration without a guarantee
 // ---------------------------------------------------------------------------
 
 #[test]
 fn spec_7_1_1_answers_server_state_right_after_initialize() {
-    // 偽上流はまだ信号を出していないので、上流側は「initialize 直後」に
-    // 対応する initializing を報告する (仕様 8.2 の 2)。ready でないことは
-    // 仕様の要件ではなく (7 章の前提条件)、この被験者の事実である。
+    // The fake upstream has not emitted a signal yet, so the upstream side
+    // reports initializing, corresponding to "right after initialize"
+    // (spec 8.2 item 2). Not being ready is not a spec requirement (it is a
+    // precondition of chapter 7); it is a fact about this subject.
     let (mut client, _) = client(true);
     let state = client.server_state();
     assert_eq!(state.readiness, Readiness::Initializing);
@@ -77,7 +81,7 @@ fn spec_7_1_1_answers_server_state_right_after_initialize() {
 
 #[test]
 fn spec_7_1_1_answers_server_state_even_without_the_client_declaration() {
-    // 仕様 5.2: リクエストは宣言の有無によらず応答する。
+    // Spec 5.2: the request is answered regardless of whether it was declared.
     let (mut client, _) = client(false);
     let state = client.server_state();
     assert_eq!(state.readiness, Readiness::Initializing);
@@ -100,9 +104,9 @@ fn spec_7_1_2_stays_silent_when_the_client_did_not_declare() {
     client.make_upstream_emit_status("ok", true);
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "宣言していないクライアントへ serverStateChanged を送ってはならない"
+        "must not send serverStateChanged to a client that did not declare it"
     );
-    // 状態そのものは追跡されているので、リクエストには新しい値が返る。
+    // The state itself is still tracked, so the request returns the new value.
     assert_eq!(client.server_state().readiness, Readiness::Ready);
     client.shutdown();
 }
@@ -114,7 +118,7 @@ fn spec_7_1_3_observes_ready_then_indexing_then_ready() {
     client.make_upstream_emit_status("ok", true);
     assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
 
-    // 依存変更に相当する再インデックス。
+    // Reindexing corresponding to a dependency change.
     client.make_upstream_emit_status("ok", false);
     assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
 
@@ -125,7 +129,7 @@ fn spec_7_1_3_observes_ready_then_indexing_then_ready() {
 }
 
 // ---------------------------------------------------------------------------
-// 4 章: メソッドの意味
+// chapter 4: method semantics
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -137,29 +141,30 @@ fn spec_4_2_does_not_repeat_a_notification_for_an_unchanged_state() {
     client.make_upstream_emit_status("ok", true);
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "2 軸が変わっていないのに通知してはならない"
+        "must not notify when neither axis has changed"
     );
     client.shutdown();
 }
 
 #[test]
 fn spec_4_1_does_not_forward_the_state_request_upstream() {
-    // 上流側が自ら答えるメソッドであり、上流は本プロトコルを知らない。
+    // This is a method the upstream side answers by itself; the upstream does not know this protocol.
     let (mut client, _) = client(true);
     client.server_state();
     let seen = client.upstream_methods_seen();
     assert!(
         !seen.iter().any(|m| m == "experimental/serverState"),
-        "experimental/serverState を上流へ転送した: {seen:?}"
+        "forwarded experimental/serverState to the upstream: {seen:?}"
     );
     client.shutdown();
 }
 
 #[test]
 fn spec_8_2_7_closes_the_connection_without_a_notification_when_the_upstream_disappears() {
-    // 仕様 8.2 の 7: プロセスの消失は本プロトコルの値ではない。中継層は
-    // 未応答のリクエストにエラーを応答したうえで接続を閉じ、下流には
-    // EOF が伝わる。「死んだ」を表す通知は送らない。
+    // Spec 8.2 item 7: process disappearance is not a value of this protocol.
+    // The relay answers any unanswered requests with an error, then closes
+    // the connection, and EOF propagates to the downstream. It does not
+    // send a notification meaning "dead".
     let (mut client, _) = client(true);
     client.make_upstream_emit_status("ok", true);
     client.await_state_changed();
@@ -167,14 +172,14 @@ fn spec_8_2_7_closes_the_connection_without_a_notification_when_the_upstream_dis
     client.notify("exit", json!(null));
     assert!(
         client.expect_silence_until_closed("experimental/serverStateChanged"),
-        "上流の消失を serverStateChanged で通知した (仕様 8.2 の 7 違反)"
+        "notified upstream disappearance via serverStateChanged (violates spec 8.2 item 7)"
     );
 }
 
 #[test]
 fn spec_7_1_4_reports_an_index_failure_as_health_error() {
-    // 失敗は readiness ではなく health で表す (仕様 6 章 5 項)。rust-analyzer は
-    // ワークスペースのロード失敗を {health: error, quiescent: true} で送る。
+    // Failure is expressed via health, not readiness (spec chapter 6 item 5).
+    // rust-analyzer sends a workspace load failure as {health: error, quiescent: true}.
     let (mut client, _) = client(true);
     client.make_upstream_emit_status("error", true);
     let state = client.await_state_changed();
@@ -183,21 +188,22 @@ fn spec_7_1_4_reports_an_index_failure_as_health_error() {
 }
 
 // ---------------------------------------------------------------------------
-// 写像の選択と capability の注入 (設計 4.2、ADR 0009 決定 D-2・D-3)
+// Mapping selection and capability injection (design 4.2, ADR 0009 decision D-2/D-3)
 //
-// 写像は上流が InitializeResult.serverInfo.name で名乗る名前で選ぶ。
-// 名乗る前に initialize を上流へ送る必要があるので、既知の写像ぶんの
-// capability は無条件に注入する。
+// The mapping is chosen by the name the upstream calls itself in
+// InitializeResult.serverInfo.name. Since initialize must be sent to the
+// upstream before it calls itself anything, the capabilities for every
+// known mapping are injected unconditionally.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn selects_the_mapping_from_the_server_info_name() {
-    // 既定の被験者は偽上流が rust-analyzer と名乗る。--adapter は存在しない。
+    // The default subject has the fake upstream call itself rust-analyzer. There is no --adapter.
     let (mut client, result) = client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"coverage": {"scope": "workspace", "incomplete": {"workspace/symbol": 128}}, "freshness": {"fileChanges": ["Created", "Changed", "Deleted"]}}),
-        "rust-analyzer と名乗った上流に rust-analyzer の写像が選ばれていない: {result}"
+        "the rust-analyzer mapping was not chosen for an upstream that calls itself rust-analyzer: {result}"
     );
     client.make_upstream_emit_status("ok", true);
     assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
@@ -206,8 +212,10 @@ fn selects_the_mapping_from_the_server_info_name() {
 
 #[test]
 fn spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
-    // 仕様 8.2 の 5: 保証は準拠テストを通した版の範囲でのみ宣言する。
-    // 範囲外の版や版の名乗りがない上流には、状態の通知だけを約束する。
+    // Spec 8.2 item 5: a guarantee is declared only for the range of
+    // versions that passed conformance tests. For an out-of-range version,
+    // or an upstream that does not report its version, only the state
+    // notification is promised.
     for version in ["1.97.0 (old)", "none"] {
         let server =
             ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--server-version", version]);
@@ -216,9 +224,9 @@ fn spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
         assert_eq!(
             result["result"]["capabilities"]["experimental"]["serverStateProvider"],
             json!({}),
-            "テストを当てていない版 {version:?} に保証を宣言した: {result}"
+            "declared a guarantee for untested version {version:?}: {result}"
         );
-        // 写像そのものは働く (状態は追跡する)。
+        // The mapping itself still works (the state is still tracked).
         client.make_upstream_emit_status("ok", true);
         assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
         client.shutdown();
@@ -227,8 +235,9 @@ fn spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
 
 #[test]
 fn maps_the_missing_workspace_warning_of_rust_analyzer_to_error() {
-    // 設計 5.1: 写像は言語サーバーの語彙の粗さを補う。プロジェクト未発見の
-    // warning は横断問い合わせにとって機能不全なので error に写す。
+    // Design 5.1: the mapping compensates for the coarseness of a language
+    // server's vocabulary. A "project not found" warning is a malfunction
+    // for cross-workspace queries, so it is mapped to error.
     let (mut client, _) = client(true);
     client.make_upstream_emit_status_with_message(
         "warning",
@@ -242,8 +251,9 @@ fn maps_the_missing_workspace_warning_of_rust_analyzer_to_error() {
 
 #[test]
 fn injects_the_capabilities_of_every_known_mapping_unconditionally() {
-    // serverInfo は initialize の応答で分かる。注入はその前に要るので、
-    // 上流が誰であっても既知の写像ぶんを注入する。
+    // serverInfo is only known from the initialize response. Injection is
+    // needed before that, so the capabilities for every known mapping are
+    // injected regardless of who the upstream turns out to be.
     for server in [
         ServerUnderTest::lsp_det_with_fake_upstream(),
         ServerUnderTest::lsp_det_without_adapter(),
@@ -254,15 +264,15 @@ fn injects_the_capabilities_of_every_known_mapping_unconditionally() {
         assert_eq!(
             capabilities["experimental"]["serverStatusNotification"],
             json!(true),
-            "rust-analyzer 用の宣言が注入されていない: {capabilities}"
+            "the declaration for rust-analyzer was not injected: {capabilities}"
         );
         assert_eq!(
             capabilities["window"]["workDoneProgress"],
             json!(true),
-            "gopls 用の宣言が注入されていない: {capabilities}"
+            "the declaration for gopls was not injected: {capabilities}"
         );
-        // 注入は対象の 2 キーを true にするだけで、クライアントの他の宣言
-        // (hover 等) は残る。
+        // Injection only sets the two target keys to true; the client's other
+        // declarations (hover, etc.) are left intact.
         assert_eq!(capabilities["textDocument"]["hover"], json!({}));
         client.shutdown();
     }
@@ -270,26 +280,27 @@ fn injects_the_capabilities_of_every_known_mapping_unconditionally() {
 
 #[test]
 fn answers_work_done_progress_create_itself_when_the_client_did_not_declare_it() {
-    // 注入した window.workDoneProgress に由来するリクエストは、クライアントに
-    // 転送せず lsp-det が自ら成功応答する (設計 4.2)。宣言していない
-    // クライアントは MethodNotFound を返す (Serena で確認済み)。
+    // A request that originates from the injected window.workDoneProgress is
+    // answered directly by lsp-det with success, rather than forwarded to the
+    // client (design 4.2). A client that did not declare it would return
+    // MethodNotFound (confirmed with Serena).
     let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--request-progress-create"]);
     let mut client = ConformanceClient::start(&server);
     client.initialize(true);
     assert!(
         client.expect_no_notification("window/workDoneProgress/create", NEGATIVE_WINDOW),
-        "宣言していないクライアントに window/workDoneProgress/create を転送した"
+        "forwarded window/workDoneProgress/create to a client that did not declare it"
     );
     assert!(
         client.upstream_progress_create_answered(),
-        "上流の window/workDoneProgress/create に応答していない"
+        "did not answer the upstream's window/workDoneProgress/create"
     );
     client.shutdown();
 }
 
 #[test]
 fn forwards_work_done_progress_create_when_the_client_declared_it() {
-    // クライアントが元々宣言していた capability に基づくリクエストは素通し。
+    // A request based on a capability the client originally declared is passed through.
     let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--request-progress-create"]);
     let mut client = ConformanceClient::start(&server);
     client.initialize_with_capabilities(json!({
@@ -300,17 +311,17 @@ fn forwards_work_done_progress_create_when_the_client_declared_it() {
         client
             .await_notification("window/workDoneProgress/create")
             .is_some(),
-        "宣言したクライアントへ window/workDoneProgress/create が届かない"
+        "window/workDoneProgress/create did not reach the client that declared it"
     );
     client.shutdown();
 }
 
 // ---------------------------------------------------------------------------
-// gopls の写像 (設計 5.2)
+// The gopls mapping (design 5.2)
 //
-// gopls は readiness の語彙を持たない。上流側は `$/progress` の
-// "Setting up workspace" の begin / end から readiness を、
-// "Error loading workspace" の begin / end から health を合成する。
+// gopls has no vocabulary for readiness. The upstream side synthesizes
+// readiness from the begin/end of "Setting up workspace" in `$/progress`,
+// and health from the begin/end of "Error loading workspace".
 // ---------------------------------------------------------------------------
 
 fn gopls_client(declare_server_state: bool) -> (ConformanceClient, Value) {
@@ -322,20 +333,20 @@ fn gopls_client(declare_server_state: bool) -> (ConformanceClient, Value) {
 
 #[test]
 fn gopls_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
-    // 偽 gopls の既定の版 (1.98.0 (fake)) は読めるが gopls::TESTED_VERSIONS の
-    // 範囲外なので、保証は宣言しない。
+    // The fake gopls's default version (1.98.0 (fake)) can be read, but it
+    // is outside the range of gopls::TESTED_VERSIONS, so no guarantee is declared.
     let (mut client, result) = gopls_client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({}),
-        "gopls に測っていない保証を宣言した: {result}"
+        "declared an unmeasured guarantee for gopls: {result}"
     );
     client.shutdown();
 }
 
 #[test]
 fn gopls_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
-    // 7.2 / 7.3 を実 gopls v0.23.0 に当てて通した (gopls_* ignored)。
+    // 7.2 / 7.3 were run against real gopls v0.23.0 and passed (gopls_* ignored).
     let server =
         ServerUnderTest::lsp_det_with_upstream_flags("gopls", &["--server-version", "v0.23.0"]);
     let mut client = ConformanceClient::start(&server);
@@ -343,7 +354,7 @@ fn gopls_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"coverage": {"scope": "workspace", "incomplete": {"workspace/symbol": 100}}, "freshness": {"fileChanges": ["Created", "Changed", "Deleted"]}}),
-        "測った版に保証を宣言していない: {result}"
+        "did not declare a guarantee for a measured version: {result}"
     );
     client.shutdown();
 }
@@ -365,13 +376,17 @@ fn gopls_spec_7_1_2_becomes_ready_when_the_workspace_load_ends() {
     client.make_upstream_end_workspace_load("1234", "Finished loading packages.");
     let state = client.await_state_changed();
     assert_eq!(state.readiness, Readiness::Ready);
-    assert_eq!(state.health, Health::Ok, "ロード成功で health は ok");
+    assert_eq!(
+        state.health,
+        Health::Ok,
+        "health is ok when the load succeeds"
+    );
     client.shutdown();
 }
 
 #[test]
 fn gopls_waits_for_every_workspace_folder() {
-    // フォルダごとに progress が 1 つ出る。全部終わるまで ready ではない。
+    // One progress is emitted per folder. It is not ready until all of them finish.
     let (mut client, _) = gopls_client(true);
     client.make_upstream_begin_workspace_load("a");
     client.make_upstream_begin_workspace_load("b");
@@ -379,7 +394,7 @@ fn gopls_waits_for_every_workspace_folder() {
     client.make_upstream_end_workspace_load("a", "Finished loading packages.");
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "1 フォルダの終了で ready を名乗った"
+        "declared ready when only one folder finished"
     );
     client.make_upstream_end_workspace_load("b", "Finished loading packages.");
     assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
@@ -388,7 +403,7 @@ fn gopls_waits_for_every_workspace_folder() {
 
 #[test]
 fn gopls_spec_7_1_3_rearms_when_a_folder_is_added() {
-    // didChangeWorkspaceFolders で "Setting up workspace" が再発行される。
+    // didChangeWorkspaceFolders causes "Setting up workspace" to be re-emitted.
     let (mut client, _) = gopls_client(true);
     client.make_upstream_begin_workspace_load("1");
     client.await_state_changed();
@@ -416,10 +431,10 @@ fn gopls_spec_7_1_4_reports_a_workspace_load_failure_as_health_error() {
     assert_eq!(
         state.message.as_deref(),
         Some("err: go.mod file not found"),
-        "失敗の message を添える"
+        "attaches the failure message"
     );
 
-    // 回復: "Done." で終わる。
+    // Recovery: ends with "Done.".
     client.make_upstream_emit_progress(json!({
         "token": "err",
         "value": {"kind": "end", "message": "Done."}
@@ -430,8 +445,9 @@ fn gopls_spec_7_1_4_reports_a_workspace_load_failure_as_health_error() {
 
 #[test]
 fn gopls_reports_a_failed_load_as_health_error() {
-    // フォルダのロード失敗は "Error loading packages: ..." で end する。
-    // 試行は終わったので ready、結果は信頼できないので error (仕様 6 章 5 項)。
+    // A folder load failure ends with "Error loading packages: ...".
+    // The attempt is over, so it is ready; the result is not trustworthy, so it is error
+    // (spec chapter 6 item 5).
     let (mut client, _) = gopls_client(true);
     client.make_upstream_begin_workspace_load("1");
     client.await_state_changed();
@@ -444,7 +460,7 @@ fn gopls_reports_a_failed_load_as_health_error() {
 
 #[test]
 fn gopls_ignores_unrelated_progress() {
-    // 診断や govulncheck 等、他の title の progress は readiness に触れない。
+    // A progress with a different title, such as diagnostics or govulncheck, does not touch readiness.
     let (mut client, _) = gopls_client(true);
     client.make_upstream_emit_progress(json!({
         "token": "diag",
@@ -456,19 +472,20 @@ fn gopls_ignores_unrelated_progress() {
     }));
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "無関係な progress で状態が動いた"
+        "state moved because of an unrelated progress"
     );
     assert_eq!(client.server_state().readiness, Readiness::Initializing);
     client.shutdown();
 }
 
 // ---------------------------------------------------------------------------
-// pyright の写像 (ADR 0011、設計 5.3)
+// The pyright mapping (ADR 0011, design 5.3)
 //
-// pyright は readiness の語彙を持たず `serverInfo` も返さない。上流側は
-// 起動ログの名乗りで写像を選び、`window/logMessage` のファイル列挙完了
-// ("Found N source files" / "No source files found.") から readiness を
-// 合成する。health の信号はなく unknown のまま。
+// pyright has no vocabulary for readiness and does not return `serverInfo`
+// either. The upstream side chooses the mapping from what the startup log
+// calls the server, and synthesizes readiness from the completion of file
+// enumeration in `window/logMessage` ("Found N source files" /
+// "No source files found."). There is no signal for health, so it stays unknown.
 // ---------------------------------------------------------------------------
 
 fn pyright_client(declare_server_state: bool) -> (ConformanceClient, Value) {
@@ -480,22 +497,23 @@ fn pyright_client(declare_server_state: bool) -> (ConformanceClient, Value) {
 
 #[test]
 fn pyright_is_identified_by_its_startup_log_when_server_info_is_absent() {
-    // serverInfo がないと写像なし (両軸 unknown) になるところ、起動ログの
-    // 名乗りで pyright の写像が選ばれ、開始状態 (initializing) にいる。
+    // Without serverInfo there would be no mapping (both axes unknown), but
+    // the pyright mapping is chosen from what the startup log calls the
+    // server, and it is in the starting state (initializing).
     let (mut client, result) = pyright_client(true);
     assert!(
         !result["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null(),
-        "上流側の宣言がない: {result}"
+        "the upstream side has no declaration: {result}"
     );
     assert!(
         result["result"]["serverInfo"].is_null(),
-        "前提が崩れている。偽 pyright は serverInfo を返さないはず: {result}"
+        "the premise is broken: the fake pyright should not return serverInfo: {result}"
     );
     let state = client.server_state();
     assert_eq!(
         state.readiness,
         Readiness::Initializing,
-        "写像が選ばれていない"
+        "no mapping was chosen"
     );
     assert_eq!(state.health, Health::Unknown);
     client.shutdown();
@@ -503,7 +521,7 @@ fn pyright_is_identified_by_its_startup_log_when_server_info_is_absent() {
 
 #[test]
 fn basedpyright_is_identified_by_its_server_info() {
-    // basedpyright は serverInfo を返す。起動ログがなくても同じ写像を選ぶ。
+    // basedpyright returns serverInfo. The same mapping is chosen even without a startup log.
     let server = ServerUnderTest::lsp_det_with_upstream_flags(
         "basedpyright",
         &["--server-version", "1.39.8"],
@@ -516,7 +534,7 @@ fn basedpyright_is_identified_by_its_server_info() {
 
 #[test]
 fn pyright_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
-    // 起動ログの版が pyright::TESTED_VERSIONS になければ保証は宣言しない。
+    // If the version in the startup log is not in pyright::TESTED_VERSIONS, no guarantee is declared.
     let server = ServerUnderTest::lsp_det_with_upstream_flags(
         "none",
         &["--startup-log", "Pyright language server 1.1.400 starting"],
@@ -526,27 +544,27 @@ fn pyright_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({}),
-        "pyright に測っていない保証を宣言した: {result}"
+        "declared an unmeasured guarantee for pyright: {result}"
     );
     client.shutdown();
 }
 
 #[test]
 fn pyright_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
-    // 7.2 / 7.3 を実 pyright 1.1.412 に当てて通した (pyright_* ignored)。
-    // 版は起動ログから読む (serverInfo がない)。
+    // 7.2 / 7.3 were run against real pyright 1.1.412 and passed (pyright_* ignored).
+    // The version is read from the startup log (there is no serverInfo).
     let (mut client, result) = pyright_client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
-        "測った版に保証を宣言していない: {result}"
+        "did not declare a guarantee for a measured version: {result}"
     );
     client.shutdown();
 }
 
 #[test]
 fn basedpyright_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
-    // 7.2 / 7.3 を実 basedpyright 1.39.8 に当てて通した。版は serverInfo から読む。
+    // 7.2 / 7.3 were run against real basedpyright 1.39.8 and passed. The version is read from serverInfo.
     let server = ServerUnderTest::lsp_det_with_upstream_flags(
         "basedpyright",
         &["--server-version", "1.39.8"],
@@ -556,7 +574,7 @@ fn basedpyright_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
-        "測った版に保証を宣言していない: {result}"
+        "did not declare a guarantee for a measured version: {result}"
     );
     client.shutdown();
 }
@@ -571,7 +589,7 @@ fn pyright_spec_7_1_2_becomes_ready_when_enumeration_completes() {
     assert_eq!(
         state.health,
         Health::Unknown,
-        "列挙の完了は health の観測ではない"
+        "enumeration completion is not an observation of health"
     );
     client.shutdown();
 }
@@ -587,14 +605,14 @@ fn pyright_no_source_files_is_also_a_completion() {
 
 #[test]
 fn pyright_waits_for_every_workspace_folder() {
-    // フォルダごとに "Starting service instance" と完了ログが 1 回ずつ出る。
+    // "Starting service instance" and a completion log are each emitted once per folder.
     let (mut client, _) = pyright_client(true);
     client.make_upstream_start_service_instance("one");
     client.make_upstream_start_service_instance("two");
     client.make_upstream_finish_enumeration("Found 400 source files");
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "1 フォルダの完了で ready を名乗った"
+        "declared ready when only one folder finished"
     );
     client.make_upstream_finish_enumeration("Found 1200 source files");
     assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
@@ -617,8 +635,8 @@ fn pyright_spec_7_1_3_rearms_when_a_folder_is_added() {
 
 #[test]
 fn pyright_rearms_on_reenumeration_when_the_log_is_visible() {
-    // "Searching for source files" は log レベル (type 4)。既定では届かないが、
-    // 届いたときは再列挙の開始。
+    // "Searching for source files" is at log level (type 4). It does not
+    // arrive by default, but when it does arrive it marks the start of re-enumeration.
     let (mut client, _) = pyright_client(true);
     client.make_upstream_start_service_instance("one");
     client.make_upstream_finish_enumeration("Found 1 source file");
@@ -633,7 +651,7 @@ fn pyright_rearms_on_reenumeration_when_the_log_is_visible() {
 
 #[test]
 fn pyright_ignores_progress_and_other_logs() {
-    // 開いたファイルの解析の $/progress と他のログは readiness に触れない。
+    // $/progress from analyzing an open file, and other logs, do not touch readiness.
     let (mut client, _) = pyright_client(true);
     client.make_upstream_start_service_instance("one");
     client.make_upstream_emit_log_message(3, "Assuming Python version 3.14.7.final.0");
@@ -647,7 +665,7 @@ fn pyright_ignores_progress_and_other_logs() {
     }));
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "無関係なメッセージで状態が動いた"
+        "state moved because of an unrelated message"
     );
     assert_eq!(client.server_state().readiness, Readiness::Initializing);
     client.shutdown();
@@ -655,23 +673,23 @@ fn pyright_ignores_progress_and_other_logs() {
 
 #[test]
 fn pyright_logs_are_forwarded_to_the_client_unchanged() {
-    // 写像が読むだけで、ログはクライアントにもそのまま届く (原文転送)。
+    // The mapping only reads the log; it still reaches the client unchanged (verbatim forwarding).
     let (mut client, _) = pyright_client(false);
     client.make_upstream_start_service_instance("one");
     client.make_upstream_finish_enumeration("Found 2 source files");
     let found = client
         .await_notification("window/logMessage")
-        .expect("ログが届かない");
+        .expect("the log did not arrive");
     assert!(
         found["message"].as_str().is_some(),
-        "ログの形が変わった: {found}"
+        "the log's shape changed: {found}"
     );
     client.shutdown();
 }
 // ---------------------------------------------------------------------------
-// 写像なし (仕様 8.2 の 3、8.4 の 1)
+// No mapping (spec 8.2 item 3, 8.4 item 1)
 //
-// readiness を観測する手段がないので両軸 unknown を正直に報告する。
+// There is no way to observe readiness, so both axes are honestly reported as unknown.
 // ---------------------------------------------------------------------------
 
 fn client_without_adapter(declare_server_state: bool) -> (ConformanceClient, Value) {
@@ -687,7 +705,7 @@ fn spec_5_declares_without_guarantees_when_there_is_no_adapter() {
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({}),
-        "写像なしは保証のない宣言 (true) をする: {result}"
+        "with no mapping, a declaration without a guarantee (true) is made: {result}"
     );
     client.shutdown();
 }
@@ -703,13 +721,14 @@ fn spec_8_4_1_reports_unknown_on_both_axes_without_an_adapter() {
 
 #[test]
 fn does_not_interpret_the_upstream_status_without_an_adapter() {
-    // 既知の写像がない名前を名乗る上流が rust-analyzer 風の serverStatus を
-    // 送っても読まない。他のサーバーの同名通知を誤読しないため。
+    // Even if an upstream that calls itself a name with no known mapping
+    // sends an rust-analyzer-style serverStatus, it is not read. This
+    // avoids misreading another server's identically named notification.
     let (mut client, _) = client_without_adapter(true);
     client.make_upstream_emit_status("ok", true);
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "アダプタなしで readiness が動いてはならない"
+        "readiness must not move without an adapter"
     );
     assert_eq!(client.server_state().readiness, Readiness::Unknown);
     client.shutdown();
@@ -717,41 +736,43 @@ fn does_not_interpret_the_upstream_status_without_an_adapter() {
 
 #[test]
 fn an_upstream_that_dies_before_answering_initialize_does_not_hang_the_client_without_an_adapter() {
-    // アダプタなしでも handshake 中の死は隠さない。
+    // Even without an adapter, a death during the handshake is not hidden.
     let server =
         ServerUnderTest::lsp_det_without_adapter_flags(&["--exit-before-initialize-result"]);
     let mut client = ConformanceClient::start(&server);
     let response = client.initialize_raw(true);
     assert!(
         response.get("error").is_some(),
-        "上流が initialize に答えず消えたのに、エラーも返らなかった: {response}"
+        "the upstream disappeared without answering initialize, but no error was returned either: {response}"
     );
 }
 
 #[test]
 fn spec_8_2_7_closes_the_connection_without_a_notification_without_an_adapter() {
-    // 写像がなくても同じ。dead を出す代わりに、接続を閉じて EOF で伝える。
+    // Same without a mapping. Instead of emitting "dead", the connection is closed and EOF conveys it.
     let (mut client, _) = client_without_adapter(true);
     client.notify("exit", json!(null));
     assert!(
         client.expect_silence_until_closed("experimental/serverStateChanged"),
-        "上流の消失を serverStateChanged で通知した (仕様 8.2 の 7 違反)"
+        "notified upstream disappearance via serverStateChanged (violates spec 8.2 item 7)"
     );
 }
 
 // ---------------------------------------------------------------------------
-// 上流自身が宣言している場合 (仕様 8.2 の 6、8.4 の 2)
+// When the upstream itself declares the protocol (spec 8.2 item 6, 8.4 item 2)
 //
-// 上流側は恒等写像になる。宣言を足さず、リクエストを転送し、自前の通知を
-// 出さない。同一接続に送信者の異なる 2 系統が流れるのを避ける。
+// The upstream side becomes the identity mapping. It adds no declaration,
+// forwards requests, and emits no notification of its own. This avoids two
+// streams with different senders flowing over the same connection.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn spec_8_4_2_asks_the_conformant_upstream_only_after_initialized() {
-    // 恒等写像のとき、上流側は初期状態を自分で問い合わせる（設計 4.2）。その
-    // 問い合わせはクライアントの `initialized` を流した後でなければならない。
-    // LSP はサーバーが `initialized` まで他のリクエストを受けないことを許し、
-    // rust-analyzer は実際に規約違反として終了する（上流のパッチで観測）。
+    // Under the identity mapping, the upstream side queries the initial
+    // state itself (design 4.2). That query must happen after the client's
+    // `initialized` has been forwarded. LSP allows a server to refuse other
+    // requests until `initialized`, and rust-analyzer actually exits for a
+    // protocol violation (observed with an upstream patch).
     let server = ServerUnderTest::lsp_det_without_adapter_flags(&[
         "--declare-server-state-provider",
         "--require-initialized-before-requests",
@@ -761,13 +782,13 @@ fn spec_8_4_2_asks_the_conformant_upstream_only_after_initialized() {
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"freshness": {"fileChanges": ["Changed"]}}),
-        "上流の宣言を書き換えた: {result}"
+        "rewrote the upstream's declaration: {result}"
     );
     let state = client.server_state();
     assert_eq!(
         state.message.as_deref(),
         Some("answered by upstream"),
-        "initialized より前に問い合わせて上流を落とした"
+        "queried before initialized and crashed the upstream"
     );
     client.shutdown();
 }
@@ -779,14 +800,15 @@ fn spec_8_4_2_defers_to_a_conformant_upstream_without_an_adapter() {
     let mut client = ConformanceClient::start(&server);
     let result = client.initialize(true);
 
-    // 上流の宣言をそのまま通す (保証なしの宣言で上書きしない)。
+    // The upstream's declaration is passed through unchanged (not overwritten
+    // by a declaration without a guarantee).
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"freshness": {"fileChanges": ["Changed"]}}),
-        "上流の宣言を書き換えた: {result}"
+        "rewrote the upstream's declaration: {result}"
     );
 
-    // リクエストは上流へ届き、上流の答えが返る。
+    // The request reaches the upstream and the upstream's answer comes back.
     let state = client.server_state();
     assert_eq!(state.message.as_deref(), Some("answered by upstream"));
     assert!(
@@ -794,21 +816,22 @@ fn spec_8_4_2_defers_to_a_conformant_upstream_without_an_adapter() {
             .upstream_methods_seen()
             .iter()
             .any(|m| m == "experimental/serverState"),
-        "experimental/serverState を上流へ転送していない"
+        "did not forward experimental/serverState to the upstream"
     );
 
-    // 上流側は自前の通知を出さない (上流が送信者)。
+    // The upstream side emits no notification of its own (the upstream is the sender).
     client.notify("exit", json!(null));
     assert!(
         client.expect_silence_until_closed("experimental/serverStateChanged"),
-        "恒等写像のはずの上流側が通知を出した"
+        "the upstream side, which should have been the identity mapping, emitted a notification"
     );
 }
 
 #[test]
 fn a_false_upstream_declaration_is_not_a_declaration() {
-    // `serverStateProvider: false` は「提供しない」。恒等写像に切り替えては
-    // ならず、上流側は自分の宣言を置いて自分で答える。
+    // `serverStateProvider: false` means "does not provide it". It must not
+    // switch to the identity mapping; the upstream side leaves its own
+    // declaration in place and answers on its own.
     let server =
         ServerUnderTest::lsp_det_without_adapter_flags(&["--declare-server-state-provider-false"]);
     let mut client = ConformanceClient::start(&server);
@@ -816,7 +839,7 @@ fn a_false_upstream_declaration_is_not_a_declaration() {
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({}),
-        "false を宣言とみなして恒等写像に切り替えた: {result}"
+        "treated false as a declaration and switched to the identity mapping: {result}"
     );
     assert_eq!(client.server_state().readiness, Readiness::Unknown);
     client.shutdown();
@@ -824,8 +847,9 @@ fn a_false_upstream_declaration_is_not_a_declaration() {
 
 #[test]
 fn does_not_emit_its_own_notifications_under_deferral_with_an_adapter() {
-    // 恒等写像中に自前の serverStateChanged を出すと、上流の通知と 2 系統に
-    // なる (仕様 8.2 の 6)。写像が生きた遷移を読んでも出さない。
+    // Emitting a serverStateChanged of its own during the identity mapping
+    // would create two streams alongside the upstream's notification
+    // (spec 8.2 item 6). Even if the mapping reads a live transition, it must not emit one.
     let server =
         ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--declare-server-state-provider"]);
     let mut client = ConformanceClient::start(&server);
@@ -833,15 +857,16 @@ fn does_not_emit_its_own_notifications_under_deferral_with_an_adapter() {
     client.make_upstream_emit_status("ok", true);
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "恒等写像中に上流側が自前の通知を出した"
+        "the upstream side emitted its own notification during the identity mapping"
     );
     client.shutdown();
 }
 
 #[test]
 fn spec_8_4_2_defers_to_a_conformant_upstream_even_with_an_adapter() {
-    // 写像は上流の語彙を補うためのもの。上流が本プロトコルを話すなら不要で、
-    // 上流側の宣言で上流の宣言を隠してはならない。
+    // The mapping exists to compensate for the upstream's vocabulary. If the
+    // upstream speaks this protocol itself, the mapping is unnecessary, and
+    // the upstream side's declaration must not hide the upstream's own declaration.
     let server =
         ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--declare-server-state-provider"]);
     let mut client = ConformanceClient::start(&server);
@@ -858,39 +883,41 @@ fn spec_8_4_2_defers_to_a_conformant_upstream_even_with_an_adapter() {
 }
 
 // ---------------------------------------------------------------------------
-// handshake 前後の境界
+// The boundary around the handshake
 //
-// 写像は InitializeResult の serverInfo で選ぶので、それより前の上流の
-// 状態通知は解釈できない。LSP はサーバー発の通知を InitializeResult の後に
-// 限っている (許されるのは showMessage / logMessage / telemetry だけ) ので、
-// これは仕様の範囲内である。ここで縛るのは initialize の失敗と再試行の扱い。
+// The mapping is chosen from serverInfo in InitializeResult, so an upstream
+// state notification before that cannot be interpreted. LSP restricts
+// server-initiated notifications to after InitializeResult (only
+// showMessage / logMessage / telemetry are allowed before it), so this is
+// within the spec's scope. What is constrained here is how initialize
+// failure and retry are handled.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn an_initialize_error_does_not_end_the_handshake() {
-    // initialize へのエラー応答は handshake の完了ではない。クライアントは
-    // 再試行でき、2 回目の InitializeResult が本当の handshake になる。
+    // An error response to initialize is not completion of the handshake.
+    // The client can retry, and the second InitializeResult is the real handshake.
     let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--fail-first-initialize"]);
     let mut client = ConformanceClient::start(&server);
 
     let first = client.initialize_raw(true);
     assert!(
         first.get("error").is_some(),
-        "偽上流は 1 回目を失敗させるはず"
+        "the fake upstream should fail the first attempt"
     );
 
     let second = client.initialize(true);
     assert!(
         !second["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null(),
-        "再試行した initialize に serverStateProvider がない: {second}"
+        "the retried initialize has no serverStateProvider: {second}"
     );
     client.shutdown();
 }
 
 #[test]
 fn death_during_a_retried_initialize_is_still_closed_with_an_error() {
-    // 1 回目はエラー、2 回目に答えず消える。2 回目も宙に浮かせない
-    // (仕様 8.2 の 7)。
+    // The first attempt errors; the second disappears without answering.
+    // The second must not be left hanging either (spec 8.2 item 7).
     let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
         "--fail-first-initialize",
         "--exit-before-initialize-result",
@@ -902,15 +929,15 @@ fn death_during_a_retried_initialize_is_still_closed_with_an_error() {
     let second = client.initialize_raw(true);
     assert!(
         second.get("error").is_some(),
-        "再試行中に上流が消えたのに、エラーも返らなかった: {second}"
+        "the upstream disappeared during the retry, but no error was returned either: {second}"
     );
 }
 
 #[test]
 fn an_answered_initialize_is_not_answered_again_when_the_upstream_dies() {
-    // initialize にエラー応答が返った時点で、その id は宙に浮いていない。
-    // その後に上流が消えても、同じ id に二重に応答してはならない
-    // (JSON-RPC は 1 リクエスト 1 応答)。
+    // Once an error response to initialize has been returned, that id is no
+    // longer hanging. Even if the upstream disappears afterward, the same id
+    // must not be answered twice (JSON-RPC is one request, one response).
     let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
         "--fail-first-initialize",
         "--exit-after-initialize-error",
@@ -919,40 +946,40 @@ fn an_answered_initialize_is_not_answered_again_when_the_upstream_dies() {
     let first = client.initialize_raw(true);
     assert!(
         first.get("error").is_some(),
-        "偽上流は 1 回目を失敗させるはず"
+        "the fake upstream should fail the first attempt"
     );
     assert!(
         client.expect_no_response_until_closed(),
-        "応答済みの initialize に、上流消失時にもう一度応答した"
+        "answered an already-answered initialize a second time when the upstream disappeared"
     );
 }
 
 #[test]
 fn an_upstream_that_dies_before_answering_initialize_does_not_hang_the_client() {
-    // 起動時クラッシュ。仕様 8.2 の 7: 未応答のリクエストにエラーを応答して
-    // から接続を閉じる。
+    // Crash at startup. Spec 8.2 item 7: answer any unanswered request with
+    // an error before closing the connection.
     let server =
         ServerUnderTest::lsp_det_with_fake_upstream_flags(&["--exit-before-initialize-result"]);
     let mut client = ConformanceClient::start(&server);
 
-    // 宙に浮いた initialize をエラーで閉じる。沈黙して EOF だけ返すと
-    // クライアントは応答を永久に待つ。
+    // Close the hanging initialize with an error. If it went silent and only
+    // returned EOF, the client would wait for the response forever.
     let response = client.initialize_raw(true);
     assert!(
         response.get("error").is_some(),
-        "上流が initialize に答えず消えたのに、エラーも返らなかった: {response}"
+        "the upstream disappeared without answering initialize, but no error was returned either: {response}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// 実サーバー結合（ローカル専用。CI に入れない — v0.1-design.md 6 章）
+// Real server integration (local only. Not part of CI — v0.1-design.md chapter 6)
 // ---------------------------------------------------------------------------
 
-/// 負の対照。生の rust-analyzer は本プロトコルを実装していないので、スイートは
-/// これを非準拠と判定しなければならない。全部通るスイートは何も測っていない
-/// のと同じなので、「落ちるべきものが落ちる」ことを確かめておく。
+/// Negative control. Plain rust-analyzer does not implement this protocol,
+/// so the suite must judge it non-conforming. A suite that always passes
+/// measures nothing, so this confirms that "what should fail, fails".
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn a_server_without_the_extension_is_detected_as_non_conforming() {
     let server = ServerUnderTest {
         program: "rust-analyzer".into(),
@@ -964,18 +991,18 @@ fn a_server_without_the_extension_is_detected_as_non_conforming() {
 
     assert!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null(),
-        "生の rust-analyzer が serverStateProvider を宣言している。上流が実装したか、\
-         被験者の取り違えである: {result}"
+        "plain rust-analyzer declares serverStateProvider. Either the upstream implemented it, \
+         or the wrong subject is under test: {result}"
     );
 }
 
-/// 7.2 網羅（coverage）。実サーバーに対してのみ意味を持つ要件。
+/// 7.2 coverage. A requirement that only makes sense against a real server.
 ///
-/// `ready` を名乗った時点で、横断問い合わせが不完全（クロスファイルの
-/// 利用箇所を取りこぼす）であってはならない。インデックス未完了の空応答こそ
-/// 本プロジェクトが消そうとしている「無言の嘘」そのもの。
+/// Once it has declared `ready`, a cross-workspace query must not be
+/// incomplete (missing a cross-file usage site). An empty response from an
+/// incomplete index is exactly the "silent lie" this project sets out to eliminate.
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn spec_7_2_coverage_through_lsp_det_with_real_rust_analyzer() {
     let project = support::TempCargoProject::with_cross_file_reference("coverage");
     let a = project.file("a.rs");
@@ -987,26 +1014,27 @@ fn spec_7_2_coverage_through_lsp_det_with_real_rust_analyzer() {
     client.did_open(&a, "rust");
     client.did_open(&b, "rust");
 
-    // 事前に分かっている完全な結果: b.rs の 4 行目（0 起点で 3）の呼び出し。
+    // The known-complete result ahead of time: the call on line 4 of b.rs (line 3, 0-indexed).
     let found = references_in(&mut client, &a, &b);
     assert!(
         found
             .iter()
             .any(|location| location["range"]["start"]["line"] == 3),
-        "ready を名乗りながら b.rs の呼び出しを取りこぼした（完全性違反）: {found:#?}"
+        "missed the call in b.rs while declaring ready (completeness violation): {found:#?}"
     );
 
     client.shutdown();
 }
 
-/// 7.3 鮮度（freshness）。実サーバーに対してのみ意味を持つ要件。
+/// 7.3 freshness. A requirement that only makes sense against a real server.
 ///
-/// 仕様 7.3 が要求するとおり**クロスファイル**で測る。ファイル B を変更し、
-/// 別ファイル A のシンボルを起点にした横断問い合わせが B の変更を反映して
-/// いるかを見る。同一ファイル内で測ると LSP の処理順序保証だけで通ってしまい、
-/// 鮮度を何も検証しない（仕様 6 章 2 項）。
+/// This measures **across files**, as spec 7.3 requires. File B is changed,
+/// and we check whether a cross-workspace query rooted at a symbol in a
+/// separate file A reflects B's change. Measuring within a single file would
+/// pass on LSP's processing-order guarantee alone and verify nothing about
+/// freshness (spec chapter 6 item 2).
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn spec_7_3_cross_file_freshness_through_lsp_det_with_real_rust_analyzer() {
     let project = support::TempCargoProject::with_cross_file_reference("freshness");
     let a = project.file("a.rs");
@@ -1019,42 +1047,43 @@ fn spec_7_3_cross_file_freshness_through_lsp_det_with_real_rust_analyzer() {
     client.did_open(&a, "rust");
     client.did_open(&b, "rust");
 
-    // 前提: b.rs から a.rs の target への参照が見えている。
-    // 件数は数え方（`use` を参照に含めるか）に依存するので、
-    // 「b.rs を指す参照があるか」だけを見る。
+    // Precondition: a reference from b.rs to the target in a.rs is visible.
+    // The count depends on how it is counted (whether `use` counts as a
+    // reference), so this only checks "is there a reference pointing at b.rs".
     let before = references_in(&mut client, &a, &b);
     assert!(
         !before.is_empty(),
-        "前提が崩れている。b.rs からの参照が見えるはず"
+        "the premise is broken: a reference from b.rs should be visible"
     );
 
-    // B から呼び出しを消す。これが仕様 6.2 が対象とする didChange。
+    // Remove the call from B. This is the didChange that spec 6.2 covers.
     client.did_change(&b, 2, support::B_WITHOUT_CALL);
 
-    // ready のまま問い合わせる。ready なら織り込み済みでなければならない。
+    // Query while still ready. If it is ready, the change must already be incorporated.
     let state = client.server_state();
     assert_eq!(
         state.readiness,
         Readiness::Ready,
-        "この時点で ready でなくなるなら freshness ではなく readiness の問題"
+        "if it is no longer ready at this point, that is a readiness problem, not a freshness one"
     );
 
     let after = references_in(&mut client, &a, &b);
     assert!(
         after.is_empty(),
-        "ready を名乗りながら、消したはずの参照を返した（鮮度違反）: {after:#?}"
+        "returned a reference that should have been removed while declaring ready (freshness violation): {after:#?}"
     );
 
     client.shutdown();
 }
 
 // ---------------------------------------------------------------------------
-// typescript-language-server の写像 (ADR 0010 決定 B の M6、設計 5.3)
+// The typescript-language-server mapping (ADR 0010 decision B's M6, design 5.3)
 //
-// serverInfo を返さず readiness の語彙も持たない。上流側は固有の通知
-// `$/typescriptVersion` で写像を選び、"Initializing JS/TS language features…"
-// の $/progress から readiness を、"[tsserver] Exited. Code:" のログから
-// health を合成する。
+// It returns no serverInfo and has no vocabulary for readiness either. The
+// upstream side chooses the mapping from the specific `$/typescriptVersion`
+// notification, and synthesizes readiness from the $/progress of
+// "Initializing JS/TS language features…" and health from the
+// "[tsserver] Exited. Code:" log.
 // ---------------------------------------------------------------------------
 
 fn tsls_client(declare_server_state: bool) -> (ConformanceClient, Value) {
@@ -1066,13 +1095,15 @@ fn tsls_client(declare_server_state: bool) -> (ConformanceClient, Value) {
 
 #[test]
 fn typescript_language_server_is_identified_by_its_typescript_version_notification() {
-    // 名乗りは initialize 応答の後に届く。写像はその時点で選ばれ、開始状態にいる。
+    // What the server calls itself arrives after the initialize response.
+    // The mapping is chosen at that point, and it is in the starting state.
     let (mut client, result) = tsls_client(true);
     assert!(
         result["result"]["serverInfo"].is_null(),
-        "前提が崩れている。偽 typescript-language-server は serverInfo を返さないはず: {result}"
+        "the premise is broken: the fake typescript-language-server should not return serverInfo: {result}"
     );
-    // 名乗りは応答の後なので、届くまで待つ (最初の状態問い合わせの前に届く)。
+    // What the server calls itself arrives after the response, so wait for it
+    // (it arrives before the first state query).
     client.make_upstream_begin_project_load("1");
     assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
     client.shutdown();
@@ -1080,24 +1111,25 @@ fn typescript_language_server_is_identified_by_its_typescript_version_notificati
 
 #[test]
 fn typescript_language_server_is_identified_by_its_startup_log_before_initialize_completes() {
-    // "Using Typescript version …" は initialize 応答より先に届く。応答の時点で
-    // 写像が選ばれ、直後の状態問い合わせが initializing を返す。
+    // "Using Typescript version …" arrives before the initialize response.
+    // The mapping is chosen by the time of the response, and a state query
+    // right afterward returns initializing.
     let (mut client, result) = tsls_client(true);
     assert!(
         !result["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null(),
-        "上流側の宣言がない: {result}"
+        "the upstream side has no declaration: {result}"
     );
     assert_eq!(
         client.server_state().readiness,
         Readiness::Initializing,
-        "応答の時点で写像が選ばれていない"
+        "the mapping was not chosen by the time of the response"
     );
     client.shutdown();
 }
 
 #[test]
 fn typescript_language_server_is_identified_by_the_version_notification_alone() {
-    // 起動ログが (設定で) 出なくても、$/typescriptVersion だけで選べる。
+    // Even without a startup log (by configuration), the mapping can be chosen from $/typescriptVersion alone.
     let server = ServerUnderTest::lsp_det_with_upstream_flags(
         "none",
         &["--startup-typescript-version", "5.9.3"],
@@ -1111,8 +1143,9 @@ fn typescript_language_server_is_identified_by_the_version_notification_alone() 
 
 #[test]
 fn typescript_language_server_is_identified_even_when_the_client_declares_progress() {
-    // クライアントが window.workDoneProgress を宣言していると、上流側は
-    // handshake 後の覗き見を省く経路に入る。写像が未選択の間は省いてはならない。
+    // When the client declares window.workDoneProgress, the upstream side
+    // takes a path that skips peeking after the handshake. It must not skip
+    // that while the mapping is still unchosen.
     let server = ServerUnderTest::lsp_det_with_fake_typescript_language_server();
     let mut client = ConformanceClient::start(&server);
     client.initialize_with_capabilities(json!({
@@ -1140,20 +1173,21 @@ fn typescript_language_server_spec_8_2_5_declares_no_guarantees_for_an_untested_
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({}),
-        "測っていない保証を宣言した: {result}"
+        "declared an unmeasured guarantee: {result}"
     );
     client.shutdown();
 }
 
 #[test]
 fn typescript_language_server_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
-    // 7.2 / 7.3 を実サーバー (TypeScript 5.9.3) に当てて通した。版は起動ログから
-    // 読むので initialize 応答に間に合う。
+    // 7.2 / 7.3 were run against the real server (TypeScript 5.9.3) and
+    // passed. The version is read from the startup log, so it is available
+    // in time for the initialize response.
     let (mut client, result) = tsls_client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
-        "測った版に保証を宣言していない: {result}"
+        "did not declare a guarantee for a measured version: {result}"
     );
     client.shutdown();
 }
@@ -1166,13 +1200,17 @@ fn typescript_language_server_spec_7_1_2_becomes_ready_when_the_project_load_end
     client.make_upstream_end_project_load("1");
     let state = client.await_state_changed();
     assert_eq!(state.readiness, Readiness::Ready);
-    assert_eq!(state.health, Health::Ok, "ロードの成功で health は ok");
+    assert_eq!(
+        state.health,
+        Health::Ok,
+        "health is ok when the load succeeds"
+    );
     client.shutdown();
 }
 
 #[test]
 fn typescript_language_server_spec_7_1_3_rearms_on_the_next_project_load() {
-    // 2 つ目のプロジェクト (または tsconfig の変更) で再発行される。
+    // Re-emitted for a second project (or a tsconfig change).
     let (mut client, _) = tsls_client(true);
     client.make_upstream_begin_project_load("1");
     client.await_state_changed();
@@ -1205,7 +1243,7 @@ fn typescript_language_server_spec_7_1_4_reports_a_tsserver_exit_as_health_error
             .message
             .as_deref()
             .is_some_and(|m| m.contains("Exited. Code: null")),
-        "失敗の message を添える: {state:?}"
+        "attaches the failure message: {state:?}"
     );
     client.shutdown();
 }
@@ -1224,19 +1262,19 @@ fn typescript_language_server_ignores_unrelated_progress_and_logs() {
     );
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "無関係なメッセージで状態が動いた"
+        "state moved because of an unrelated message"
     );
     assert_eq!(client.server_state().readiness, Readiness::Initializing);
     client.shutdown();
 }
 
 // ---------------------------------------------------------------------------
-// 実 pyright / basedpyright 結合（ローカル専用。CI に入れない — v0.1-design.md 6 章）
+// Real pyright / basedpyright integration (local only. Not part of CI — v0.1-design.md chapter 6)
 //
-// pyright-langserver と basedpyright-langserver が PATH にあること (flake.nix)。
+// Requires pyright-langserver and basedpyright-langserver on PATH (flake.nix).
 // ---------------------------------------------------------------------------
 
-/// lsp-det 経由で実 pyright を起動する被験者。
+/// A subject that launches real pyright via lsp-det.
 fn real_pyright(project: &support::TempPyProject, command: &str) -> ServerUnderTest {
     ServerUnderTest {
         program: support::lsp_det_binary(),
@@ -1245,7 +1283,7 @@ fn real_pyright(project: &support::TempPyProject, command: &str) -> ServerUnderT
     }
 }
 
-/// `a.py` の `target` への参照のうち、`file` を指すものだけを返す。
+/// Returns only the references to `target` in `a.py` that point at `file`.
 fn py_references_in(
     client: &mut ConformanceClient,
     a: &std::path::Path,
@@ -1259,40 +1297,40 @@ fn py_references_in(
         .collect()
 }
 
-/// pyright 経由。起動ログで写像が選ばれ、列挙完了で ready になる (ADR 0011)。
+/// Via pyright. The mapping is chosen from the startup log, and it becomes ready when enumeration completes (ADR 0011).
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn pyright_spec_7_1_through_lsp_det_with_real_pyright() {
     let project = support::TempPyProject::with_cross_file_reference("readiness");
     let mut client = ConformanceClient::start(&real_pyright(&project, "pyright-langserver"));
     let result = client.initialize_with_root(true, &project.root);
     assert!(
         result["result"]["serverInfo"].is_null(),
-        "前提が崩れている。pyright が serverInfo を返すようになった: {result}"
+        "the premise is broken: pyright started returning serverInfo: {result}"
     );
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
-        "測った版の実 pyright に保証が宣言されていない: {result}"
+        "no guarantee is declared for the measured version of real pyright: {result}"
     );
     let state = client.server_state();
     assert_ne!(
         state.readiness,
         Readiness::Unknown,
-        "起動ログで写像が選ばれていない"
+        "the mapping was not chosen from the startup log"
     );
     client.wait_until_ready();
     assert_eq!(
         client.server_state().health,
         Health::Unknown,
-        "pyright に health の信号はない"
+        "pyright has no signal for health"
     );
     client.shutdown();
 }
 
-/// basedpyright 経由。serverInfo で同じ写像が選ばれる。
+/// Via basedpyright. The same mapping is chosen from serverInfo.
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn pyright_spec_7_1_through_lsp_det_with_real_basedpyright() {
     let project = support::TempPyProject::with_cross_file_reference("based");
     let mut client = ConformanceClient::start(&real_pyright(&project, "basedpyright-langserver"));
@@ -1304,23 +1342,23 @@ fn pyright_spec_7_1_through_lsp_det_with_real_basedpyright() {
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
-        "測った版の実 basedpyright に保証が宣言されていない: {result}"
+        "no guarantee is declared for the measured version of real basedpyright: {result}"
     );
     assert_ne!(client.server_state().readiness, Readiness::Unknown);
     client.wait_until_ready();
     client.shutdown();
 }
 
-/// 7.2 完全性を実 pyright で測る。宣言の根拠。
+/// Measures 7.2 completeness against real pyright. The basis for the declaration.
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn pyright_spec_7_2_coverage_through_lsp_det_with_real_pyright() {
     py_coverage_with("pyright-langserver", "coverage");
 }
 
-/// 7.2 完全性を実 basedpyright で測る。宣言の根拠。
+/// Measures 7.2 completeness against real basedpyright. The basis for the declaration.
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn pyright_spec_7_2_coverage_through_lsp_det_with_real_basedpyright() {
     py_coverage_with("basedpyright-langserver", "based-coverage");
 }
@@ -1340,21 +1378,21 @@ fn py_coverage_with(command: &str, tag: &str) {
         found
             .iter()
             .any(|location| location["range"]["start"]["line"] == 4),
-        "ready を名乗りながら b.py の呼び出しを取りこぼした (完全性違反): {found:#?}"
+        "missed the call in b.py while declaring ready (completeness violation): {found:#?}"
     );
     client.shutdown();
 }
 
-/// 7.3 鮮度を実 pyright で測る (クロスファイル)。宣言の根拠。
+/// Measures 7.3 freshness against real pyright (cross-file). The basis for the declaration.
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn pyright_spec_7_3_cross_file_freshness_through_lsp_det_with_real_pyright() {
     py_freshness_with("pyright-langserver", "freshness");
 }
 
-/// 7.3 鮮度を実 basedpyright で測る。宣言の根拠。
+/// Measures 7.3 freshness against real basedpyright. The basis for the declaration.
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn pyright_spec_7_3_cross_file_freshness_through_lsp_det_with_real_basedpyright() {
     py_freshness_with("basedpyright-langserver", "based-freshness");
 }
@@ -1373,7 +1411,7 @@ fn py_freshness_with(command: &str, tag: &str) {
     let before = py_references_in(&mut client, &a, &b);
     assert!(
         !before.is_empty(),
-        "前提が崩れている。b.py からの参照が見えるはず"
+        "the premise is broken: a reference from b.py should be visible"
     );
 
     client.did_change(&b, 2, support::PY_B_WITHOUT_CALL);
@@ -1382,18 +1420,18 @@ fn py_freshness_with(command: &str, tag: &str) {
     let after = py_references_in(&mut client, &a, &b);
     assert!(
         after.is_empty(),
-        "ready を名乗りながら、消したはずの参照を返した (鮮度違反): {after:#?}"
+        "returned a reference that should have been removed while declaring ready (freshness violation): {after:#?}"
     );
     client.shutdown();
 }
 
 // ---------------------------------------------------------------------------
-// 実 typescript-language-server 結合（ローカル専用。CI に入れない — v0.1-design.md 6 章）
+// Real typescript-language-server integration (local only. Not part of CI — v0.1-design.md chapter 6)
 //
-// typescript-language-server と tsserver (typescript) が PATH にあること (flake.nix)。
+// Requires typescript-language-server and tsserver (typescript) on PATH (flake.nix).
 // ---------------------------------------------------------------------------
 
-/// lsp-det 経由で実 typescript-language-server を起動する被験者。
+/// A subject that launches real typescript-language-server via lsp-det.
 fn real_tsls(project: &support::TempTsProject) -> ServerUnderTest {
     ServerUnderTest {
         program: support::lsp_det_binary(),
@@ -1406,7 +1444,7 @@ fn real_tsls(project: &support::TempTsProject) -> ServerUnderTest {
     }
 }
 
-/// `a.ts` の `target` への参照のうち、`file` を指すものだけを返す。
+/// Returns only the references to `target` in `a.ts` that point at `file`.
 fn ts_references_in(
     client: &mut ConformanceClient,
     a: &std::path::Path,
@@ -1420,21 +1458,21 @@ fn ts_references_in(
         .collect()
 }
 
-/// ファイルを開くとプロジェクトがロードされ、initializing → indexing → ready と進む。
+/// Opening a file loads the project, progressing initializing -> indexing -> ready.
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn typescript_language_server_spec_7_1_through_lsp_det_with_real_server() {
     let project = support::TempTsProject::with_cross_file_reference("readiness");
     let mut client = ConformanceClient::start(&real_tsls(&project));
     let result = client.initialize_with_root(true, &project.root);
     assert!(
         result["result"]["serverInfo"].is_null(),
-        "前提が崩れている。typescript-language-server が serverInfo を返すようになった: {result}"
+        "the premise is broken: typescript-language-server started returning serverInfo: {result}"
     );
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
-        "測った版の実サーバーに保証が宣言されていない: {result}"
+        "no guarantee is declared for the measured version of the real server: {result}"
     );
     client.did_open(&project.file("a.ts"), "typescript");
     client.wait_until_ready();
@@ -1442,9 +1480,9 @@ fn typescript_language_server_spec_7_1_through_lsp_det_with_real_server() {
     client.shutdown();
 }
 
-/// 7.2 完全性。宣言の根拠。
+/// 7.2 completeness. The basis for the declaration.
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn typescript_language_server_spec_7_2_coverage_through_lsp_det_with_real_server() {
     let project = support::TempTsProject::with_cross_file_reference("coverage");
     let a = project.file("a.ts");
@@ -1460,14 +1498,14 @@ fn typescript_language_server_spec_7_2_coverage_through_lsp_det_with_real_server
         found
             .iter()
             .any(|location| location["range"]["start"]["line"] == 3),
-        "ready を名乗りながら b.ts の呼び出しを取りこぼした (完全性違反): {found:#?}"
+        "missed the call in b.ts while declaring ready (completeness violation): {found:#?}"
     );
     client.shutdown();
 }
 
-/// 7.3 鮮度 (クロスファイル)。宣言の根拠。仕様 10 章の見込みは「freshness 不可」。
+/// 7.3 freshness (cross-file). The basis for the declaration. Spec chapter 10's expectation is "freshness not possible".
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn typescript_language_server_spec_7_3_cross_file_freshness_through_lsp_det_with_real_server() {
     let project = support::TempTsProject::with_cross_file_reference("freshness");
     let a = project.file("a.ts");
@@ -1482,7 +1520,7 @@ fn typescript_language_server_spec_7_3_cross_file_freshness_through_lsp_det_with
     let before = ts_references_in(&mut client, &a, &b);
     assert!(
         !before.is_empty(),
-        "前提が崩れている。b.ts からの参照が見えるはず"
+        "the premise is broken: a reference from b.ts should be visible"
     );
 
     client.did_change(&b, 2, support::TS_B_WITHOUT_CALL);
@@ -1491,14 +1529,14 @@ fn typescript_language_server_spec_7_3_cross_file_freshness_through_lsp_det_with
     let after = ts_references_in(&mut client, &a, &b);
     assert!(
         after.is_empty(),
-        "ready を名乗りながら、消したはずの参照を返した (鮮度違反): {after:#?}"
+        "returned a reference that should have been removed while declaring ready (freshness violation): {after:#?}"
     );
     client.shutdown();
 }
 
-/// tsconfig の変更でロードが再発行され、indexing を経て ready に戻る。
+/// A tsconfig change re-triggers the load, going through indexing and back to ready.
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn typescript_language_server_rearms_on_tsconfig_change_with_real_server() {
     let project = support::TempTsProject::with_cross_file_reference("tsconfig");
     let mut client = ConformanceClient::start(&real_tsls(&project));
@@ -1518,15 +1556,18 @@ fn typescript_language_server_rearms_on_tsconfig_change_with_real_server() {
     );
     let observed = client
         .await_notification_within("experimental/serverStateChanged", Duration::from_secs(8))
-        .expect("tsconfig の変更で readiness が動かない (ソースの読みと違う)");
+        .expect(
+            "readiness did not move on the tsconfig change (contradicts our reading of the source)",
+        );
     assert_eq!(observed["readiness"], json!("indexing"));
     client.wait_until_ready();
     client.shutdown();
 }
 
-/// `experimental/serverState` を問い合わせ続けて条件を満たす状態を返す。
-/// 通知を受け取らないクライアント (宣言なし) 用。上限は実サーバーの起動と
-/// ロードを十分に覆う値で、被験者の判定には使わない。
+/// Keeps polling `experimental/serverState` and returns the state once it
+/// satisfies the condition. For a client that does not receive
+/// notifications (no declaration). The cap is a value generous enough to
+/// cover a real server's startup and loading; it is not used to judge the subject.
 fn poll_state_until(
     client: &mut ConformanceClient,
     done: impl Fn(&lsp_det::state::ServerState) -> bool,
@@ -1539,29 +1580,34 @@ fn poll_state_until(
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "20 秒待っても条件を満たさない: {state:?}"
+            "the condition is still not satisfied after waiting 20 seconds: {state:?}"
         );
         std::thread::sleep(Duration::from_millis(50));
     }
 }
 
-/// tsserver を落とすと、言語サーバーは生き残って空応答を返す。上流側は
-/// "[tsserver] Exited. Code:" のログで error にし、下流側は references を拒否する。
+/// Killing tsserver leaves the language server alive returning empty
+/// responses. The upstream side sets error from the "[tsserver] Exited. Code:"
+/// log, and the downstream side rejects references.
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn typescript_language_server_tsserver_crash_becomes_health_error_with_real_server() {
-    // 下流側が代行するのは、本プロトコルを宣言しないクライアントに対して
-    // (ADR 0002 決定 3)。宣言しないので通知は来ず、状態は問い合わせで追う。
+    // The downstream side stands in only for a client that does not declare
+    // this protocol (ADR 0002 decision 3). Since it does not declare, no
+    // notification arrives, so the state is tracked by querying.
     let project = support::TempTsProject::with_cross_file_reference("crash");
     let a = project.file("a.ts");
     let mut client = ConformanceClient::start(&real_tsls(&project));
     client.initialize_with_root(false, &project.root);
     client.did_open(&a, "typescript");
     let state = poll_state_until(&mut client, |s| s.readiness == Readiness::Ready);
-    assert_eq!(state.health, Health::Ok, "前提が崩れている: {state:?}");
+    assert_eq!(state.health, Health::Ok, "the premise is broken: {state:?}");
 
     let killed = support::kill_descendants_matching(client.server_pid(), "tsserver");
-    assert!(!killed.is_empty(), "tsserver の孫プロセスが見つからない");
+    assert!(
+        !killed.is_empty(),
+        "the tsserver grandchild process was not found"
+    );
 
     let state = poll_state_until(&mut client, |s| s.health == Health::Error);
     assert!(
@@ -1569,7 +1615,7 @@ fn typescript_language_server_tsserver_crash_becomes_health_error_with_real_serv
             .message
             .as_deref()
             .is_some_and(|m| m.contains("Exited. Code:")),
-        "クラッシュの理由を添えていない: {state:?}"
+        "the reason for the crash is not attached: {state:?}"
     );
 
     let id = client.send_request(
@@ -1583,18 +1629,18 @@ fn typescript_language_server_tsserver_crash_becomes_health_error_with_real_serv
     let response = client.await_response_to(id);
     assert!(
         !response["error"].is_null(),
-        "壊れたサーバーの成功風応答をそのまま流した: {response}"
+        "forwarded a broken server's success-looking response unchanged: {response}"
     );
     client.shutdown();
 }
 
 // ---------------------------------------------------------------------------
-// 実 gopls 結合（ローカル専用。CI に入れない — v0.1-design.md 6 章）
+// Real gopls integration (local only. Not part of CI — v0.1-design.md chapter 6)
 //
-// gopls と go ツールチェーンが PATH にあること。
+// Requires gopls and the go toolchain on PATH.
 // ---------------------------------------------------------------------------
 
-/// lsp-det 経由で実 gopls を起動する被験者。
+/// A subject that launches real gopls via lsp-det.
 fn real_gopls(project: &support::TempGoProject) -> ServerUnderTest {
     ServerUnderTest {
         program: support::lsp_det_binary(),
@@ -1603,9 +1649,9 @@ fn real_gopls(project: &support::TempGoProject) -> ServerUnderTest {
     }
 }
 
-/// gopls 経由。initializing から ready への遷移を見る (設計 5.2 の写像)。
+/// Via gopls. Observes the transition from initializing to ready (the mapping in design 5.2).
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn gopls_spec_7_1_through_lsp_det_with_real_gopls() {
     let project = support::TempGoProject::with_cross_file_reference("readiness");
     let mut client = ConformanceClient::start(&real_gopls(&project));
@@ -1613,7 +1659,7 @@ fn gopls_spec_7_1_through_lsp_det_with_real_gopls() {
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"coverage": {"scope": "workspace", "incomplete": {"workspace/symbol": 100}}, "freshness": {"fileChanges": ["Created", "Changed", "Deleted"]}}),
-        "測った版の実 gopls に保証が宣言されていない: {result}"
+        "no guarantee is declared for the measured version of real gopls: {result}"
     );
     assert_ne!(client.server_state().readiness, Readiness::Ready);
     client.wait_until_ready();
@@ -1621,9 +1667,9 @@ fn gopls_spec_7_1_through_lsp_det_with_real_gopls() {
     client.shutdown();
 }
 
-/// 7.2 完全性を実 gopls で測る。宣言の根拠 (設計 5.2)。
+/// Measures 7.2 completeness against real gopls. The basis for the declaration (design 5.2).
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn gopls_spec_7_2_coverage_through_lsp_det_with_real_gopls() {
     let project = support::TempGoProject::with_cross_file_reference("coverage");
     let a = project.file("a.go");
@@ -1640,14 +1686,14 @@ fn gopls_spec_7_2_coverage_through_lsp_det_with_real_gopls() {
         found
             .iter()
             .any(|location| location["range"]["start"]["line"] == 3),
-        "ready を名乗りながら b.go の呼び出しを取りこぼした (完全性違反): {found:#?}"
+        "missed the call in b.go while declaring ready (completeness violation): {found:#?}"
     );
     client.shutdown();
 }
 
-/// 7.3 鮮度を実 gopls で測る (クロスファイル)。宣言の根拠 (設計 5.2)。
+/// Measures 7.3 freshness against real gopls (cross-file). The basis for the declaration (design 5.2).
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn gopls_spec_7_3_cross_file_freshness_through_lsp_det_with_real_gopls() {
     let project = support::TempGoProject::with_cross_file_reference("freshness");
     let a = project.file("a.go");
@@ -1662,7 +1708,7 @@ fn gopls_spec_7_3_cross_file_freshness_through_lsp_det_with_real_gopls() {
     let before = go_references_in(&mut client, &a, &b);
     assert!(
         !before.is_empty(),
-        "前提が崩れている。b.go からの参照が見えるはず"
+        "the premise is broken: a reference from b.go should be visible"
     );
 
     client.did_change(&b, 2, support::GO_B_WITHOUT_CALL);
@@ -1671,24 +1717,24 @@ fn gopls_spec_7_3_cross_file_freshness_through_lsp_det_with_real_gopls() {
     let after = go_references_in(&mut client, &a, &b);
     assert!(
         after.is_empty(),
-        "ready を名乗りながら、消したはずの参照を返した (鮮度違反): {after:#?}"
+        "returned a reference that should have been removed while declaring ready (freshness violation): {after:#?}"
     );
     client.shutdown();
 }
 
-/// go.mod の変更で "Setting up workspace" が再発行されるか (設計 5.2 の実測)。
+/// Whether a go.mod change re-emits "Setting up workspace" (measured for design 5.2).
 ///
-/// gopls のソースでは再発行は didChangeWorkspaceFolders のときだけで、go.mod の
-/// 変更では出ない。ここではその読みを実サーバーで確かめる。
+/// In gopls's source, re-emission only happens on didChangeWorkspaceFolders,
+/// not on a go.mod change. This confirms that reading against a real server.
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn gopls_does_not_reemit_workspace_setup_on_go_mod_change() {
     let project = support::TempGoProject::with_cross_file_reference("gomod");
     let mut client = ConformanceClient::start(&real_gopls(&project));
     client.initialize_with_root(true, &project.root);
     client.wait_until_ready();
 
-    // go.mod をディスク上で変える (Claude Code の編集はディスク書き込み)。
+    // Change go.mod on disk (an edit by Claude Code is a disk write).
     let go_mod = project.file("go.mod");
     std::fs::write(&go_mod, "module fixture\n\ngo 1.21\n\n// touched\n").unwrap();
     client.notify(
@@ -1700,13 +1746,13 @@ fn gopls_does_not_reemit_workspace_setup_on_go_mod_change() {
         client.await_notification_within("experimental/serverStateChanged", Duration::from_secs(8));
     assert!(
         observed.is_none(),
-        "go.mod の変更で readiness が動いた (ソースの読みと違う): {observed:?}"
+        "readiness moved on the go.mod change (contradicts our reading of the source): {observed:?}"
     );
     assert_eq!(client.server_state().readiness, Readiness::Ready);
     client.shutdown();
 }
 
-/// `a.go` の `Target` への参照のうち、`file` を指すものだけを返す。
+/// Returns only the references to `Target` in `a.go` that point at `file`.
 fn go_references_in(
     client: &mut ConformanceClient,
     a: &std::path::Path,
@@ -1720,7 +1766,7 @@ fn go_references_in(
         .collect()
 }
 
-/// lsp-det 経由で実 rust-analyzer を起動する被験者。
+/// A subject that launches real rust-analyzer via lsp-det.
 fn real_rust_analyzer(project: &support::TempCargoProject) -> ServerUnderTest {
     ServerUnderTest {
         program: support::lsp_det_binary(),
@@ -1729,7 +1775,7 @@ fn real_rust_analyzer(project: &support::TempCargoProject) -> ServerUnderTest {
     }
 }
 
-/// `a` 内のシンボル `target` への参照のうち、`file` を指すものだけを返す。
+/// Returns only the references to symbol `target` in `a` that point at `file`.
 fn references_in(
     client: &mut ConformanceClient,
     a: &std::path::Path,
@@ -1743,9 +1789,9 @@ fn references_in(
         .collect()
 }
 
-/// lsp-det 経由の実 rust-analyzer。initializing から ready への遷移を見る。
+/// Real rust-analyzer via lsp-det. Observes the transition from initializing to ready.
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn spec_7_1_through_lsp_det_with_real_rust_analyzer() {
     let server = ServerUnderTest {
         program: support::lsp_det_binary(),
@@ -1756,23 +1802,25 @@ fn spec_7_1_through_lsp_det_with_real_rust_analyzer() {
     let result = client.initialize(true);
     assert!(!result["result"]["capabilities"]["experimental"]["serverStateProvider"].is_null());
 
-    // 7.1 の 1: initialize 直後は ready ではない。
+    // 7.1 item 1: it is not ready right after initialize.
     assert_ne!(client.server_state().readiness, Readiness::Ready);
 
-    // 実サーバーは自分のペースで ready になる。health が壊れたら抜ける。
+    // The real server becomes ready at its own pace. Bails out if health breaks.
     client.wait_until_ready();
     client.shutdown();
 }
 
 // ---------------------------------------------------------------------------
-// 7.3 の 2: ディスク上の変更 (workspace/didChangeWatchedFiles) の鮮度 (ADR 0014)
+// 7.3 item 2: freshness of an on-disk change (workspace/didChangeWatchedFiles) (ADR 0014)
 //
-// 変更するファイル (呼び出し側と新規ファイル) は開かない。開くと didOpen の
-// 経路になり、ディスク上の変更を検証しない。起点は定義側のファイル。
+// The files being changed (the caller and the new file) are not opened.
+// Opening them would take the didOpen path and would not verify an on-disk
+// change. The starting point is the file that defines the symbol.
 // ---------------------------------------------------------------------------
 
-/// 偽上流: 通知で再インデックス (quiescent: false) が始まり、終われば結果に
-/// 変更が織り込まれている。上流側は既存の信号で indexing → ready を伝える。
+/// Fake upstream: the notification starts reindexing (quiescent: false), and
+/// once it finishes, the result incorporates the change. The upstream side
+/// conveys indexing -> ready using its existing signal.
 #[test]
 fn spec_7_3_2_watched_file_changes_are_reflected_after_reindexing_with_a_fake_upstream() {
     let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
@@ -1790,7 +1838,7 @@ fn spec_7_3_2_watched_file_changes_are_reflected_after_reindexing_with_a_fake_up
     assert_eq!(
         client.await_state_changed().readiness,
         Readiness::Indexing,
-        "通知で始まった再インデックスが indexing として伝わらない"
+        "reindexing started by the notification is not conveyed as indexing"
     );
     client.make_upstream_emit_status("ok", true);
     assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
@@ -1799,15 +1847,16 @@ fn spec_7_3_2_watched_file_changes_are_reflected_after_reindexing_with_a_fake_up
     assert_eq!(
         after,
         before + 1,
-        "ready の後の応答が通知した変更を織り込んでいない"
+        "the response after ready does not incorporate the notified change"
     );
     client.shutdown();
 }
 
-/// 実サーバー共通の手順。定義側 `def` を開き、呼び出し側 `caller` を開かずに
-/// ディスク上で変え (Changed)、新規ファイル `new_file` を作り (Created)、
-/// 消す (Deleted)。`extra` は同時に Changed で送るファイル (Rust の lib.rs)。
-#[allow(clippy::too_many_arguments)] // 手順の引数をそのまま並べる方が読みやすい
+/// The common procedure across real servers. Opens the defining file `def`,
+/// changes the caller `caller` on disk without opening it (Changed), creates
+/// a new file `new_file` (Created), then deletes it (Deleted). `extra` is a
+/// file sent as Changed at the same time (Rust's lib.rs).
+#[allow(clippy::too_many_arguments)] // it is more readable to list the procedure's arguments as they are
 fn watched_file_changes_are_reflected(
     client: &mut ConformanceClient,
     def: &std::path::Path,
@@ -1822,10 +1871,10 @@ fn watched_file_changes_are_reflected(
     let before = references_in(client, def, caller);
     assert!(
         !before.is_empty(),
-        "前提が崩れている。呼び出し側からの参照が見えるはず"
+        "the premise is broken: a reference from the caller should be visible"
     );
 
-    // Changed: 呼び出しを 1 つ足す。
+    // Changed: add one more call.
     std::fs::write(caller, two_calls).unwrap();
     if client_notifies {
         client.did_change_watched_files(&[(caller, 2)]);
@@ -1835,10 +1884,10 @@ fn watched_file_changes_are_reflected(
     assert_eq!(
         after_change.len(),
         before.len() + 1,
-        "ready を名乗りながら、ディスク上で足した呼び出しを返さない (鮮度違反): {after_change:#?}"
+        "did not return the call added on disk while declaring ready (freshness violation): {after_change:#?}"
     );
 
-    // Created: 新しいファイルからも呼ぶ。
+    // Created: also call from the new file.
     std::fs::write(new_file, new_file_text).unwrap();
     let mut changes = vec![(new_file, 1u8)];
     if let Some((path, text)) = extra {
@@ -1852,10 +1901,10 @@ fn watched_file_changes_are_reflected(
     let in_new_file = references_in(client, def, new_file);
     assert!(
         !in_new_file.is_empty(),
-        "ready を名乗りながら、新しいファイルからの参照を返さない (鮮度違反)"
+        "did not return the reference from the new file while declaring ready (freshness violation)"
     );
 
-    // Deleted: 新しいファイルを消す (7.3 の 4)。Rust は lib.rs も元に戻す。
+    // Deleted: delete the new file (7.3 item 4). For Rust, lib.rs is also restored.
     std::fs::remove_file(new_file).unwrap();
     let mut changes = vec![(new_file, 3u8)];
     if let Some((path, _)) = extra {
@@ -1869,12 +1918,12 @@ fn watched_file_changes_are_reflected(
     let after_delete = references_in(client, def, new_file);
     assert!(
         after_delete.is_empty(),
-        "ready を名乗りながら、消したファイルからの参照を返す (鮮度違反): {after_delete:#?}"
+        "returned a reference from the deleted file while declaring ready (freshness violation): {after_delete:#?}"
     );
 }
 
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn spec_7_3_2_watched_file_changes_through_lsp_det_with_real_rust_analyzer() {
     let project = support::TempCargoProject::with_cross_file_reference("watched");
     let mut client = ConformanceClient::start(&real_rust_analyzer(&project));
@@ -1896,7 +1945,7 @@ fn spec_7_3_2_watched_file_changes_through_lsp_det_with_real_rust_analyzer() {
 }
 
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn gopls_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_gopls() {
     let project = support::TempGoProject::with_cross_file_reference("watched");
     let mut client = ConformanceClient::start(&real_gopls(&project));
@@ -1918,9 +1967,9 @@ fn gopls_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_gopls() {
 }
 
 // ---------------------------------------------------------------------------
-// ADR 0014 追補 決定 D: rust-analyzer の写像は Created / Deleted の通知で
-// indexing を先読みし、quiescent: true で戻す。Changed と監視の対象外の
-// ファイルでは先読みしない。
+// ADR 0014 addendum decision D: the rust-analyzer mapping predicts indexing
+// from a Created / Deleted notification, and reverts on quiescent: true. It
+// does not predict for Changed or for a file outside the watched set.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1935,15 +1984,15 @@ fn rust_analyzer_mapping_predicts_indexing_from_a_created_notification() {
     assert_eq!(
         predicted.readiness,
         Readiness::Indexing,
-        "Created の通知で indexing を先読みしない"
+        "does not predict indexing from a Created notification"
     );
     assert_eq!(
         predicted.health,
         Health::Ok,
-        "先読みは readiness だけを動かす"
+        "the prediction only moves readiness"
     );
 
-    // 上流の完了の信号で戻る。
+    // Reverts on the upstream's completion signal.
     client.make_upstream_emit_status("ok", true);
     assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
     client.shutdown();
@@ -1968,20 +2017,20 @@ fn rust_analyzer_mapping_does_not_predict_for_changed_or_unwatched_files() {
     client.await_state_changed();
 
     let root = support::repo_root();
-    // Changed は信号が来ない (送信中の要求が -32801 で拒まれるだけ)。
+    // Changed produces no signal (an in-flight request is simply refused with -32801).
     client.did_change_watched_files(&[(&root.join("src/b.rs"), 2)]);
-    // 監視の対象でないファイルの Created も信号が来ない。
+    // Created for a file outside the watched set also produces no signal.
     client.did_change_watched_files(&[(&root.join("notes.txt"), 1)]);
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "信号が来ない通知で先読みしてはならない (indexing のまま止まる)"
+        "must not predict for a notification that produces no signal (would stay stuck in indexing)"
     );
     assert_eq!(client.server_state().readiness, Readiness::Ready);
     client.shutdown();
 }
 
 // ---------------------------------------------------------------------------
-// ADR 0016: 宣言は欠けを名指しする。上限は initializationOptions から読む
+// ADR 0016: a declaration names what is missing. The cap is read from initializationOptions
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1995,13 +2044,13 @@ fn rust_analyzer_mapping_reads_the_workspace_symbol_limit_from_initialization_op
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"]["coverage"]["incomplete"],
         json!({"workspace/symbol": 1000}),
-        "クライアントが上げた上限を宣言に反映していない: {result}"
+        "the cap the client raised is not reflected in the declaration: {result}"
     );
     client.shutdown();
 }
 
-/// 7.2 の 2: incomplete に挙げたメソッドは上限の件数を返し、挙げていない
-/// メソッドはすべてを返す。300 個の一致するシンボルを持つ fixture で測る。
+/// 7.2 item 2: a method listed under incomplete returns up to its cap, and a
+/// method not listed returns everything. Measured with a fixture that has 300 matching symbols.
 fn workspace_symbol_count_through(client: &mut ConformanceClient) -> usize {
     let response = client.request("workspace/symbol", json!({"query": "wsymprobe"}));
     response["result"].as_array().map_or(0, |items| {
@@ -2017,7 +2066,7 @@ fn workspace_symbol_count_through(client: &mut ConformanceClient) -> usize {
 }
 
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn spec_7_2_2_rust_analyzer_returns_the_declared_limit_for_workspace_symbol() {
     let project = support::TempCargoProject::with_many_symbols("limit", 300);
     let mut client = ConformanceClient::start(&real_rust_analyzer(&project));
@@ -2031,13 +2080,13 @@ fn spec_7_2_2_rust_analyzer_returns_the_declared_limit_for_workspace_symbol() {
     assert_eq!(
         workspace_symbol_count_through(&mut client),
         128,
-        "宣言した上限と一致しない"
+        "does not match the declared cap"
     );
     client.shutdown();
 }
 
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn spec_7_2_2_gopls_returns_the_declared_limit_for_workspace_symbol() {
     let project = support::TempGoProject::with_many_symbols("limit", 300);
     let mut client = ConformanceClient::start(&real_gopls(&project));
@@ -2051,13 +2100,13 @@ fn spec_7_2_2_gopls_returns_the_declared_limit_for_workspace_symbol() {
     assert_eq!(
         workspace_symbol_count_through(&mut client),
         100,
-        "宣言した上限と一致しない"
+        "does not match the declared cap"
     );
     client.shutdown();
 }
 
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn spec_7_2_2_pyright_returns_every_workspace_symbol() {
     let project = support::TempPyProject::with_many_symbols("limit", 300);
     let mut client = ConformanceClient::start(&real_pyright(&project, "pyright-langserver"));
@@ -2066,13 +2115,13 @@ fn spec_7_2_2_pyright_returns_every_workspace_symbol() {
     assert_eq!(
         workspace_symbol_count_through(&mut client),
         300,
-        "incomplete に挙げていないのに打ち切った"
+        "capped even though it is not listed under incomplete"
     );
     client.shutdown();
 }
 
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn spec_7_2_2_typescript_language_server_returns_every_workspace_symbol() {
     let project = support::TempTsProject::with_many_symbols("limit", 300);
     let mut client = ConformanceClient::start(&real_tsls(&project));
@@ -2082,13 +2131,13 @@ fn spec_7_2_2_typescript_language_server_returns_every_workspace_symbol() {
     assert_eq!(
         workspace_symbol_count_through(&mut client),
         300,
-        "incomplete に挙げていないのに打ち切った"
+        "capped even though it is not listed under incomplete"
     );
     client.shutdown();
 }
 
-/// 7.3 の 2 だけ (fileChanges が ["Changed"] の写像): 呼び出し側をディスク上で
-/// 変えて Changed を送る。Created / Deleted は宣言しないので試さない。
+/// 7.3 item 2 only (for a mapping whose fileChanges is ["Changed"]): changes
+/// the caller on disk and sends Changed. Created / Deleted are not tried since they are not declared.
 fn changed_file_is_reflected(
     client: &mut ConformanceClient,
     def: &std::path::Path,
@@ -2100,7 +2149,7 @@ fn changed_file_is_reflected(
     let before = references_in(client, def, caller);
     assert!(
         !before.is_empty(),
-        "前提が崩れている。呼び出し側からの参照が見えるはず"
+        "the premise is broken: a reference from the caller should be visible"
     );
     std::fs::write(caller, two_calls).unwrap();
     if client_notifies {
@@ -2111,12 +2160,12 @@ fn changed_file_is_reflected(
     assert_eq!(
         after.len(),
         before.len() + 1,
-        "ready を名乗りながら、ディスク上で足した呼び出しを返さない (鮮度違反): {after:#?}"
+        "did not return the call added on disk while declaring ready (freshness violation): {after:#?}"
     );
 }
 
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn pyright_spec_7_3_2_changed_file_through_lsp_det_with_real_pyright() {
     let project = support::TempPyProject::with_cross_file_reference("changed");
     let mut client = ConformanceClient::start(&real_pyright(&project, "pyright-langserver"));
@@ -2135,7 +2184,7 @@ fn pyright_spec_7_3_2_changed_file_through_lsp_det_with_real_pyright() {
 }
 
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn typescript_language_server_spec_7_3_2_changed_file_through_lsp_det_with_real_server() {
     let project = support::TempTsProject::with_cross_file_reference("changed");
     let mut client = ConformanceClient::start(&real_tsls(&project));
@@ -2154,13 +2203,13 @@ fn typescript_language_server_spec_7_3_2_changed_file_through_lsp_det_with_real_
 }
 
 // ---------------------------------------------------------------------------
-// ADR 0015 決定 A: 宣言も送信もしないクライアントに代わって lsp-det が
-// didChangeWatchedFiles を送る。上と同じ手順を、クライアントが通知を送らず
-// fixture を git 管理下に置いて回す。
+// ADR 0015 decision A: lsp-det sends didChangeWatchedFiles standing in for a
+// client that neither declares nor sends it. Runs the same procedure as
+// above, with the client sending no notification and the fixture placed under git.
 // ---------------------------------------------------------------------------
 
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn stand_in_spec_7_3_2_through_lsp_det_with_real_rust_analyzer() {
     let project = support::TempCargoProject::with_cross_file_reference("standin");
     support::git_init(&project.root);
@@ -2183,7 +2232,7 @@ fn stand_in_spec_7_3_2_through_lsp_det_with_real_rust_analyzer() {
 }
 
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn stand_in_spec_7_3_2_through_lsp_det_with_real_gopls() {
     let project = support::TempGoProject::with_cross_file_reference("standin");
     support::git_init(&project.root);
@@ -2206,7 +2255,7 @@ fn stand_in_spec_7_3_2_through_lsp_det_with_real_gopls() {
 }
 
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn stand_in_spec_7_3_2_changed_file_through_lsp_det_with_real_pyright() {
     let project = support::TempPyProject::with_cross_file_reference("standin");
     support::git_init(&project.root);
@@ -2226,7 +2275,7 @@ fn stand_in_spec_7_3_2_changed_file_through_lsp_det_with_real_pyright() {
 }
 
 #[test]
-#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn stand_in_spec_7_3_2_changed_file_through_lsp_det_with_real_server() {
     let project = support::TempTsProject::with_cross_file_reference("standin");
     support::git_init(&project.root);

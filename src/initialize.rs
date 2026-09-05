@@ -1,26 +1,26 @@
-//! `initialize` の capability 注入と `InitializeResult` の読み取り
-//! (v0.1-design.md 4.2)。
+//! Capability injection into `initialize` and reading of `InitializeResult`
+//! (v0.1-design.md 4.2).
 //!
-//! ready 信号はクライアントの capability 宣言に依存する。rust-analyzer は
-//! `experimental.serverStatusNotification` が未宣言だと
-//! `experimental/serverStatus` を一切送らないため、プロキシが上流への
-//! `initialize` に自ら宣言を足す。どの写像を使うかは `InitializeResult` の
-//! `serverInfo` で分かるが、注入はその前に要るので既知の写像ぶんを無条件に
-//! 注入する (ADR 0009 決定 D-3)。
+//! The ready signal depends on the client's capability declaration. rust-analyzer sends no
+//! `experimental/serverStatus` at all unless `experimental.serverStatusNotification` is
+//! declared, so the proxy adds the declaration itself to the `initialize` going upstream.
+//! Which mapping is used is known from `serverInfo` in `InitializeResult`, but the injection
+//! is needed before that, so the declarations for the known mappings are injected
+//! unconditionally (ADR 0009 decision D-3).
 //!
-//! ここはボディを完全パースして再シリアライズする数少ない例外である
-//! (4.4 が `initialize` / `InitializeResult` と写像用の通知にだけ認めている)。
-//! 書き換えが不要なら原文バイトをそのまま使うよう伝える。
+//! This is one of the few exceptions where the body is fully parsed and re-serialized
+//! (4.4 allows it only for `initialize` / `InitializeResult` and the notifications used by
+//! mappings). When no rewrite is needed, the caller is told to use the original bytes as is.
 
 use serde_json::{Map, Value};
 
 use crate::state::ServerStateProvider;
 
-/// クライアントが状態を自分で解釈すると宣言したか (仕様 5.2)。
+/// Whether the client declared that it interprets the state itself (spec 5.2).
 ///
-/// この宣言は「通知が欲しい」と「保護が不要」の両方を意味する。宣言した
-/// クライアントが状態を無視して不完全な結果を得た場合、それはその
-/// クライアントの責任である。
+/// This declaration means both "I want the notifications" and "I need no protection". If a
+/// client that declared it ignores the state and gets an incomplete result, that is the
+/// client's responsibility.
 pub fn client_declares_server_state(body: &[u8]) -> bool {
     let Ok(root) = serde_json::from_slice::<Value>(body) else {
         return false;
@@ -32,11 +32,11 @@ pub fn client_declares_server_state(body: &[u8]) -> bool {
         == Some(&Value::Bool(true))
 }
 
-/// クライアントが `window.workDoneProgress` を自分で宣言していたか。
+/// Whether the client declared `window.workDoneProgress` on its own.
 ///
-/// 宣言していないクライアントは、注入した宣言に由来する
-/// `window/workDoneProgress/create` を扱えない (Serena は `MethodNotFound` を
-/// 返す)。その場合は上流側が自ら応答する (設計 4.2)。
+/// A client that did not declare it cannot handle the `window/workDoneProgress/create` that
+/// results from the injected declaration (Serena returns `MethodNotFound`). In that case the
+/// upstream side responds itself (design 4.2).
 pub fn client_declares_work_done_progress(body: &[u8]) -> bool {
     let Ok(root) = serde_json::from_slice::<Value>(body) else {
         return false;
@@ -48,8 +48,8 @@ pub fn client_declares_work_done_progress(body: &[u8]) -> bool {
         == Some(&Value::Bool(true))
 }
 
-/// クライアントが `workspace.didChangeWatchedFiles` を宣言しているか
-/// (ADR 0015: 宣言していれば下流側は代行しない)。
+/// Whether the client declares `workspace.didChangeWatchedFiles`
+/// (ADR 0015: if it does, the downstream side does not stand in).
 pub fn client_declares_watched_files(body: &[u8]) -> bool {
     let Ok(root) = serde_json::from_slice::<Value>(body) else {
         return false;
@@ -61,8 +61,8 @@ pub fn client_declares_watched_files(body: &[u8]) -> bool {
         .is_some_and(Value::is_object)
 }
 
-/// クライアントの `initialize` が指すワークスペースのルート
-/// (`workspaceFolders`、なければ `rootUri`)。`file:` 以外は含めない。
+/// The workspace roots the client's `initialize` points to
+/// (`workspaceFolders`, or `rootUri` if absent). Anything other than `file:` is excluded.
 pub fn workspace_roots(body: &[u8]) -> Vec<std::path::PathBuf> {
     let Ok(root) = serde_json::from_slice::<Value>(body) else {
         return Vec::new();
@@ -86,15 +86,17 @@ pub fn workspace_roots(body: &[u8]) -> Vec<std::path::PathBuf> {
     roots
 }
 
-/// 上流が `InitializeResult.serverInfo` で名乗った名前と版 (LSP 3.15)。
+/// The name and version the upstream called itself in `InitializeResult.serverInfo`
+/// (LSP 3.15).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerInfo {
     pub name: String,
     pub version: Option<String>,
 }
 
-/// 成功した `initialize` 応答から `serverInfo` を読む。名乗りがなければ
-/// `None` (写像は選べず、上流側は両軸 `unknown` を報告する)。
+/// Reads `serverInfo` from a successful `initialize` response. `None` if the server does not
+/// call itself anything (no mapping can be chosen, and the upstream side reports `unknown` on
+/// both axes).
 pub fn server_info(body: &[u8]) -> Option<ServerInfo> {
     let root = serde_json::from_slice::<Value>(body).ok()?;
     let info = root.get("result")?.get("serverInfo")?;
@@ -106,31 +108,31 @@ pub fn server_info(body: &[u8]) -> Option<ServerInfo> {
     Some(ServerInfo { name, version })
 }
 
-/// 上流の `initialize` 応答をどう扱うか。
+/// What to do with the upstream's `initialize` response.
 #[derive(Debug, PartialEq, Eq)]
 pub enum InitializeResultAction {
-    /// 上流自身が `serverStateProvider` を宣言している。上流側は恒等写像に
-    /// なる (仕様 8.2 の 6)。ボディは原文のまま流す。
+    /// The upstream itself declares `serverStateProvider`. The upstream side becomes the
+    /// identity mapping (spec 8.2 item 6). The body is passed through as the original.
     UpstreamDeclares,
-    /// 中継層の宣言を足した新しいボディ。
+    /// A new body with the relay's declaration added.
     Declared(Vec<u8>),
-    /// `result` はあるが `capabilities` / `experimental` がオブジェクトでなく
-    /// 書き換えられない。原文のまま流す。
+    /// `result` exists but `capabilities` / `experimental` is not an object and cannot be
+    /// rewritten. Passed through as the original.
     Unrewritable,
-    /// 成功応答ではない (エラー応答、または `result` がない)。handshake は
-    /// 完了していないので、クライアントは `initialize` を再試行しうる。
+    /// Not a success response (an error response, or no `result`). The handshake is not
+    /// complete, so the client may retry `initialize`.
     NotASuccess,
 }
 
-/// `InitializeResult` に `experimental.serverStateProvider` を足す。
+/// Adds `experimental.serverStateProvider` to `InitializeResult`.
 ///
-/// 上流が返した capability は一切変えない。中継層は宣言を**足す**だけで、
-/// 上流の宣言を置き換えると上流が本当に持つ機能を隠すことになる。
-/// 上流が既に宣言していれば [`InitializeResultAction::UpstreamDeclares`]。
+/// The capabilities the upstream returned are not changed at all. The relay only **adds** a
+/// declaration; replacing the upstream's declaration would hide features the upstream really
+/// has. If the upstream already declares it, [`InitializeResultAction::UpstreamDeclares`].
 ///
-/// 宣言とみなすのは `true` かオブジェクトだけ (クライアント側の
-/// [`client_declares_server_state`] と対称)。`false` は「提供しない」の
-/// 意味 (`hoverProvider: false` と同じ書き方) なので上書きする。
+/// Only `true` or an object counts as a declaration (symmetric with
+/// [`client_declares_server_state`] on the client side). `false` means "not provided"
+/// (the same notation as `hoverProvider: false`), so it is overwritten.
 pub fn declare_server_state_provider(
     body: &[u8],
     provider: &ServerStateProvider,
@@ -175,15 +177,15 @@ pub fn declare_server_state_provider(
 }
 
 fn is_declaration(value: &Value) -> bool {
-    // 宣言は常にオブジェクト (ADR 0016)。`true` / `false` は宣言ではない。
+    // A declaration is always an object (ADR 0016). `true` / `false` are not declarations.
     matches!(value, Value::Object(_))
 }
 
-/// `initialize` の `params.capabilities` に真偽フラグを足した新しいボディを返す。
-/// 変更が不要・不可能なら `None` (呼び出し側は原文をそのまま転送する)。
+/// Returns a new body with boolean flags added to `params.capabilities` of `initialize`.
+/// `None` if no change is needed or possible (the caller forwards the original as is).
 ///
-/// `paths` は `capabilities` から見たドット区切りのパス
-/// (例: `experimental.serverStatusNotification`)。
+/// `paths` are dot-separated paths relative to `capabilities`
+/// (e.g. `experimental.serverStatusNotification`).
 pub fn inject_client_capabilities(body: &[u8], paths: &[&str]) -> Option<Vec<u8>> {
     if paths.is_empty() {
         return None;
@@ -207,8 +209,8 @@ pub fn inject_client_capabilities(body: &[u8], paths: &[&str]) -> Option<Vec<u8>
     serde_json::to_vec(&root).ok()
 }
 
-/// ドット区切りのパスの葉を `true` にする。値が変わったら `true` を返す。
-/// 経路上に非オブジェクトがあれば何もしない (壊れた宣言を破壊しない)。
+/// Sets the leaf of a dot-separated path to `true`. Returns `true` if the value changed.
+/// Does nothing if there is a non-object on the path (does not destroy a broken declaration).
 fn set_true(capabilities: &mut Map<String, Value>, path: &str) -> bool {
     let Some((parents, leaf)) = path.rsplit_once('.') else {
         return set_leaf_true(capabilities, path);
@@ -247,15 +249,15 @@ mod tests {
             .map(|bytes| serde_json::from_slice(&bytes).expect("rewritten body must be JSON"))
     }
 
-    /// `Declared` の中身を JSON として返す。それ以外なら panic。
+    /// Returns the content of `Declared` as JSON. Panics otherwise.
     fn declared(body: &str, provider: &ServerStateProvider) -> Value {
         match declare_server_state_provider(body.as_bytes(), provider) {
             Declared(bytes) => serde_json::from_slice(&bytes).expect("declared body must be JSON"),
-            other => panic!("宣言を足せるはず: {other:?}"),
+            other => panic!("should be able to add the declaration: {other:?}"),
         }
     }
 
-    // --- クライアント → 上流 ------------------------------------------------
+    // --- Client -> upstream -------------------------------------------------
 
     #[test]
     fn adds_the_flag_when_the_experimental_section_is_absent() {
@@ -305,14 +307,14 @@ mod tests {
 
     #[test]
     fn does_not_rewrite_when_the_client_already_declared_the_flag() {
-        // Serena は宣言済み。原文バイトをそのまま流すため None を返す。
+        // Serena already declares it. Returns None so the original bytes pass through as is.
         let body = r#"{"id":1,"method":"initialize","params":{"capabilities":{"experimental":{"serverStatusNotification":true}}}}"#;
         assert!(inject_client_capabilities(body.as_bytes(), RA).is_none());
     }
 
     #[test]
     fn overrides_an_explicit_false() {
-        // 宣言が false でもプロキシは信号を必要とする。
+        // Even if the declaration is false, the proxy needs the signal.
         let body = r#"{"id":1,"method":"initialize","params":{"capabilities":{"experimental":{"serverStatusNotification":false}}}}"#;
         let out = rewrite(body, RA).expect("false should be overridden");
         assert_eq!(
@@ -344,7 +346,7 @@ mod tests {
 
     #[test]
     fn refuses_to_clobber_a_non_object_on_the_path() {
-        // 壊れたクライアントの宣言でも破壊しない。転送は原文のまま。
+        // Even a broken client declaration is not destroyed. Forwarded as the original.
         let body = r#"{"id":1,"method":"initialize","params":{"capabilities":{"experimental":"nonsense"}}}"#;
         assert!(inject_client_capabilities(body.as_bytes(), RA).is_none());
     }
@@ -362,7 +364,7 @@ mod tests {
 
     #[test]
     fn does_nothing_when_no_paths_are_requested() {
-        // 注入する宣言がなければ原文をそのまま流す。
+        // With no declaration to inject, the original passes through as is.
         let body = r#"{"id":1,"method":"initialize","params":{"capabilities":{}}}"#;
         assert!(inject_client_capabilities(body.as_bytes(), &[]).is_none());
     }
@@ -379,14 +381,14 @@ mod tests {
             r#"{"id":1,"method":"initialize","params":{"capabilities":{}}}"#,
             r#"{"id":1,"method":"initialize","params":{"capabilities":{"experimental":{}}}}"#,
             r#"{"id":1,"method":"initialize","params":{"capabilities":{"experimental":{"serverState":false}}}}"#,
-            // truthy な別の値を宣言とみなさない。
+            // Another truthy value is not counted as a declaration.
             r#"{"id":1,"method":"initialize","params":{"capabilities":{"experimental":{"serverState":{}}}}}"#,
             r#"{"id":1,"method":"initialize"}"#,
             "{not json",
         ] {
             assert!(
                 !client_declares_server_state(body.as_bytes()),
-                "宣言とみなしてはならない: {body}"
+                "must not be counted as a declaration: {body}"
             );
         }
     }
@@ -424,11 +426,15 @@ mod tests {
             r#"{"id":1,"error":{"code":-32603,"message":"boom"}}"#,
             "{not json",
         ] {
-            assert_eq!(server_info(body.as_bytes()), None, "名乗りがない: {body}");
+            assert_eq!(
+                server_info(body.as_bytes()),
+                None,
+                "the server does not call itself anything: {body}"
+            );
         }
     }
 
-    // --- 上流 → クライアント ------------------------------------------------
+    // --- Upstream -> client -------------------------------------------------
 
     #[test]
     fn adds_the_provider_to_an_initialize_result() {
@@ -438,7 +444,7 @@ mod tests {
             out["result"]["capabilities"]["experimental"]["serverStateProvider"],
             serde_json::json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": []}})
         );
-        // 上流の宣言はそのまま残る。
+        // The upstream's declarations remain as they are.
         assert_eq!(
             out["result"]["capabilities"]["hoverProvider"],
             Value::Bool(true)
@@ -474,7 +480,8 @@ mod tests {
 
     #[test]
     fn a_bare_true_is_not_a_declaration() {
-        // 宣言は常にオブジェクト (ADR 0016)。`true` は宣言ではなく、上書きする。
+        // A declaration is always an object (ADR 0016). `true` is not a declaration and is
+        // overwritten.
         let body =
             r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":true}}}}"#;
         let out = declared(body, &ServerStateProvider::notifications_only());
@@ -486,7 +493,8 @@ mod tests {
 
     #[test]
     fn never_overwrites_an_upstream_declaration() {
-        // 上流が本当に持つ保証 (freshness) を保証なしの宣言で隠してはならない。
+        // A guarantee the upstream really has (freshness) must not be hidden by a declaration
+        // without guarantees.
         for body in [
             r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":{"freshness":{"fileChanges":["Changed"]}}}}}}"#,
             r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":{}}}}}"#,
@@ -497,15 +505,15 @@ mod tests {
                     &ServerStateProvider::notifications_only()
                 ),
                 UpstreamDeclares,
-                "上流の宣言として透過すべき: {body}"
+                "should pass through as the upstream's declaration: {body}"
             );
         }
     }
 
     #[test]
     fn overwrites_a_false_or_null_upstream_declaration() {
-        // `serverStateProvider: false` は「提供しない」の意味 (仕様 5 章の
-        // boolean)。宣言ではないので上書きして自分の宣言を置く。
+        // `serverStateProvider: false` means "not provided" (the boolean in spec chapter 5).
+        // It is not a declaration, so it is overwritten with our own declaration.
         for body in [
             r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":false}}}}"#,
             r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":null}}}}"#,
@@ -514,14 +522,14 @@ mod tests {
             assert_eq!(
                 out["result"]["capabilities"]["experimental"]["serverStateProvider"],
                 serde_json::json!({}),
-                "false / null は宣言ではない: {body}"
+                "false / null is not a declaration: {body}"
             );
         }
     }
 
     #[test]
     fn an_error_response_is_not_a_success() {
-        // handshake は完了していない。クライアントは initialize を再試行しうる。
+        // The handshake is not complete. The client may retry initialize.
         for body in [
             r#"{"id":1,"error":{"code":-32603,"message":"boom"}}"#,
             r#"{"id":1,"result":"not an object"}"#,
@@ -533,7 +541,7 @@ mod tests {
                     &ServerStateProvider::notifications_only()
                 ),
                 NotASuccess,
-                "成功応答とみなしてはならない: {body}"
+                "must not be counted as a success response: {body}"
             );
         }
     }
@@ -550,7 +558,7 @@ mod tests {
                     &ServerStateProvider::notifications_only()
                 ),
                 Unrewritable,
-                "書き換え不能とみなすべき: {body}"
+                "should be counted as unrewritable: {body}"
             );
         }
     }

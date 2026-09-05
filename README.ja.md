@@ -160,4 +160,4 @@ cargo test --test conformance -- --ignored   # 実サーバー結合 31 件（�
 
 ## 現在地
 
-v0.1（rust-analyzer と gopls）と v0.2（pyright、typescript-language-server、Serena 統合）は完了している。次はコードのコメントの英訳、Claude Code でのドッグフーディング第 5 回、上流への提出（ADR 0017 の順）。
+v0.1（rust-analyzer と gopls）と v0.2（pyright、typescript-language-server、Serena 統合）は完了している。次は上流への提出。

@@ -4,8 +4,7 @@
 
 ## 予定
 
-- 外向きの提出は `docs/upstream-submissions.md` の順で、詰めてから。typescript-language-server の不具合修正 PR、Claude Code への報告（5 件の再現と「lsp-det を挟むと消える」）、Serena の不具合と提案、fork の 4 パッチ
-- ADR 0017 の順: `src` / `tests` / `examples` のコメントの英訳、`dogfood/README.md` の英訳、Claude Code でのドッグフーディング第 5 回
+- 外向きの提出は `docs/upstream-submissions.md` の順で、詰めてから。typescript-language-server の不具合修正 PR、Claude Code への報告（4 件の再現と「lsp-det を挟むと消える」）、Serena の不具合と提案、fork の 4 パッチ
 
 ## 0.3.0（2026-09-06）
 

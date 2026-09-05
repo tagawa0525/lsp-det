@@ -9,7 +9,8 @@
 3. `docs/v0.1-design.md` — 実装スコープ（上流側・下流側・写像・実行モデル・マイルストーン）
 4. `docs/adr/` — 決定の経緯と却下案。成功基準と構造の根拠は ADR 0009、採用しなかった依存（tokio 等）の理由は ADR 0005
 5. `docs/vision.md` — 長期構想（宣言範囲・起動方法の宣言は凍結中）
-6. `docs/research/` — 調査報告 22 本。実装中の疑問はまずここを検索（先行プロキシの落とし穴、各サーバーの readiness 挙動、Serena / CC の統合仕様が実測済み、CC 経由のドッグフーディング観測は `claude-code-dogfooding.md`）
+6. `docs/glossary.md` — 日本語と英語の対訳表。仕様・README・コードのコメントの訳語はここに合わせる
+7. `docs/research/` — 調査報告 22 本。実装中の疑問はまずここを検索（先行プロキシの落とし穴、各サーバーの readiness 挙動、Serena / CC の統合仕様が実測済み、CC 経由のドッグフーディング観測は `claude-code-dogfooding.md`）
 
 ## 絶対の制約
 
@@ -19,6 +20,13 @@
 - メッセージのボディは原文バイトのまま転送する。完全パース + 再シリアライズ禁止（v0.1-design 4.4）
 - **時間に基づく判定を持たない**。保留の打ち切りタイマーも、一定時間で `ready` とみなす合成も禁止（仕様 6 章 6 項、ADR 0009）
 - 造語を作らない。「拡張 S」「グレード」は廃止済み。概念は内容そのものの名前で呼び、LSP に既存の語彙があればそれに合わせる（ADR 0009 決定 B）
+
+## 言語（ADR 0017）
+
+- 英語が正: `README.md`、`docs/spec/server-state.md`。日本語版（`README.ja.md`、`docs/spec/server-state.ja.md`）は**同じコミット**で追従させ、見出しの構成を 1 対 1 に保つ。レビューは日本語版で行う
+- 英語: `src` / `tests` / `examples` のコメントとテスト名、実行時のメッセージ、`dogfood/README.md`
+- 日本語: ADR、`docs/research/`、`docs/v0.1-design.md`、`docs/vision.md`、`scripts/*/README.md`、`dogfood/serena/README.md`、本ファイル、コミットメッセージ、PR 本文、CHANGELOG
+- 訳語は `docs/glossary.md` に合わせる。変えるときは表を先に直す
 
 ## 開発環境
 
@@ -41,7 +49,7 @@
 成功基準は「仕様・上流側と下流側それぞれの準拠テスト・上流側と下流側の参照実装が自己無矛盾で、rust-analyzer と gopls に当てて通ること」（ADR 0009）。作者の Claude Code 環境での稼働は成功基準ではなく観測手段。
 
 - v0.1（M1〜M4: 素通しプロキシ、上流側、下流側、gopls の写像）と v0.2（ADR 0010 の M5〜M7: pyright、typescript-language-server、Serena 統合。ADR 0012 の 3 OS 対応）は完了。マイルストーンごとの内容と日付は `CHANGELOG.md`
-- 0.3.0（ADR 0013〜0016: `coverage` への改名、`didChangeWatchedFiles` の鮮度と先読み、下流側の代行 2 つ、欠けを名指しする宣言の形）も完了。次は外向きの提出（`docs/upstream-submissions.md` の順で、詰めてから）と仕様の英訳
+- 0.3.0（ADR 0013〜0016: `coverage` への改名、`didChangeWatchedFiles` の鮮度と先読み、下流側の代行 2 つ、欠けを名指しする宣言の形）も完了。次は ADR 0017 の順（仕様の英訳 → コードのコメントの英訳 → `dogfood/README.md` の英訳 → ドッグフーディング第 5 回 → 外向きの提出）
 - 実サーバーの結合テストは `cargo test --test conformance -- --ignored`（31 件）と `cargo test --test process_lifetime -- --ignored`（4 件）。`TESTED_VERSIONS` を動かすのはこれらを通してから
 
 ドッグフーディングは `dogfood/README.md` の手順。観測結果は `docs/research/claude-code-dogfooding.md` に追記する（第 1〜3 回で、経路の成立・起動直後の横断リクエストが保留されて完全な結果になること・82 秒の保留でも CC がタイムアウトしないこと・gopls 経路・`error` の拒否の見せ方を確認済み）。観測項目: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007: 通常編集では往復しない）。

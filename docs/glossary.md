@@ -28,7 +28,7 @@
 | 合成する                   | synthesize                                        | 観測者が値を作ること。8 章                                                     |
 | 送出主体                   | who may emit                                      | 8.3 の表                                                                       |
 | 再インデックス             | reindexing                                        | 6 章 3 項                                                                      |
-| 時間に基づく判定           | time-based judgement                              | 禁止事項。「一定時間で ready とみなす」= treat as ready after some time        |
+| 時間に基づく判定           | time-based judgment                               | 禁止事項。「一定時間で ready とみなす」= treat as ready after some time        |
 | 前方互換                   | forward compatibility                             | 3 章                                                                           |
 | 状態の問い合わせ / 通知    | the state request / the state change notification | `experimental/serverState` / `experimental/serverStateChanged`                 |
 

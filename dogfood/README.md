@@ -1,6 +1,6 @@
 # Dogfooding (using lsp-det from Claude Code)
 
-A local plugin that makes Claude Code launch rust-analyzer, gopls, pyright, and typescript-language-server through lsp-det (with `pyright-langserver --stdio` and `typescript-language-server --stdio` as upstreams, the same commands the official `pyright-lsp` and `typescript-lsp` plugins use). Running this way is not a success criterion. It is a means of observation that catches real-server behavior the conformance tests miss (v0.1-design.md, chapter 1; Japanese).
+A local plugin that makes Claude Code launch rust-analyzer, gopls, pyright, and typescript-language-server through lsp-det (with `pyright-langserver --stdio` and `typescript-language-server --stdio` as upstreams, the same commands the official `pyright-lsp` and `typescript-lsp` plugins use). Running this way is not a success criterion. It is a means of observation that catches real-server behavior the conformance tests miss ([docs/v0.1-design.md](../docs/v0.1-design.md), chapter 1; Japanese).
 
 ## Steps
 
@@ -27,10 +27,10 @@ A local plugin that makes Claude Code launch rust-analyzer, gopls, pyright, and 
    - The Errors tab of `/plugin` shows no launch failure (`Executable not found in $PATH` and the like)
    - Starting with `claude --debug` shows the language servers' stderr. lsp-det writes `lsp-det: upstream is "rust-analyzer" version ...; using its mapping, declaring {...}` (pyright and typescript-language-server return no `serverInfo`, so the line is `upstream introduced itself in its startup log as "pyright" version ...` or `... "typescript-language-server" version <TypeScript version>`) and every state transition `lsp-det: [0.000s] server state -> {...}` to stderr
 
-## What to observe (v0.1-design.md, chapter 8)
+## What to observe ([docs/v0.1-design.md](../docs/v0.1-design.md), chapter 8)
 
 - When Claude Code starts the server, and when it sends the first cross-workspace request (references, definition, and so on)
 - Claude Code's request timeout, and how it shows `RequestFailed` and `RequestCancelled`
 - How Claude Code handles notifications it does not know (`$/progress`, `experimental/serverStatus`)
 
-Record the observed facts in `docs/research/claude-code-dogfooding.md` (Japanese). The mapping selection log (lsp-det's stderr) is kept under `~/.claude/debug/` only when started with `claude --debug`.
+Record the observed facts in [docs/research/claude-code-dogfooding.md](../docs/research/claude-code-dogfooding.md) (Japanese). The mapping selection log (lsp-det's stderr) is kept under `~/.claude/debug/` only when started with `claude --debug`.

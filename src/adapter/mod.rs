@@ -1,13 +1,16 @@
-//! 写像 (アダプタ、v0.1-design.md 5 章)。言語サーバー固有の語彙を
-//! サーバー状態プロトコルに写す。
+//! Mappings (adapters, v0.1-design.md chapter 5). They map a language
+//! server's own vocabulary onto the server state protocol.
 //!
-//! 写像の役割は**上流メッセージの解釈**だけである。状態の保持と重複
-//! 抑止は [`crate::tracker::Tracker`] が持つ。分けるのは、写像がなくても
-//! 上流側は存在し、両軸 `unknown` を報告するからである (仕様 8.2 の 3)。
+//! A mapping's only role is **interpreting upstream messages**. State
+//! retention and duplicate suppression belong to [`crate::tracker::Tracker`].
+//! They are kept separate because the upstream side exists even without a
+//! mapping, reporting `unknown` on both axes (spec 8.2 item 3).
 //!
-//! 写像は上流が `InitializeResult.serverInfo.name` で名乗る名前で選ぶ
-//! ([`select`])。言語サーバーの語彙の粗さを補う責任も写像が持ち、下流側は
-//! 仕様の値だけを見る (ADR 0009 決定 D-6)。
+//! A mapping is chosen by the name the upstream calls itself in
+//! `InitializeResult.serverInfo.name` ([`select`]). The mapping is also
+//! responsible for compensating for the coarseness of a language server's
+//! vocabulary, so the downstream side only ever sees spec values (ADR 0009
+//! decision D-6).
 
 pub mod gopls;
 pub mod pyright;
@@ -31,60 +34,61 @@ use crate::peek::MessageView;
 use crate::state::ALL_FILE_CHANGES;
 use crate::state::{ServerState, ServerStateProvider};
 
-/// 言語サーバー固有の語彙から `ServerState` を読む写像。
+/// A mapping that reads `ServerState` from a language server's own vocabulary.
 pub trait Mapping {
-    /// 上流に接続した直後 (写像を選んだ時点) の状態。
+    /// The state right after connecting to the upstream (the moment the mapping is chosen).
     fn initial_state(&self) -> ServerState;
-    /// `InitializeResult` に宣言する保証 (仕様 5 章)。準拠テストを通した版の
-    /// 範囲でのみ宣言する (仕様 8.2 の 5)。
+    /// The guarantee to declare in `InitializeResult` (spec chapter 5). Declare it only for
+    /// versions the conformance tests have passed on (spec 8.2 item 5).
     fn guarantees(&self) -> ServerStateProvider;
-    /// 上流→クライアント方向のメッセージから、上流が報告している状態を
-    /// 読み取る。読むものがなければ `None` (状態を動かさない)。
+    /// Reads the state the upstream is reporting from an upstream-to-client message.
+    /// `None` if there is nothing to read (the state does not move).
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState>;
-    /// 写像を選んだ後に、同じ上流の別の名乗り (`InitializeResult.serverInfo`)
-    /// が届いた。保証の根拠にする版をどう更新するかは写像が決める。pyright は
-    /// serverInfo の版がそのまま製品の版だが、typescript-language-server の
-    /// serverInfo の版は包み紙の版で、保証が依存する解析エンジン (TypeScript)
-    /// の版ではない。既定では何もしない。
+    /// After a mapping is chosen, another identity announcement from the same upstream
+    /// (`InitializeResult.serverInfo`) arrived. The mapping decides how to update the version
+    /// its guarantee is based on. For pyright, the serverInfo version is the product version
+    /// itself, but for typescript-language-server, the serverInfo version is the wrapper's
+    /// version, not the version of the analysis engine (TypeScript) the guarantee depends on.
+    /// Does nothing by default.
     fn learn_identity(&mut self, info: &ServerInfo) {
         let _ = info;
     }
-    /// クライアントの `initialize` の `initializationOptions`。宣言する上限
-    /// (`coverage.incomplete`) が設定で変わるサーバー (rust-analyzer) が読む。
-    /// 既定では何もしない。
+    /// The client's `initialize` `initializationOptions`. Read by servers (rust-analyzer) whose
+    /// declared cap (`coverage.incomplete`) changes with settings. Does nothing by default.
     fn learn_initialization_options(&mut self, options: &serde_json::Value) {
         let _ = options;
     }
-    /// クライアント→上流方向のメッセージを観測する。通知から再インデックスの
-    /// 開始を先読みしてよいのは、完了の信号が必ず来ることを測った写像だけ
-    /// (ADR 0014 追補 決定 D)。既定では何も読まない。
+    /// Observes a client-to-upstream message. Predicting the start of reindexing from a
+    /// notification is allowed only for a mapping that has measured that a completion signal is
+    /// always sent (ADR 0014 addendum decision D). Reads nothing by default.
     fn observe_client(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
         let _ = (view, body);
         None
     }
 }
 
-/// 既知の写像すべてが必要とする client capability の和 (設計 4.2)。
+/// The union of client capabilities every known mapping needs (design 4.2).
 ///
-/// 写像は `InitializeResult.serverInfo.name` で選ぶが、注入は上流へ
-/// `initialize` を送る前に要る。だから上流が誰であっても全部を注入する
-/// (ADR 0009 決定 D-3)。どちらも「通知を送ってよい」という許可にすぎない。
+/// A mapping is chosen by `InitializeResult.serverInfo.name`, but the injection has to happen
+/// before `initialize` is sent to the upstream. So all of them are injected regardless of who
+/// the upstream turns out to be (ADR 0009 decision D-3). Both are merely a permission to send a
+/// notification.
 ///
-/// - `experimental.serverStatusNotification`: rust-analyzer。未宣言だと
-///   `experimental/serverStatus` は一切送られない
-/// - `window.workDoneProgress`: gopls (M4)。未宣言だと `$/progress` ではなく
-///   `window/showMessage` にフォールバックする
+/// - `experimental.serverStatusNotification`: rust-analyzer. Without declaring it,
+///   `experimental/serverStatus` is never sent at all
+/// - `window.workDoneProgress`: gopls (M4). Without declaring it, it falls back to
+///   `window/showMessage` instead of `$/progress`
 pub const CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS: &[&str] = &[
     "experimental.serverStatusNotification",
     "window.workDoneProgress",
 ];
 
-/// 上流が名乗った名前に対応する写像。既知でなければ `None`
-/// (上流側は両軸 `unknown` を報告する。仕様 8.2 の 3)。
+/// The mapping corresponding to the name the upstream calls itself. `None` if it is not known
+/// (the upstream side reports `unknown` on both axes. spec 8.2 item 3).
 ///
-/// 名前の大文字小文字は区別しない。`serverInfo.name` は表示用の自由な文字列で
-/// LSP は比較の規則を定めておらず、同じサーバーが "Pyright" (productName) と
-/// "pyright" (起動ログの鍵) の両方で現れる。
+/// The name comparison is case-insensitive. `serverInfo.name` is a free-form display string
+/// and LSP defines no comparison rule; the same server can appear as both "Pyright"
+/// (productName) and "pyright" (the startup log key).
 pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mapping>> {
     let key = server_name.to_ascii_lowercase();
     match key.as_str() {
@@ -98,13 +102,14 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
     }
 }
 
-/// `serverInfo` を返さない上流の名乗り (ADR 0011 決定 A-2)。
+/// The identity announcement of an upstream that does not return `serverInfo` (ADR 0011
+/// decision A-2).
 ///
-/// 上流→クライアント方向の通知から、上流が起動時に自ら送る名乗りを読む。
-/// pyright 系の `window/logMessage` ("Pyright language server 1.1.412
-/// starting") と、typescript-language-server 固有の `$/typescriptVersion`。
-/// 名乗りでなければ `None`。汎用の認識機構は作らない (必要になった写像が
-/// 自分の認識を足す)。
+/// Reads the identity announcement an upstream sends on its own at startup from an
+/// upstream-to-client notification. That is pyright's `window/logMessage` ("Pyright language
+/// server 1.1.412 starting") and typescript-language-server's own `$/typescriptVersion`.
+/// `None` if it is not an identity announcement. No generic recognition mechanism is built
+/// (a mapping that needs one adds its own recognition).
 pub fn identity_from_notification(view: &MessageView, body: &[u8]) -> Option<ServerInfo> {
     if !view.is_notification() {
         return None;
@@ -147,15 +152,15 @@ mod tests {
 
     #[test]
     fn selects_pyright_and_basedpyright_by_their_server_info_names() {
-        // basedpyright は serverInfo で "basedpyright" と名乗る。pyright に
-        // serverInfo を足す上流の変更は productName ("Pyright") を名乗るので、
-        // 名前の大文字小文字は区別しない (serverInfo.name は表示用の自由な
-        // 文字列で、LSP は比較の規則を定めていない)。
+        // basedpyright calls itself "basedpyright" in serverInfo. The upstream change adding
+        // serverInfo to pyright calls itself by its productName ("Pyright"), so the name
+        // comparison is case-insensitive (serverInfo.name is a free-form display string and
+        // LSP defines no comparison rule).
         assert!(select("basedpyright", Some("1.39.8")).is_some());
         assert!(select("pyright", None).is_some());
         assert!(
             select("Pyright", None).is_some(),
-            "大文字小文字は区別しない"
+            "case-insensitive comparison"
         );
         assert!(select("Rust-Analyzer", None).is_some());
         assert!(select("GOPLS", None).is_some());
@@ -166,7 +171,8 @@ mod tests {
         use crate::peek::peek;
         let body = br#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Using Typescript version (user-setting) 5.9.3 from path \"/x/tsserver.js\""}}"#;
         let view = peek(body).unwrap();
-        let identity = identity_from_notification(&view, body).expect("起動ログは名乗り");
+        let identity = identity_from_notification(&view, body)
+            .expect("a startup log is an identity announcement");
         assert_eq!(identity.name, "typescript-language-server");
         assert_eq!(identity.version.as_deref(), Some("5.9.3"));
     }
@@ -176,7 +182,8 @@ mod tests {
         use crate::peek::peek;
         let body = br#"{"jsonrpc":"2.0","method":"$/typescriptVersion","params":{"version":"5.9.3","source":"user-setting"}}"#;
         let view = peek(body).unwrap();
-        let identity = identity_from_notification(&view, body).expect("固有の通知は名乗り");
+        let identity = identity_from_notification(&view, body)
+            .expect("its own notification is an identity announcement");
         assert_eq!(identity.name, "typescript-language-server");
         assert_eq!(identity.version.as_deref(), Some("5.9.3"));
         assert!(select(&identity.name, identity.version.as_deref()).is_some());
@@ -187,7 +194,8 @@ mod tests {
         use crate::peek::peek;
         let body = br#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Pyright language server 1.1.412 starting"}}"#;
         let view = peek(body).unwrap();
-        let identity = identity_from_notification(&view, body).expect("起動ログは名乗り");
+        let identity = identity_from_notification(&view, body)
+            .expect("a startup log is an identity announcement");
         assert_eq!(identity.name, "pyright");
         assert_eq!(identity.version.as_deref(), Some("1.1.412"));
         assert!(select(&identity.name, identity.version.as_deref()).is_some());
@@ -206,7 +214,7 @@ mod tests {
             let view = peek(body).unwrap();
             assert!(
                 identity_from_notification(&view, body).is_none(),
-                "名乗りでないメッセージ: {}",
+                "not an identity announcement: {}",
                 String::from_utf8_lossy(body)
             );
         }
@@ -218,16 +226,16 @@ mod tests {
         for unknown in ["fake-lsp-server", "", "clangd", "rust-analyzer-proxy"] {
             assert!(
                 select(unknown, None).is_none(),
-                "既知でない名前: {unknown:?}"
+                "not a known name: {unknown:?}"
             );
         }
     }
 
     #[test]
     fn declares_guarantees_only_for_versions_the_conformance_suite_passed_on() {
-        // 仕様 8.2 の 5 (ADR 0009 決定 D-5): 観測者が宣言できる保証は、
-        // 準拠テスト 7.2 / 7.3 を当てて通った版の範囲に限る。lsp-det は
-        // rust-analyzer の内部を保証できず、テストに通ったという観測しか持たない。
+        // Spec 8.2 item 5 (ADR 0009 decision D-5): the guarantee an observer can declare is
+        // limited to versions the conformance tests 7.2 / 7.3 have passed on. lsp-det cannot
+        // guarantee rust-analyzer's internals; it only has the observation that a test passed.
         let tested = select("rust-analyzer", Some("1.98.0 (88d9e12 2026-08-18)")).unwrap();
         assert_eq!(
             tested.guarantees(),
@@ -244,7 +252,7 @@ mod tests {
             assert_eq!(
                 adapter.guarantees(),
                 ServerStateProvider::notifications_only(),
-                "テストを当てていない版 {untested:?} に保証を宣言した"
+                "declared a guarantee for untested version {untested:?}"
             );
         }
     }

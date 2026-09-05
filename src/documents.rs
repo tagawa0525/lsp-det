@@ -1,11 +1,11 @@
-//! 開いている文書の集合と、重複した `didOpen` の書き換え (設計 4.3、
-//! ADR 0015 決定 B)。
+//! The set of open documents, and the rewriting of a duplicate `didOpen` (design 4.3,
+//! ADR 0015 decision B).
 //!
-//! Claude Code は Write のたびに、既に開いている uri へ `textDocument/didOpen`
-//! を送り直す (LSP 違反)。typescript-language-server はこれを拒み、古い
-//! バッファが残り続ける。下流側は開いている uri を覚え、2 度目の `didOpen`
-//! を全文の `textDocument/didChange` に書き換えて上流へ送る。`text` は原文の
-//! バイト列を切り出し、再シリアライズしない (設計 4.4)。
+//! Claude Code re-sends `textDocument/didOpen` for an already open uri on every Write
+//! (an LSP violation). typescript-language-server rejects this, and the stale buffer lives on.
+//! The downstream side remembers the open uris and rewrites the second `didOpen` into a
+//! full-text `textDocument/didChange` before sending it upstream. `text` is cut out of the
+//! original bytes and not re-serialized (design 4.4).
 
 use std::collections::HashSet;
 
@@ -61,17 +61,17 @@ impl OpenDocuments {
         Self::default()
     }
 
-    /// `textDocument/didOpen` を観測する。uri が既に開いていれば、全文の
-    /// `didChange` に書き換えたメッセージを返す (それを上流へ送る)。初めて
-    /// なら `None` (原文をそのまま送る)。読めない本文も `None`。
+    /// Observes `textDocument/didOpen`. If the uri is already open, returns the message
+    /// rewritten into a full-text `didChange` (which is sent upstream). If it is the first
+    /// time, `None` (the original is sent as is). An unreadable body is also `None`.
     pub fn on_did_open(&mut self, body: &[u8]) -> Option<RawMessage> {
         let opened: DidOpen = serde_json::from_slice(body).ok()?;
         let item = opened.params.text_document;
         if self.uris.insert(item.uri.clone()) {
             return None;
         }
-        // uri は JSON 文字列として再エンコードする (原文のエスケープを保つには
-        // RawValue でもよいが、uri は短く、内容は変えない)。
+        // The uri is re-encoded as a JSON string (RawValue would also do to keep the original
+        // escapes, but the uri is short and its content does not change).
         let uri = serde_json::to_string(&item.uri).ok()?;
         let mut rewritten = Vec::with_capacity(body.len() + 64);
         rewritten.extend_from_slice(
@@ -86,7 +86,7 @@ impl OpenDocuments {
         Some(RawMessage { body: rewritten })
     }
 
-    /// `textDocument/didClose` を観測する。
+    /// Observes `textDocument/didClose`.
     pub fn on_did_close(&mut self, body: &[u8]) {
         if let Ok(closed) = serde_json::from_slice::<DidClose>(body) {
             self.uris.remove(&closed.params.text_document.uri);
@@ -116,7 +116,7 @@ mod tests {
         );
         let rewritten = docs
             .on_did_open(&did_open("file:///w/a.rs", 1, "fn a() {}\nfn b() {}\n"))
-            .expect("2 度目は書き換える");
+            .expect("the second time is rewritten");
         let value: serde_json::Value = serde_json::from_slice(&rewritten.body).unwrap();
         assert_eq!(value["method"], "textDocument/didChange");
         assert_eq!(value["params"]["textDocument"]["uri"], "file:///w/a.rs");

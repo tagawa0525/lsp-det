@@ -1,27 +1,33 @@
-//! pyright / basedpyright の写像 (ADR 0011、設計 5.3)。
+//! The pyright / basedpyright mapping (ADR 0011, design 5.3).
 //!
-//! pyright は readiness の語彙を持たず、`InitializeResult.serverInfo` も
-//! 返さない (basedpyright は返す)。どちらも `window/logMessage` から読む
-//! (pyright のソース `languageServerBase.ts`・`sourceEnumerator.ts`・
-//! `referencesProvider.ts` と実測 research/pyright-readiness-measurement.md):
+//! pyright has no readiness vocabulary, and does not return
+//! `InitializeResult.serverInfo` either (basedpyright does). Both are read
+//! from `window/logMessage` (per the pyright source `languageServerBase.ts`,
+//! `sourceEnumerator.ts`, `referencesProvider.ts`, and the measurement in
+//! research/pyright-readiness-measurement.md):
 //!
-//! - **名乗り**: 起動直後にコンストラクタが info で
-//!   "Pyright language server 1.1.412 starting" (basedpyright は
-//!   "basedpyright language server 1.39.8 starting") を送る。設定の読み込み前
-//!   なので抑制されず、`initialize` 応答より先に届く。[`startup_identity`]
-//! - **readiness**: 横断リクエストは追跡中のファイル一覧を走査し、その一覧は
-//!   タイマーで少しずつ列挙される。列挙の完了は info の "Found N source
-//!   files" または "No source files found."。ワークスペースフォルダごとに
-//!   "Starting service instance \"name\"" が出て列挙もフォルダごとなので、
-//!   その数だけ完了を数えてから `ready`。再列挙の開始 "Searching for source
-//!   files" (log レベル。既定では届かない) が来たら `indexing` に戻す
-//! - **health**: 信号がない。`unknown` のまま (仕様 8.2 の 2)。クラッシュは
-//!   接続の終了で伝わる
-//! - `$/progress` は開いたファイルの解析の進行であり、横断リクエストの完全性
-//!   とは別の事柄なので読まない (ADR 0011 決定 B-4)
+//! - **what the server calls itself**: right at startup, the constructor
+//!   sends an info "Pyright language server 1.1.412 starting" (basedpyright
+//!   sends "basedpyright language server 1.39.8 starting"). This is not
+//!   suppressed, since it happens before settings are loaded, and arrives
+//!   before the `initialize` response. [`startup_identity`]
+//! - **readiness**: a cross-workspace request scans the list of tracked
+//!   files, and that list is enumerated gradually via a timer. Enumeration
+//!   completion is signaled by an info "Found N source files" or "No source
+//!   files found." "Starting service instance \"name\"" is emitted per
+//!   workspace folder, and enumeration is also per folder, so completions
+//!   are counted up to that number before `ready`. A re-enumeration start
+//!   "Searching for source files" (log level, not delivered by default)
+//!   reverts it to `indexing`
+//! - **health**: there is no signal. It stays `unknown` (spec 8.2 item 2). A
+//!   crash is conveyed by the connection closing
+//! - `$/progress` is the parsing progress of an open file, a separate matter
+//!   from the completeness of a cross-workspace request, so it is not read
+//!   (ADR 0011 decision B-4)
 //!
-//! `coverage` / `freshness` は準拠テスト 7.2 / 7.3 を実 pyright に当てて
-//! 通した版 ([`TESTED_VERSIONS`]) にだけ宣言する (ADR 0009 決定 D-5)。
+//! `coverage` / `freshness` are declared only for versions
+//! ([`TESTED_VERSIONS`]) for which conformance tests 7.2 / 7.3 were run
+//! against a real pyright and passed (ADR 0009 decision D-5).
 
 use serde::Deserialize;
 
@@ -31,42 +37,46 @@ use crate::peek::MessageView;
 use crate::state::{FileChangeType, Readiness, ServerState, ServerStateProvider};
 
 const LOG_MESSAGE_METHOD: &str = "window/logMessage";
-/// 起動ログの productName と版の間の定型句 (`languageServerBase.ts` のコンストラクタ)。
+/// The fixed phrase between productName and version in the startup log (the constructor in
+/// `languageServerBase.ts`).
 const STARTUP_INFIX: &str = " language server ";
 const STARTUP_SUFFIX: &str = " starting";
-/// ワークスペースフォルダごとの `AnalyzerService` の開始 (`languageServerBase.ts`)。
+/// The start of an `AnalyzerService` per workspace folder (`languageServerBase.ts`).
 const SERVICE_STARTED_PREFIX: &str = "Starting service instance ";
-/// ファイル列挙の完了 (`sourceEnumerator.ts` の `_finish()`)。
+/// File enumeration completion (`_finish()` in `sourceEnumerator.ts`).
 const ENUMERATION_FOUND_PREFIX: &str = "Found ";
 const ENUMERATION_FOUND_SUFFIX_ONE: &str = " source file";
 const ENUMERATION_FOUND_SUFFIX_MANY: &str = " source files";
 const ENUMERATION_EMPTY: &str = "No source files found.";
-/// 再列挙の開始 (`sourceEnumerator.ts` のコンストラクタ、log レベル)。
+/// Re-enumeration start (the constructor in `sourceEnumerator.ts`, log level).
 const ENUMERATION_STARTED: &str = "Searching for source files";
 
-/// 準拠テスト 7.2 / 7.3 を実 pyright に当てて通した版。名乗り (起動ログの
-/// 版。pyright は `serverInfo` を返さない) と完全一致で突き合わせる。
+/// Versions for which conformance tests 7.2 / 7.3 were run against a real pyright and passed.
+/// Matched by exact equality against what the server calls itself (the version in the startup
+/// log; pyright does not return `serverInfo`).
 ///
-/// 一覧にない版には保証を宣言しない。足すときは、その版で
-/// `cargo test --test conformance -- --ignored pyright_` を通してから
-/// (守れない保証の宣言は仕様 5.1 違反)。
+/// No guarantee is declared for a version not in the list. When adding one, run
+/// `cargo test --test conformance -- --ignored pyright_` against that version first (declaring
+/// a guarantee that cannot be kept violates spec 5.1).
 ///
-/// 通した記録: 1.1.412 (nixpkgs)、2026-09-03、5 回連続。
+/// Record of versions passed: 1.1.412 (nixpkgs), 2026-09-03, 5 consecutive runs.
 pub const TESTED_VERSIONS: &[&str] = &["1.1.412"];
 
-/// 同じく basedpyright。版の番号は pyright と別系列なので一覧も別に持つ。
-/// 名乗りは `serverInfo.version` (起動ログにも同じ版が出る)。
+/// The same, for basedpyright. Its version numbers are a separate series from pyright's, so it
+/// has its own separate list. It calls itself via `serverInfo.version` (the same version also
+/// appears in the startup log).
 ///
-/// 通した記録: 1.39.8 (nixpkgs、pyright 1.1.410 由来)、2026-09-03、5 回連続。
+/// Record of versions passed: 1.39.8 (nixpkgs, derived from pyright 1.1.410), 2026-09-03, 5
+/// consecutive runs.
 pub const BASEDPYRIGHT_TESTED_VERSIONS: &[&str] = &["1.39.8"];
 
-/// 起動ログの名乗りを読む。
+/// Reads the startup log's identity announcement.
 ///
-/// pyright 系は `${productName} language server ${version} starting` を
-/// 送る。productName は "Pyright" または "basedpyright"。写像の鍵は小文字の
-/// "pyright" / "basedpyright" にする (basedpyright は `serverInfo.name` に
-/// "basedpyright" を名乗る。名前の突き合わせは大文字小文字を区別しない)。
-/// 版は省かれることがあり、そのときは `None`。他の文言には `None`。
+/// A pyright-family server sends `${productName} language server ${version} starting`.
+/// productName is "Pyright" or "basedpyright". The mapping key is normalized to lowercase
+/// "pyright" / "basedpyright" (basedpyright calls itself "basedpyright" in `serverInfo.name`;
+/// the name comparison is case-insensitive). The version can be omitted, in which case this is
+/// `None`. `None` for any other wording.
 pub fn startup_identity(message: &str) -> Option<ServerInfo> {
     let (product, rest) = message.split_once(STARTUP_INFIX)?;
     let name = match product {
@@ -74,8 +84,8 @@ pub fn startup_identity(message: &str) -> Option<ServerInfo> {
         "basedpyright" => "basedpyright",
         _ => return None,
     };
-    // 版は `serverOptions.version && serverOptions.version + ' '` なので
-    // 省かれうる。そのとき rest は "starting" だけ。
+    // The version comes from `serverOptions.version && serverOptions.version + ' '`, so it can
+    // be omitted. In that case rest is just "starting".
     let version = match rest {
         r if r == STARTUP_SUFFIX.trim_start() => None,
         r => {
@@ -92,14 +102,17 @@ pub fn startup_identity(message: &str) -> Option<ServerInfo> {
     })
 }
 
-/// pyright / basedpyright の写像。
+/// The pyright / basedpyright mapping.
 pub struct PyrightAdapter {
-    /// 名乗った版が [`TESTED_VERSIONS`] に入っているか。保証を宣言する条件。
+    /// Whether the announced version is in [`TESTED_VERSIONS`]. The condition for declaring a
+    /// guarantee.
     version_is_tested: bool,
     state: ServerState,
-    /// "Starting service instance" を見た数 (= 列挙を待つフォルダの数)。
+    /// The count of "Starting service instance" seen (= the number of folders being waited on
+    /// for enumeration).
     instances: usize,
-    /// 列挙の完了ログを見た数。`instances` に追いついたら `ready`。
+    /// The count of enumeration completion logs seen. `ready` once it catches up to
+    /// `instances`.
     completed: usize,
 }
 
@@ -110,12 +123,13 @@ impl Default for PyrightAdapter {
 }
 
 impl PyrightAdapter {
-    /// 版を名乗らない pyright 向け。保証は宣言しない。
+    /// For a pyright that does not announce a version. Declares no guarantee.
     pub fn new() -> Self {
         Self::for_identity("pyright", None)
     }
 
-    /// 名乗った名前と版を見て、その製品でテスト済みの版なら保証を宣言する。
+    /// Looks at the announced name and version and declares a guarantee if it is a tested
+    /// version for that product.
     pub fn for_identity(name: &str, version: Option<&str>) -> Self {
         let tested: &[&str] = match name {
             "pyright" => TESTED_VERSIONS,
@@ -133,14 +147,14 @@ impl PyrightAdapter {
 
     fn on_log(&mut self, message: &str) -> Option<ServerState> {
         if message.starts_with(SERVICE_STARTED_PREFIX) {
-            // 新しいフォルダの列挙が始まる。ready だったなら indexing に戻す
-            // (didChangeWorkspaceFolders)。initializing のときはそのまま。
+            // Enumeration of a new folder begins. If it was ready, revert to indexing
+            // (didChangeWorkspaceFolders). Left as-is while initializing.
             self.instances += 1;
             if self.state.readiness == Readiness::Ready {
                 self.state.readiness = Readiness::Indexing;
             }
         } else if message == ENUMERATION_STARTED {
-            // 再列挙 (log レベル。既定の logLevel では届かない)。
+            // Re-enumeration (log level, not delivered at the default logLevel).
             if self.instances == 0 {
                 return None;
             }
@@ -148,7 +162,7 @@ impl PyrightAdapter {
             self.state.readiness = Readiness::Indexing;
         } else if is_enumeration_complete(message) {
             if self.completed >= self.instances {
-                // 数える相手がいない完了。ready を名乗る根拠にしない。
+                // A completion with nothing to count against. Not grounds for claiming ready.
                 return None;
             }
             self.completed += 1;
@@ -162,7 +176,7 @@ impl PyrightAdapter {
     }
 }
 
-/// "Found N source file(s)" または "No source files found."。
+/// "Found N source file(s)" or "No source files found."
 fn is_enumeration_complete(message: &str) -> bool {
     if message == ENUMERATION_EMPTY {
         return true;
@@ -194,8 +208,8 @@ impl Mapping for PyrightAdapter {
         }
     }
 
-    /// serverInfo の版は製品の版そのもの (起動ログが版を省いていても、
-    /// serverInfo がテスト済みの版を名乗れば保証を宣言する)。
+    /// The serverInfo version is the product version itself (even if the startup log omitted
+    /// the version, a guarantee is declared if serverInfo announces a tested version).
     fn learn_identity(&mut self, info: &ServerInfo) {
         let refreshed =
             PyrightAdapter::for_identity(&info.name.to_ascii_lowercase(), info.version.as_deref());
@@ -243,27 +257,28 @@ mod tests {
         )
     }
 
-    // --- 名乗り ----------------------------------------------------------------
+    // --- what the server calls itself -------------------------------------------
 
     #[test]
     fn reads_the_name_and_version_out_of_the_startup_log() {
-        // 実測 (research/pyright-readiness-measurement.md) の文言そのもの。
+        // The exact wording measured (research/pyright-readiness-measurement.md).
         let pyright = startup_identity("Pyright language server 1.1.412 starting")
-            .expect("pyright の起動ログは名乗り");
+            .expect("pyright's startup log is an identity announcement");
         assert_eq!(pyright.name, "pyright");
         assert_eq!(pyright.version.as_deref(), Some("1.1.412"));
 
         let based = startup_identity("basedpyright language server 1.39.8 starting")
-            .expect("basedpyright の起動ログは名乗り");
+            .expect("basedpyright's startup log is an identity announcement");
         assert_eq!(based.name, "basedpyright");
         assert_eq!(based.version.as_deref(), Some("1.39.8"));
     }
 
     #[test]
     fn the_startup_log_may_omit_the_version() {
-        // `serverOptions.version && serverOptions.version + ' '` なので版は省かれうる。
-        let identity =
-            startup_identity("Pyright language server starting").expect("版なしでも名乗り");
+        // The version can be omitted, since it comes from
+        // `serverOptions.version && serverOptions.version + ' '`.
+        let identity = startup_identity("Pyright language server starting")
+            .expect("still an identity announcement without a version");
         assert_eq!(identity.name, "pyright");
         assert_eq!(identity.version, None);
     }
@@ -280,7 +295,7 @@ mod tests {
         ] {
             assert!(
                 startup_identity(other).is_none(),
-                "名乗りでない行: {other:?}"
+                "not an identity announcement: {other:?}"
             );
         }
     }
@@ -299,12 +314,13 @@ mod tests {
     fn enumeration_of_the_only_folder_means_ready() {
         let mut adapter = PyrightAdapter::new();
         started(&mut adapter, "pyfix");
-        let state = interpret(&mut adapter, &info("Found 2 source files")).expect("完了は信号");
+        let state =
+            interpret(&mut adapter, &info("Found 2 source files")).expect("completion is a signal");
         assert_eq!(state.readiness, Readiness::Ready);
         assert_eq!(
             state.health,
             Health::Unknown,
-            "列挙の完了は health の観測ではない"
+            "enumeration completion is not an observation of health"
         );
     }
 
@@ -312,13 +328,14 @@ mod tests {
     fn no_source_files_is_also_a_completion() {
         let mut adapter = PyrightAdapter::new();
         started(&mut adapter, "empty");
-        let state = interpret(&mut adapter, &info("No source files found.")).expect("完了は信号");
+        let state = interpret(&mut adapter, &info("No source files found."))
+            .expect("completion is a signal");
         assert_eq!(state.readiness, Readiness::Ready);
     }
 
     #[test]
     fn waits_for_every_workspace_folder() {
-        // フォルダごとに "Starting service instance" と完了ログが 1 回ずつ出る。
+        // "Starting service instance" and a completion log each appear once per folder.
         let mut adapter = PyrightAdapter::new();
         started(&mut adapter, "one");
         started(&mut adapter, "two");
@@ -327,42 +344,44 @@ mod tests {
             after_one
                 .as_ref()
                 .is_none_or(|s| s.readiness != Readiness::Ready),
-            "1 フォルダの完了で ready を名乗った: {after_one:?}"
+            "claimed ready on the completion of one folder: {after_one:?}"
         );
-        let after_two =
-            interpret(&mut adapter, &info("Found 1200 source files")).expect("最後の完了は信号");
+        let after_two = interpret(&mut adapter, &info("Found 1200 source files"))
+            .expect("the last completion is a signal");
         assert_eq!(after_two.readiness, Readiness::Ready);
     }
 
     #[test]
     fn a_folder_added_after_ready_rearms() {
-        // didChangeWorkspaceFolders で新しい service instance が始まる。
+        // didChangeWorkspaceFolders starts a new service instance.
         let mut adapter = PyrightAdapter::new();
         started(&mut adapter, "one");
         interpret(&mut adapter, &info("Found 1 source file"));
-        let state = started(&mut adapter, "two").expect("新しいフォルダの開始は信号");
+        let state = started(&mut adapter, "two").expect("starting a new folder is a signal");
         assert_eq!(state.readiness, Readiness::Indexing);
-        let state = interpret(&mut adapter, &info("Found 3 source files")).expect("完了は信号");
+        let state =
+            interpret(&mut adapter, &info("Found 3 source files")).expect("completion is a signal");
         assert_eq!(state.readiness, Readiness::Ready);
     }
 
     #[test]
     fn reenumeration_start_rearms_when_it_is_visible() {
-        // "Searching for source files" は log レベルで既定では届かないが、
-        // 届いたときは再列挙の開始として indexing に戻す。
+        // "Searching for source files" is log level and not delivered by default, but when it
+        // is delivered, it reverts to indexing as the start of re-enumeration.
         let mut adapter = PyrightAdapter::new();
         started(&mut adapter, "one");
         interpret(&mut adapter, &info("Found 1 source file"));
         let state = interpret(&mut adapter, &log(4, "Searching for source files"))
-            .expect("再列挙の開始は信号");
+            .expect("the start of re-enumeration is a signal");
         assert_eq!(state.readiness, Readiness::Indexing);
-        let state = interpret(&mut adapter, &info("Found 2 source files")).expect("完了は信号");
+        let state =
+            interpret(&mut adapter, &info("Found 2 source files")).expect("completion is a signal");
         assert_eq!(state.readiness, Readiness::Ready);
     }
 
     #[test]
     fn a_completion_without_a_started_instance_is_ignored() {
-        // 数える相手がいない完了ログで ready にしない。
+        // Does not become ready on a completion log with nothing to count against.
         let mut adapter = PyrightAdapter::new();
         assert!(interpret(&mut adapter, &info("Found 2 source files")).is_none());
     }
@@ -384,7 +403,7 @@ mod tests {
         ] {
             assert!(
                 interpret(&mut adapter, &other).is_none(),
-                "無関係なメッセージで状態が動いた: {other}"
+                "the state moved on an unrelated message: {other}"
             );
         }
     }
@@ -398,13 +417,14 @@ mod tests {
         assert_eq!(state.message, None);
     }
 
-    // --- 保証 ------------------------------------------------------------------
+    // --- guarantee ---------------------------------------------------------------
 
     #[test]
     fn declares_guarantees_only_for_versions_the_conformance_suite_passed_on() {
-        // 仕様 8.2 の 5。7.2 / 7.3 を実 pyright 1.1.412 と実 basedpyright 1.39.8 に
-        // 当てて通した (tests/conformance.rs の pyright_* ignored)。版の番号は
-        // 製品ごとに別系列なので、一覧も製品ごとに持つ。
+        // Spec 8.2 item 5. 7.2 / 7.3 were run against a real pyright 1.1.412 and a real
+        // basedpyright 1.39.8 and passed (the pyright_* ignored tests in tests/conformance.rs).
+        // Since version numbers are a separate series per product, the list is kept per
+        // product too.
         assert_eq!(
             PyrightAdapter::for_identity("pyright", Some("1.1.412")).guarantees(),
             ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
@@ -425,7 +445,7 @@ mod tests {
             assert_eq!(
                 PyrightAdapter::for_identity(name, version).guarantees(),
                 ServerStateProvider::notifications_only(),
-                "測っていない {name} {version:?} に保証を宣言した"
+                "declared a guarantee for unmeasured {name} {version:?}"
             );
         }
     }

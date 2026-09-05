@@ -1,64 +1,63 @@
-//! 台本ベースの偽 LSP サーバー（v0.1-design.md 6 章のテスト戦略）。
+//! A script-driven fake LSP server (the test strategy of v0.1-design.md chapter 6).
 //!
-//! 準拠テストスイートが決定的に動くための上流。時間ではなくクライアントの
-//! 指示で状態を変えるのが要点で、`$/fake/emitServerStatus` を受けた瞬間に
-//! `experimental/serverStatus` を送り返す。sleep を挟んだ台本にすると
-//! テストがタイミング依存になり、CI で不安定になる。
+//! The upstream that lets the conformance test suite run deterministically. The point is that
+//! the state changes on the client's instruction, not on time: the moment it receives
+//! `$/fake/emitServerStatus`, it sends back `experimental/serverStatus`. A script with sleeps
+//! in it would make the tests timing-dependent and flaky in CI.
 //!
-//! 制御メソッド:
+//! Control methods:
 //!
-//! - `$/fake/emitServerStatus`（通知）: params をそのまま
-//!   `experimental/serverStatus` の params として送出する
-//! - `$/fake/emitProgress`（通知）: params をそのまま `$/progress` の params
-//!   として送出する（gopls の "Setting up workspace" 等を再現する）
-//! - `$/fake/report`（リクエスト）: これまでに受信した method の一覧と、
-//!   `initialize` で受け取った params を返す。上流へ何が転送されたかを
-//!   テスト側から検証するために使う
+//! - `$/fake/emitServerStatus` (notification): emits the params as is as the params of
+//!   `experimental/serverStatus`
+//! - `$/fake/emitProgress` (notification): emits the params as is as the params of
+//!   `$/progress` (reproduces gopls's "Setting up workspace" etc.)
+//! - `$/fake/report` (request): returns the list of methods received so far and the params
+//!   received in `initialize`. Used by the test side to verify what was forwarded upstream
 //!
-//! handshake 前後の境界を再現するための起動フラグ:
+//! Launch flags for reproducing the boundary around the handshake:
 //!
-//! - `--exit-before-initialize-result`: `initialize` を受け取った瞬間に、
-//!   応答せず終了する（起動時クラッシュ）
-//! - `--declare-server-state-provider`: 上流自身が本プロトコルに準拠している
-//!   ふりをする。`InitializeResult` に `serverStateProvider: {freshness: {fileChanges: ["Changed"]}}`
-//!   を宣言し、`experimental/serverState` に自分の状態で答える。状態は
-//!   `--initial-readiness <initializing|indexing|ready>`（既定 `ready`）から
-//!   始まり、`$/fake/emitServerStateChanged`（通知。params は
-//!   `{health, readiness}`）で変えると `experimental/serverStateChanged` を送る
-//! - `--declare-server-state-provider-false`: `serverStateProvider: false` を
-//!   宣言する（`hoverProvider: false` と同じ「提供しない」の書き方）
-//! - `--server-name <name>`: `InitializeResult.serverInfo.name` で名乗る名前。
-//!   既定は `fake-lsp-server`（既知の写像がない名前）。`rust-analyzer` と
-//!   名乗れば lsp-det は rust-analyzer の写像を選ぶ。`none` を渡すと
-//!   `serverInfo` そのものを省く（pyright はこれを返さない）
-//! - `--startup-log <message>`: 起動直後（`initialize` を読む前）に
-//!   `window/logMessage`（type 3）で `message` を送る。pyright 系の名乗り
-//!   "Pyright language server 1.1.412 starting" を再現する
-//! - `--server-version <version>`: `serverInfo.version` で名乗る版。既定は
-//!   `1.98.0 (fake)`（rust-analyzer の写像が準拠テストを通した版の範囲内）。
-//!   `none` を渡すと version を省く
-//! - `--references-depend-on-readiness`: `textDocument/references` に、
-//!   自分が `ready` なら 1 件、そうでなければ空配列を返す（インデックス未完了の
-//!   空応答を再現する）。`ready` かどうかは準拠モードなら自分の状態、
-//!   rust-analyzer を演じるときは最後に送った `quiescent` で決まる
-//! - `--request-progress-create`: `initialized` を受けたら
-//!   `window/workDoneProgress/create` リクエスト（id `"wdp-1"`）を送る。
-//!   応答が返ったかは `$/fake/report` の `progressCreateAnswered` で分かる
-//! - `--startup-typescript-version <version>`: `initialize` に応答した直後に
-//!   typescript-language-server 固有の通知 `$/typescriptVersion`
-//!   `{version, source: "fake"}` を送る（実サーバーと同じ順序）
-//! - `$/fake/emitLogMessage`（通知。params は `{type, message}`）:
-//!   `window/logMessage` をそのまま送る（pyright の "Starting service
-//!   instance" / "Found N source files" 等を再現する）
-//! - `--require-initialized-before-requests`: `initialized` より前に
-//!   `initialize` 以外のリクエストが届いたら、rust-analyzer と同じく規約違反として
-//!   エラーを stderr に出して終了する（LSP: サーバーは `initialized` まで他の
-//!   リクエストを受けない）
-//! - `--fail-first-initialize`: 最初の `initialize` にエラーで応答する。
-//!   2 回目以降は通常どおり
-//! - `--exit-after-initialize-error`: `--fail-first-initialize` と併用し、
-//!   エラー応答を送った直後に終了する（応答済みの id に二重応答しないことを
-//!   確かめる）
+//! - `--exit-before-initialize-result`: exits without responding the moment it receives
+//!   `initialize` (a crash at startup)
+//! - `--declare-server-state-provider`: pretends the upstream itself conforms to this
+//!   protocol. Declares `serverStateProvider: {freshness: {fileChanges: ["Changed"]}}` in
+//!   `InitializeResult` and answers `experimental/serverState` with its own state. The state
+//!   starts from `--initial-readiness <initializing|indexing|ready>` (default `ready`), and
+//!   when changed with `$/fake/emitServerStateChanged` (notification; params are
+//!   `{health, readiness}`) it sends `experimental/serverStateChanged`
+//! - `--declare-server-state-provider-false`: declares `serverStateProvider: false`
+//!   (the same "not provided" notation as `hoverProvider: false`)
+//! - `--server-name <name>`: the name it calls itself in `InitializeResult.serverInfo.name`.
+//!   Default is `fake-lsp-server` (a name with no known mapping). If it calls itself
+//!   `rust-analyzer`, lsp-det chooses the rust-analyzer mapping. Passing `none` omits
+//!   `serverInfo` itself (pyright does not return it)
+//! - `--startup-log <message>`: right after startup (before reading `initialize`), sends
+//!   `message` via `window/logMessage` (type 3). Reproduces the pyright family's
+//!   "Pyright language server 1.1.412 starting" self-identification
+//! - `--server-version <version>`: the version it calls itself in `serverInfo.version`.
+//!   Default is `1.98.0 (fake)` (within the range of versions for which the rust-analyzer
+//!   mapping passed the conformance tests). Passing `none` omits version
+//! - `--references-depend-on-readiness`: answers `textDocument/references` with 1 item if it
+//!   is `ready`, otherwise an empty array (reproduces the empty response of an unfinished
+//!   index). Whether it is `ready` is decided by its own state in conforming mode, and by the
+//!   last `quiescent` it sent when playing rust-analyzer
+//! - `--request-progress-create`: on receiving `initialized`, sends a
+//!   `window/workDoneProgress/create` request (id `"wdp-1"`). Whether a response came back is
+//!   known from `progressCreateAnswered` in `$/fake/report`
+//! - `--startup-typescript-version <version>`: right after responding to `initialize`, sends
+//!   the typescript-language-server-specific notification `$/typescriptVersion`
+//!   `{version, source: "fake"}` (the same order as the real server)
+//! - `$/fake/emitLogMessage` (notification; params are `{type, message}`): sends
+//!   `window/logMessage` as is (reproduces pyright's "Starting service instance" /
+//!   "Found N source files" etc.)
+//! - `--require-initialized-before-requests`: if a request other than `initialize` arrives
+//!   before `initialized`, treats it as a protocol violation like rust-analyzer does, prints
+//!   an error to stderr, and exits (LSP: a server accepts no other requests until
+//!   `initialized`)
+//! - `--fail-first-initialize`: responds to the first `initialize` with an error. From the
+//!   second time on, as normal
+//! - `--exit-after-initialize-error`: used together with `--fail-first-initialize`; exits
+//!   right after sending the error response (verifies that an already answered id is not
+//!   answered twice)
 
 use std::io::{self, BufReader};
 
@@ -66,8 +65,8 @@ use lsp_det::framing::{self, RawMessage};
 use serde_json::{Value, json};
 
 fn main() {
-    // プロセス寿命のテスト (tests/process_lifetime.rs) が、lsp-det の
-    // stderr 中継越しに上流の pid を知るための名乗り。
+    // Self-identification so that the process lifetime test (tests/process_lifetime.rs) can
+    // learn the upstream's pid through lsp-det's stderr relay.
     eprintln!("fake-lsp-server: pid {}", std::process::id());
     let flags: Vec<String> = std::env::args().skip(1).collect();
     let has = |name: &str| flags.iter().any(|flag| flag == name);
@@ -78,9 +77,9 @@ fn main() {
     let exit_after_initialize_error = has("--exit-after-initialize-error");
     let request_progress_create = has("--request-progress-create");
     let references_depend_on_readiness = has("--references-depend-on-readiness");
-    // `workspace/didChangeWatchedFiles` を受けたら再インデックス (quiescent: false)
-    // を始め、変更の数だけ references の結果を増やす。終わりは
-    // `$/fake/emitServerStatus` で外から与える (仕様 7.3 の 2 の偽上流)。
+    // On receiving `workspace/didChangeWatchedFiles`, start reindexing (quiescent: false) and
+    // grow the references result by the number of changes. The end is given from outside via
+    // `$/fake/emitServerStatus` (the fake upstream for spec 7.3 item 2).
     let reindex_on_watched_files = has("--reindex-on-watched-files");
     let mut watched_changes: usize = 0;
     let require_initialized_before_requests = has("--require-initialized-before-requests");
@@ -122,13 +121,13 @@ fn main() {
     let mut stdout = io::stdout();
 
     let mut methods_seen: Vec<String> = Vec::new();
-    // 通知の params を method ごとに記録する (代行の検証用)。
+    // Record the params of notifications per method (for verifying the stand-in).
     let mut notifications_seen: std::collections::BTreeMap<String, Vec<Value>> =
         std::collections::BTreeMap::new();
     let mut initialize_params = Value::Null;
 
     if let Some(message) = &startup_log {
-        // 実サーバーはコンストラクタで名乗る。initialize を読む前に送る。
+        // A real server identifies itself in its constructor. Sent before reading initialize.
         send(
             &mut stdout,
             json!({
@@ -155,7 +154,7 @@ fn main() {
         let params = value.get("params").cloned().unwrap_or(Value::Null);
 
         if method.is_empty() {
-            // 自分が出したリクエストへの応答。
+            // A response to a request we sent.
             if id == Some(json!("wdp-1")) {
                 progress_create_answered = true;
             }
@@ -294,7 +293,7 @@ fn main() {
                     let mut locations = vec![
                         json!({"uri": "file:///fake/b.rs", "range": {"start": {"line": 3, "character": 4}, "end": {"line": 3, "character": 10}}}),
                     ];
-                    // 再インデックスで取り込んだディスク上の変更のぶん。
+                    // The on-disk changes taken in by reindexing.
                     for i in 0..watched_changes {
                         locations.push(json!({"uri": format!("file:///fake/c{i}.rs"), "range": {"start": {"line": 1, "character": 4}, "end": {"line": 1, "character": 10}}}));
                     }
@@ -347,8 +346,8 @@ fn main() {
             "shutdown" => respond(&mut stdout, id, Value::Null),
             "exit" => return,
             _ => {
-                // 未知のリクエストにも応答しないとクライアントが待ち続ける。
-                // 通知は放置してよい。
+                // Unknown requests must be answered too, or the client keeps waiting.
+                // Notifications may be left alone.
                 if id.is_some() {
                     respond(&mut stdout, id, Value::Null);
                 }

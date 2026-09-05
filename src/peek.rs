@@ -1,12 +1,11 @@
-//! JSON-RPC メッセージの覗き見 (v0.1-design.md 4.6)。
+//! Peeking into JSON-RPC messages (v0.1-design.md 4.6).
 //!
-//! ボディは原文バイトのまま転送するため、プロキシが解釈するのは
-//! `method` と `id` の 2 フィールドだけである。完全パース +
-//! 再シリアライズはしない (キー順序の変化・未知フィールドの欠落を招く)。
+//! Because the body is forwarded as the original bytes, the only two fields the proxy
+//! interprets are `method` and `id`. No full parse + re-serialization (that would change key
+//! order and drop unknown fields).
 //!
-//! 未知のフィールドは黙って読み飛ばす。ra-multiplex は
-//! `deny_unknown_fields` で未知メッセージを落とす不具合を持つ
-//! (docs/research/proxy-implementations.md)。
+//! Unknown fields are skipped silently. ra-multiplex has a defect where `deny_unknown_fields`
+//! drops unknown messages (docs/research/proxy-implementations.md).
 
 use std::borrow::Cow;
 
@@ -18,7 +17,7 @@ pub enum PeekError {
     InvalidJson(#[from] serde_json::Error),
 }
 
-/// JSON-RPC のリクエスト ID。LSP は `integer | string` のみを許す。
+/// A JSON-RPC request ID. LSP allows only `integer | string`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RequestId {
@@ -26,7 +25,7 @@ pub enum RequestId {
     String(String),
 }
 
-/// メッセージから覗き見た最小限の情報。ボディの寿命を借りる。
+/// The minimal information peeked from a message. Borrows the body's lifetime.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 pub struct MessageView<'a> {
     #[serde(borrow)]
@@ -35,12 +34,12 @@ pub struct MessageView<'a> {
 }
 
 impl MessageView<'_> {
-    /// 応答を要するリクエスト (method と id の両方を持つ)。
+    /// A request that needs a response (has both method and id).
     pub fn is_request(&self) -> bool {
         self.method.is_some() && self.id.is_some()
     }
 
-    /// 応答を要さない通知 (method のみ)。
+    /// A notification that needs no response (method only).
     pub fn is_notification(&self) -> bool {
         self.method.is_some() && self.id.is_none()
     }
@@ -50,7 +49,7 @@ impl MessageView<'_> {
     }
 }
 
-/// メッセージボディから `method` と `id` を覗き見る。
+/// Peeks `method` and `id` from a message body.
 pub fn peek(body: &[u8]) -> Result<MessageView<'_>, PeekError> {
     Ok(serde_json::from_slice(body)?)
 }
@@ -98,7 +97,7 @@ mod tests {
 
     #[test]
     fn treats_null_id_as_absent() {
-        // JSON-RPC はパースエラー応答で `id: null` を使う。
+        // JSON-RPC uses `id: null` in parse error responses.
         let body = br#"{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"x"}}"#;
         let view = peek(body).unwrap();
         assert_eq!(view.id, None);
@@ -106,7 +105,7 @@ mod tests {
 
     #[test]
     fn tolerates_unknown_fields() {
-        // ra-multiplex の deny_unknown_fields 不具合を踏まない。
+        // Do not trip over ra-multiplex's deny_unknown_fields defect.
         let body = br#"{"jsonrpc":"2.0","id":1,"method":"foo","$brandNew":{"a":[1,2]},"x":null}"#;
         let view = peek(body).unwrap();
         assert_eq!(view.method(), Some("foo"));

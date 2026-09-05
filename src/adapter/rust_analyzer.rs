@@ -1,19 +1,19 @@
-//! rust-analyzer の写像 (v0.1-design.md 5.1)。
+//! The rust-analyzer mapping (v0.1-design.md 5.1).
 //!
-//! rust-analyzer は `experimental/serverStatus` 通知で
-//! `{health, quiescent, message}` を送る (`lsp/ext.rs`)。`quiescent` の実体は
-//! `is_fully_ready()` = ワークスペースロード完了かつキャッシュプライミング
-//! 非実行である。
+//! rust-analyzer sends `{health, quiescent, message}` in an
+//! `experimental/serverStatus` notification (`lsp/ext.rs`). `quiescent` is in
+//! substance `is_fully_ready()` = workspace load complete and cache priming
+//! not running.
 //!
-//! `false` に戻るのはワークスペース構成が変わったとき (`Cargo.toml`、
-//! ブランチ切り替え等) だけで、**通常のソース編集では戻らない**。実測と
-//! その構造的な裏付けは ADR 0007 と
-//! docs/research/rust-analyzer-quiescent-measurement.md にある。したがって
-//! フラップ対策 (平滑化・デバウンス) は不要である。
+//! It reverts to `false` only when the workspace configuration changes
+//! (`Cargo.toml`, switching branches, etc.), and **not on ordinary source
+//! edits**. The measurement and its structural basis are in ADR 0007 and
+//! docs/research/rust-analyzer-quiescent-measurement.md. Consequently, flap
+//! countermeasures (smoothing, debouncing) are unnecessary.
 //!
-//! 失敗は `health` で来る。ワークスペースのロード失敗は
-//! `{health: error, quiescent: true}` (`current_status()`)。仕様 6 章 5 項の
-//! とおり `readiness` ではなく `health` に写す。
+//! Failure arrives via `health`. A workspace load failure is
+//! `{health: error, quiescent: true}` (`current_status()`). Per spec chapter
+//! 6 item 5, it is mapped onto `health`, not `readiness`.
 
 use serde::Deserialize;
 
@@ -21,14 +21,14 @@ use super::Mapping;
 use crate::peek::MessageView;
 use crate::state::{ALL_FILE_CHANGES, Health, Readiness, ServerState, ServerStateProvider};
 
-/// rust-analyzer が送る readiness 通知のメソッド名。
+/// The method name of the readiness notification rust-analyzer sends.
 pub const SERVER_STATUS_METHOD: &str = "experimental/serverStatus";
 
-/// `experimental/serverStatus` の params。
+/// The params of `experimental/serverStatus`.
 ///
-/// `health` を `state::Health` ではなく専用の enum で受けるのは、仕様 8.1 が
-/// 「サーバーは `unknown` を送出してはならない」と定めているため。上流が
-/// それを送ってきてもパースに失敗し、状態は変わらない。
+/// `health` is received as a dedicated enum rather than `state::Health` because spec 8.1 states
+/// that "a server must not send `unknown`." If the upstream sends it anyway, parsing fails and
+/// the state does not change.
 #[derive(Debug, Deserialize)]
 struct ServerStatusParams {
     health: UpstreamHealth,
@@ -55,54 +55,56 @@ impl From<UpstreamHealth> for Health {
     }
 }
 
-/// 準拠テスト 7.2 / 7.3 を実 rust-analyzer に当てて通した版。`serverInfo.version`
-/// の先頭トークン (空白の前) と完全一致で突き合わせる。
+/// Versions for which conformance tests 7.2 / 7.3 were run against a real rust-analyzer and
+/// passed. Matched by exact equality against the leading token (before any whitespace) of
+/// `serverInfo.version`.
 ///
-/// rustup の配布物は `1.98.0 (88d9e12 2026-08-18)`、nixpkgs のビルドは
-/// `2026-08-03` と名乗る。形式が違うので semver として解釈せず、名乗りを
-/// そのまま一覧に持つ。lsp-det は rust-analyzer の内部を保証できず、テストに
-/// 通ったという観測しか持たない (仕様 8.2 の 5)。一覧にない版には保証を
-/// 宣言しない。足すときは、その版で
-/// `cargo test --test conformance -- --ignored` を通してから (守れない保証の
-/// 宣言は仕様 5.1 違反)。
+/// The rustup distribution calls itself `1.98.0 (88d9e12 2026-08-18)`, while the nixpkgs build
+/// calls itself `2026-08-03`. Since the formats differ, these are not interpreted as semver;
+/// the identity strings are kept in the list as-is. lsp-det cannot guarantee rust-analyzer's
+/// internals; it only has the observation that a test passed (spec 8.2 item 5). No guarantee is
+/// declared for a version not in the list. When adding one, run
+/// `cargo test --test conformance -- --ignored` against that version first (declaring a
+/// guarantee that cannot be kept violates spec 5.1).
 ///
-/// 通した記録:
-/// - `1.98.0 (88d9e12 2026-08-18)` (rustup stable)、2026-08-29 と 2026-09-03
-/// - `2026-08-03` (nixpkgs、flake.nix の開発環境)、2026-09-03
+/// Record of versions passed:
+/// - `1.98.0 (88d9e12 2026-08-18)` (rustup stable), 2026-08-29 and 2026-09-03
+/// - `2026-08-03` (nixpkgs, flake.nix dev environment), 2026-09-03
 pub const TESTED_VERSIONS: &[&str] = &["1.98.0", "2026-08-03"];
 
-/// `serverInfo.version` の先頭トークン。ハッシュや日付の後置を捨てる。
+/// The leading token of `serverInfo.version`. Drops a trailing hash or date.
 fn leading_token(version: &str) -> &str {
     version.split_whitespace().next().unwrap_or("")
 }
 
-/// プロジェクトが 1 つも見つからないときに rust-analyzer が `warning` に
-/// 添えるメッセージ (`reload.rs` の `current_status()`)。判別材料はこれしか
-/// ないので文字列で見る。脆いが、[`TESTED_VERSIONS`] の範囲で守る。
+/// The message rust-analyzer attaches to `warning` when it finds no project at all
+/// (`current_status()` in `reload.rs`). This is the only thing available to distinguish it, so
+/// it is matched as a string. Fragile, but kept within the range of [`TESTED_VERSIONS`].
 const MISSING_WORKSPACE_MESSAGE: &str = "Failed to discover workspace.";
 
 pub struct RustAnalyzerAdapter {
-    /// 名乗った版が [`TESTED_VERSIONS`] に入っているか。保証を宣言する条件。
+    /// Whether the announced version is in [`TESTED_VERSIONS`]. The condition for declaring a
+    /// guarantee.
     version_is_tested: bool,
-    /// パース不能な status を一度ログしたか (連投を避けるため)。
+    /// Whether an unparseable status has already been logged once (to avoid repeated logging).
     warned_unparseable: bool,
-    /// `workspace/symbol` の上限。既定 128。クライアントの
-    /// `initializationOptions.workspace.symbol.search.limit` で変わる。
+    /// The cap on `workspace/symbol`. Defaults to 128. Changed by the client's
+    /// `initializationOptions.workspace.symbol.search.limit`.
     workspace_symbol_limit: u64,
-    /// 最後に読んだ health。通知からの先読みで readiness だけを動かすときに使う。
+    /// The last health read. Used when predicting from a notification moves only readiness.
     last_health: Health,
 }
 
-/// rust-analyzer が既定で持つ `workspace/symbol` の上限 (`config.rs` の
-/// `workspace_symbol_search_limit`)。
+/// The default cap rust-analyzer has for `workspace/symbol` (`workspace_symbol_search_limit`
+/// in `config.rs`).
 const DEFAULT_WORKSPACE_SYMBOL_LIMIT: u64 = 128;
 
-/// rust-analyzer が `client/registerCapability` で監視を登録するファイル
-/// (`**/*.rs`、`**/Cargo.{toml,lock}`、`**/rust-analyzer.toml`) か。これらの
-/// Created / Deleted には必ず `quiescent: false → true` が続く
-/// (research/disk-edit-propagation-measurement.md の追記)。
+/// Whether this is a file rust-analyzer registers for watching via
+/// `client/registerCapability` (`**/*.rs`, `**/Cargo.{toml,lock}`, `**/rust-analyzer.toml`).
+/// A Created / Deleted event for one of these is always followed by `quiescent: false → true`
+/// (per the addendum to research/disk-edit-propagation-measurement.md).
 fn is_watched_file(uri: &str) -> bool {
-    // URI の最後の要素で見る。Windows の file URI は `\\` 区切りで来ることがある。
+    // Judged by the last component of the URI. A Windows file URI can arrive `\\`-separated.
     let name = uri.rsplit(['/', '\\']).next().unwrap_or(uri);
     name.ends_with(".rs") || matches!(name, "Cargo.toml" | "Cargo.lock" | "rust-analyzer.toml")
 }
@@ -114,12 +116,13 @@ impl Default for RustAnalyzerAdapter {
 }
 
 impl RustAnalyzerAdapter {
-    /// 版を名乗らない (または読めない) rust-analyzer 向け。保証は宣言しない。
+    /// For a rust-analyzer that does not announce a version (or whose version cannot be read).
+    /// Declares no guarantee.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// `serverInfo.version` を見て、テスト済みの版なら保証を宣言する。
+    /// Looks at `serverInfo.version` and declares a guarantee if it is a tested version.
     pub fn for_version(version: Option<&str>) -> Self {
         let version_is_tested =
             version.is_some_and(|v| TESTED_VERSIONS.contains(&leading_token(v)));
@@ -131,26 +134,26 @@ impl RustAnalyzerAdapter {
         }
     }
 
-    /// 名乗った版が準拠テストを通した範囲に入っているか。
+    /// Whether the announced version is within the range the conformance tests have passed on.
     pub fn version_is_tested(&self) -> bool {
         self.version_is_tested
     }
 }
 
 impl Mapping for RustAnalyzerAdapter {
-    /// 上流に接続した直後の状態。rust-analyzer は `initialize` 応答後に
-    /// 最初の `serverStatus` を送るまで何も報告しない。
+    /// The state right after connecting to the upstream. rust-analyzer reports nothing until it
+    /// sends its first `serverStatus`, after the `initialize` response.
     fn initial_state(&self) -> ServerState {
         ServerState::initializing()
     }
 
-    /// `InitializeResult` に宣言する保証 (仕様 5 章)。
+    /// The guarantee to declare in `InitializeResult` (spec chapter 5).
     ///
-    /// rust-analyzer は両方の保証を満たす。準拠テストスイートの仕様 7.2
-    /// (完全性) と 7.3 (クロスファイル鮮度) を実 rust-analyzer に当てて
-    /// 確認済み (tests/conformance.rs の #[ignore] 付き 2 件)。ただし宣言
-    /// できるのはテストを当てた版 ([`TESTED_VERSIONS`]) に限る (仕様 8.2 の 5)。
-    /// 範囲外の版には状態の通知だけを約束する。
+    /// rust-analyzer satisfies both guarantees. This has been confirmed by running conformance
+    /// test suite specs 7.2 (completeness) and 7.3 (cross-file freshness) against a real
+    /// rust-analyzer (the two `#[ignore]`d tests in tests/conformance.rs). However, it can be
+    /// declared only for versions the tests have passed on ([`TESTED_VERSIONS`]) (spec 8.2 item
+    /// 5). Outside that range, only state notifications are promised.
     fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
             ServerStateProvider::workspace(
@@ -168,15 +171,15 @@ impl Mapping for RustAnalyzerAdapter {
         }
     }
 
-    /// Created / Deleted の通知で `indexing` を先読みする (ADR 0014 追補
-    /// 決定 D)。監視の対象のファイルにだけ効く。Changed には信号が続かない
-    /// (送信中の要求が -32801 で拒まれるだけ) ので先読みしない。
+    /// Predicts `indexing` from a Created / Deleted notification (ADR 0014 addendum decision
+    /// D). Only takes effect for watched files. A Changed event is not followed by a signal
+    /// (the in-flight request is simply refused with -32801), so it is not predicted from.
     fn observe_client(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
         if !view.is_notification() || view.method() != Some("workspace/didChangeWatchedFiles") {
             return None;
         }
         let changes = parse_watched_file_changes(body)?;
-        // FileChangeType: 1 = Created, 2 = Changed, 3 = Deleted。
+        // FileChangeType: 1 = Created, 2 = Changed, 3 = Deleted.
         let reindexes = changes
             .iter()
             .any(|change| matches!(change.kind, 1 | 3) && is_watched_file(&change.uri));
@@ -187,22 +190,23 @@ impl Mapping for RustAnalyzerAdapter {
         })
     }
 
-    /// 上流→クライアント方向のメッセージから、上流が報告している状態を
-    /// 読み取る。`experimental/serverStatus` 以外、および読めない status は
-    /// `None` (状態を動かさない)。
+    /// Reads the state the upstream is reporting from an upstream-to-client message. `None`
+    /// (the state does not move) for anything other than `experimental/serverStatus`, and for
+    /// an unreadable status.
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
         if !view.is_notification() || view.method() != Some(SERVER_STATUS_METHOD) {
             return None;
         }
 
         let Some(params) = parse_status_params(body) else {
-            // 未知の形の status は状態を動かさない。壊れた 1 通で
-            // readiness を誤って進めるより、前の状態を保つ方が安全。
+            // A status of unknown shape does not move the state. Keeping the previous state is
+            // safer than letting one broken message wrongly advance readiness.
             //
-            // ただし黙って捨ててはならない。上流が params の形を変えると
-            // 全通が読めなくなり、状態が最後の値で凍りつく。ゲート実装後は
-            // そのまま非常口タイムアウトまでの保留として現れるため、
-            // 理由がログにないと診断できなくなる。連投を避けて 1 度だけ出す。
+            // But it must not be silently dropped. If the upstream changes the shape of params,
+            // every message becomes unreadable and the state freezes at its last value. The
+            // downstream side then keeps holding cross-workspace requests (there is no time
+            // limit on holding), which cannot be diagnosed without a reason in the log. Logged
+            // once to avoid repeated logging.
             if !self.warned_unparseable {
                 self.warned_unparseable = true;
                 eprintln!(
@@ -213,8 +217,9 @@ impl Mapping for RustAnalyzerAdapter {
             return None;
         };
 
-        // 語彙の粗さを補う (設計 5.1)。プロジェクト未発見は横断問い合わせに
-        // とって機能不全なので、rust-analyzer の warning を error に写す。
+        // Compensates for the coarseness of the vocabulary (design 5.1). Since a missing
+        // project makes cross-workspace queries non-functional, rust-analyzer's warning is
+        // mapped to error.
         let mut health: Health = params.health.into();
         if health == Health::Warning
             && params
@@ -240,11 +245,12 @@ impl Mapping for RustAnalyzerAdapter {
 
 struct WatchedFileChange {
     uri: String,
-    /// LSP の `FileChangeType` の値 (1..=3)。範囲外の値の変更は捨てる。
+    /// The value of LSP's `FileChangeType` (1..=3). A change with a value outside this range is
+    /// dropped.
     kind: u64,
 }
 
-/// `workspace/didChangeWatchedFiles` の `changes` (uri と FileChangeType)。
+/// The `changes` (uri and FileChangeType) of `workspace/didChangeWatchedFiles`.
 fn parse_watched_file_changes(body: &[u8]) -> Option<Vec<WatchedFileChange>> {
     let value: serde_json::Value = serde_json::from_slice(body).ok()?;
     let changes = value["params"]["changes"].as_array()?;
@@ -263,8 +269,8 @@ fn parse_watched_file_changes(body: &[u8]) -> Option<Vec<WatchedFileChange>> {
     )
 }
 
-/// `params` を取り出して `ServerStatusParams` として読む。
-/// `params` の欠落・型違い・未知の `health` 値はすべて `None`。
+/// Extracts `params` and reads it as `ServerStatusParams`.
+/// A missing `params`, a type mismatch, or an unknown `health` value all result in `None`.
 fn parse_status_params(body: &[u8]) -> Option<ServerStatusParams> {
     #[derive(Deserialize)]
     struct Envelope {
@@ -305,9 +311,10 @@ mod tests {
 
     #[test]
     fn declares_guarantees_for_the_nixpkgs_build_the_suite_passed_on() {
-        // nixpkgs のビルドは日付で名乗る (`2026-08-03`)。この版にも 7.2 / 7.3 を
-        // 当てて通した (flake.nix の開発環境、2026-09-03)。版の識別は semver に
-        // 限らず、名乗りの先頭トークンをテスト済みの一覧と突き合わせる。
+        // The nixpkgs build calls itself by a date (`2026-08-03`). 7.2 / 7.3 were run against
+        // this version too and passed (flake.nix dev environment, 2026-09-03). Version
+        // identification is not limited to semver; the leading token of the identity string is
+        // matched against the list of tested versions.
         let tested = crate::adapter::select("rust-analyzer", Some("2026-08-03")).unwrap();
         assert_eq!(
             tested.guarantees(),
@@ -322,10 +329,10 @@ mod tests {
 
     #[test]
     fn maps_a_missing_workspace_warning_to_error() {
-        // 設計 5.1: プロジェクトが 1 つも見つからないとき rust-analyzer は
-        // warning と "Failed to discover workspace." を出す (reload.rs の
-        // current_status())。横断問い合わせは機能しないので error に写す。
-        // 判別材料は message 文字列しかない。
+        // Design 5.1: when rust-analyzer finds no project at all, it emits warning and
+        // "Failed to discover workspace." (`current_status()` in reload.rs). Cross-workspace
+        // queries do not function, so this is mapped to error. The message string is the only
+        // thing available to distinguish it.
         let mut adapter = RustAnalyzerAdapter::new();
         let body = r#"{"method":"experimental/serverStatus","params":{"health":"warning","quiescent":true,"message":"Failed to discover workspace.\nConsider adding the `Cargo.toml` of the workspace to the [`linkedProjects`](https://rust-analyzer.github.io/book/configuration.html#linkedProjects) setting.\n\n"}}"#;
         let state = interpret(&mut adapter, body).unwrap();
@@ -335,7 +342,7 @@ mod tests {
 
     #[test]
     fn maps_the_missing_workspace_warning_to_error_even_after_other_warnings() {
-        // current_status() は警告文を連結する。先頭でなくても見つける。
+        // current_status() concatenates warning text. It is found even when not at the start.
         let mut adapter = RustAnalyzerAdapter::new();
         let body = r#"{"method":"experimental/serverStatus","params":{"health":"warning","quiescent":true,"message":"Auto-reloading is disabled and the workspace has changed, a manual workspace reload is required.\n\nFailed to discover workspace.\n"}}"#;
         assert_eq!(interpret(&mut adapter, body).unwrap().health, Health::Error);
@@ -367,8 +374,8 @@ mod tests {
 
     #[test]
     fn carries_health_through_unchanged() {
-        // 失敗は health で来る (仕様 6 章 5 項)。error でも quiescent は
-        // 独立に読む。
+        // Failure arrives via health (spec chapter 6 item 5). Even with error, quiescent is
+        // read independently.
         for (upstream, expected) in [
             ("ok", Health::Ok),
             ("warning", Health::Warning),
@@ -401,7 +408,7 @@ mod tests {
 
     #[test]
     fn ignores_a_request_that_happens_to_use_the_status_method_name() {
-        // serverStatus は通知であってリクエストではない。
+        // serverStatus is a notification, not a request.
         let mut adapter = RustAnalyzerAdapter::new();
         let as_request = r#"{"jsonrpc":"2.0","id":1,"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true}}"#;
         assert!(interpret(&mut adapter, as_request).is_none());
@@ -417,8 +424,8 @@ mod tests {
 
     #[test]
     fn refuses_observer_only_health_values_claimed_by_the_upstream() {
-        // 仕様 8.1: サーバーは unknown を送出してはならない。dead は本プロトコルの
-        // 値ではない (仕様 3 章)。
+        // Spec 8.1: a server must not send unknown. dead is not a value of this protocol
+        // (spec chapter 3).
         for claimed in ["dead", "unknown"] {
             let mut adapter = RustAnalyzerAdapter::new();
             let body = format!(
@@ -426,7 +433,7 @@ mod tests {
             );
             assert!(
                 interpret(&mut adapter, &body).is_none(),
-                "上流の {claimed} を受け入れてはならない"
+                "must not accept {claimed} from the upstream"
             );
         }
     }

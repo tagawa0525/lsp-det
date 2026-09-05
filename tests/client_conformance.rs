@@ -1,13 +1,14 @@
-//! 下流側の準拠テストスイート（docs/spec/server-state.md 9.1）。
+//! The conformance test suite for the downstream side (docs/spec/server-state.md 9.1).
 //!
-//! 仕様 9 章「クライアントの推奨挙動」を実行可能にしたもの。被験者は
-//! 「本プロトコルに準拠したサーバーを相手にするクライアント」で、lsp-det の
-//! 下流側が最初の被験者である。将来 Claude Code や Serena がネイティブに
-//! 対応したとき、同じ要件で被験者を差し替える（v0.1-design.md 6 章）。
+//! Spec chapter 9 "recommended behavior for clients" made executable. The subject is "a client
+//! that faces a server conformant to this protocol", and the downstream side of lsp-det is the
+//! first subject. When Claude Code or Serena support it natively in the future, the subject is
+//! swapped under the same requirements (v0.1-design.md chapter 6).
 //!
-//! lsp-det については、境界の上の状態の出所が 2 つある。上流が自ら宣言して
-//! いれば上流の通知から（上流側は恒等写像）、そうでなければ写像から。
-//! どちらでも下流側の挙動は同じでなければならないので、両方を被験者にする。
+//! For lsp-det, the state above the boundary has 2 sources. If the upstream declares on its own,
+//! it comes from the upstream's notifications (the upstream side is the identity mapping);
+//! otherwise it comes from the mapping. The downstream side's behavior must be the same either
+//! way, so both are made subjects.
 
 mod support;
 
@@ -16,21 +17,22 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use support::{ConformanceClient, ServerUnderTest};
 
-/// 「届かないこと」を確かめるときの観測窓。
+/// The observation window when checking "that something does not arrive".
 const NEGATIVE_WINDOW: Duration = Duration::from_millis(750);
 
-/// 境界の上の状態を動かす手段が違う 2 種類の被験者。
+/// The 2 kinds of subject, which differ in how the state above the boundary is moved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Subject {
-    /// 準拠した偽上流 + lsp-det（上流側は恒等写像）。
+    /// A conformant fake upstream + lsp-det (the upstream side is the identity mapping).
     ConformantUpstream,
-    /// rust-analyzer と名乗る偽上流 + lsp-det（写像が状態を作る）。
+    /// A fake upstream that calls itself rust-analyzer + lsp-det (the mapping produces the
+    /// state).
     MappedUpstream,
 }
 
 const SUBJECTS: [Subject; 2] = [Subject::ConformantUpstream, Subject::MappedUpstream];
 
-/// 被験者を起動し、`initialize` 直後に `indexing` の状態にする。
+/// Launches the subject and puts it in the `indexing` state right after `initialize`.
 fn start_indexing(subject: Subject, client_declares: bool) -> ConformanceClient {
     let server = match subject {
         Subject::ConformantUpstream => ServerUnderTest::lsp_det_with_conformant_upstream_flags(&[
@@ -42,7 +44,7 @@ fn start_indexing(subject: Subject, client_declares: bool) -> ConformanceClient 
     let mut client = ConformanceClient::start(&server);
     client.initialize(client_declares);
     if subject == Subject::MappedUpstream {
-        // 写像は最初の serverStatus まで initializing。indexing に進める。
+        // The mapping is initializing until the first serverStatus. Advance it to indexing.
         client.make_upstream_emit_status("ok", false);
     }
     client
@@ -70,15 +72,17 @@ fn saw_upstream(client: &mut ConformanceClient, method: &str) -> bool {
     client.upstream_methods_seen().iter().any(|m| m == method)
 }
 
-/// 上流の状態変化が lsp-det に届くまで待つ同期点。偽上流は通知を送ってから
-/// 次のリクエストに答えるので、上流への往復リクエストが返れば、その前に
-/// 送らせた通知は lsp-det が処理済みである。
+/// A synchronization point that waits until the upstream's state change reaches lsp-det. The
+/// fake upstream sends the notification before answering the next request, so once a round-trip
+/// request to the upstream returns, lsp-det has processed the notification it was made to send
+/// before that.
 fn sync_with_upstream(client: &mut ConformanceClient) {
     let _ = client.upstream_methods_seen();
 }
 
 // ---------------------------------------------------------------------------
-// 9.1 の 1: indexing の間は横断リクエストが上流に届かず、ready の後に届く
+// 9.1 item 1: cross-workspace requests do not reach the upstream during indexing, and reach it
+// after ready
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -88,22 +92,22 @@ fn spec_9_1_1_holds_cross_workspace_requests_until_ready() {
         let id = client.send_references();
         assert!(
             client.response_within(id, NEGATIVE_WINDOW).is_none(),
-            "{subject:?}: indexing 中に references が応答された"
+            "{subject:?}: references was answered during indexing"
         );
         assert!(
             !saw_upstream(&mut client, "textDocument/references"),
-            "{subject:?}: indexing 中に references が上流へ届いた"
+            "{subject:?}: references reached the upstream during indexing"
         );
 
         make_ready(&mut client, subject);
         let response = client.await_response_to(id);
         assert!(
             response.get("result").is_some(),
-            "{subject:?}: ready 後の references が成功応答でない: {response}"
+            "{subject:?}: references after ready is not a success response: {response}"
         );
         assert!(
             saw_upstream(&mut client, "textDocument/references"),
-            "{subject:?}: ready 後も references が上流へ届いていない"
+            "{subject:?}: references has not reached the upstream even after ready"
         );
         client.shutdown();
     }
@@ -128,14 +132,14 @@ fn spec_9_1_1_releases_held_requests_in_order() {
         assert_eq!(
             positions.len(),
             2,
-            "{subject:?}: 2 件とも上流に届くはず: {seen:?}"
+            "{subject:?}: both of the 2 should reach the upstream: {seen:?}"
         );
         client.shutdown();
     }
 }
 
 // ---------------------------------------------------------------------------
-// 9.1 の 2: health が error なら待たずに失敗する
+// 9.1 item 2: fails without waiting if health is error
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -149,14 +153,14 @@ fn spec_9_1_2_fails_fast_when_health_is_error() {
         let id = client.send_references();
         let response = client
             .response_within(id, Duration::from_secs(5))
-            .unwrap_or_else(|| panic!("{subject:?}: error なのに references が待たされた"));
+            .unwrap_or_else(|| panic!("{subject:?}: references was made to wait despite error"));
         assert!(
             response.get("error").is_some(),
-            "{subject:?}: error のときの references が失敗応答でない: {response}"
+            "{subject:?}: references under error is not a failure response: {response}"
         );
         assert!(
             !saw_upstream(&mut client, "textDocument/references"),
-            "{subject:?}: error なのに references が上流へ届いた"
+            "{subject:?}: references reached the upstream despite error"
         );
         client.shutdown();
     }
@@ -173,7 +177,8 @@ fn spec_9_1_2_fails_held_requests_when_health_turns_error() {
         let response = client.await_response_to(id);
         assert!(
             response.get("error").is_some(),
-            "{subject:?}: error になったのに保留分が失敗応答でない: {response}"
+            "{subject:?}: the held request is not a failure response even though health became \
+             error: {response}"
         );
         client.shutdown();
     }
@@ -181,7 +186,7 @@ fn spec_9_1_2_fails_held_requests_when_health_turns_error() {
 
 #[test]
 fn returns_to_holding_after_the_error_recovers() {
-    // error は回復しうる (設計 4.3)。回復後の横断リクエストは再び待つ。
+    // error can recover (design 4.3). Cross-workspace requests after recovery wait again.
     let subject = Subject::MappedUpstream;
     let mut client = start_indexing(subject, false);
     make_error(&mut client, subject);
@@ -194,7 +199,7 @@ fn returns_to_holding_after_the_error_recovers() {
     let id = client.send_references();
     assert!(
         client.response_within(id, NEGATIVE_WINDOW).is_none(),
-        "回復後の indexing 中に references が待たされなかった"
+        "references was not made to wait during indexing after recovery"
     );
     make_ready(&mut client, subject);
     assert!(client.await_response_to(id).get("result").is_some());
@@ -202,25 +207,26 @@ fn returns_to_holding_after_the_error_recovers() {
 }
 
 // ---------------------------------------------------------------------------
-// 9.1 の 3: readiness が unknown なら待たない
+// 9.1 item 3: does not wait if readiness is unknown
 // ---------------------------------------------------------------------------
 
 #[test]
 fn spec_9_1_3_does_not_hold_when_readiness_is_unknown() {
-    // 既知の写像がない上流。両軸 unknown で、待つべき信号がない。
+    // An upstream with no known mapping. Both axes are unknown, and there is no signal to wait
+    // for.
     let server = ServerUnderTest::lsp_det_without_adapter();
     let mut client = ConformanceClient::start(&server);
     client.initialize(false);
     let id = client.send_references();
     let response = client
         .response_within(id, Duration::from_secs(5))
-        .expect("unknown なのに references が待たされた");
+        .expect("references was made to wait despite unknown");
     assert!(response.get("result").is_some(), "{response}");
     client.shutdown();
 }
 
 // ---------------------------------------------------------------------------
-// 9.1 の 4: 横断以外は indexing 中も通す
+// 9.1 item 4: everything other than cross-workspace passes through even during indexing
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -230,14 +236,14 @@ fn spec_9_1_4_forwards_single_file_requests_while_indexing() {
         let id = client.send_hover();
         let response = client
             .response_within(id, Duration::from_secs(5))
-            .unwrap_or_else(|| panic!("{subject:?}: indexing 中に hover が待たされた"));
+            .unwrap_or_else(|| panic!("{subject:?}: hover was made to wait during indexing"));
         assert!(response.get("result").is_some(), "{subject:?}: {response}");
         client.shutdown();
     }
 }
 
 // ---------------------------------------------------------------------------
-// 9.1 の 5: 代行中に cancel / shutdown を受けたら保留分すべてに応答する
+// 9.1 item 5: on receiving cancel / shutdown while standing in, answers all held requests
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -252,13 +258,13 @@ fn spec_9_1_5_answers_a_held_request_on_cancel() {
         assert_eq!(
             response["error"]["code"],
             json!(-32800),
-            "{subject:?}: キャンセルした保留分が RequestCancelled でない: {response}"
+            "{subject:?}: the canceled held request is not RequestCancelled: {response}"
         );
-        // キャンセル済みの要求は ready になっても上流へ流さない。
+        // A canceled request is not forwarded to the upstream even after ready.
         make_ready(&mut client, subject);
         assert!(
             !saw_upstream(&mut client, "textDocument/references"),
-            "{subject:?}: キャンセル済みの references が上流へ届いた"
+            "{subject:?}: the canceled references reached the upstream"
         );
         client.shutdown();
     }
@@ -275,12 +281,12 @@ fn spec_9_1_5_answers_held_requests_on_shutdown() {
         let response = client.await_response_to(held);
         assert!(
             response.get("error").is_some(),
-            "{subject:?}: shutdown 時の保留分が失敗応答でない: {response}"
+            "{subject:?}: the held request at shutdown is not a failure response: {response}"
         );
         let shutdown_response = client.await_response_to(shutdown);
         assert!(
             shutdown_response.get("error").is_none(),
-            "{subject:?}: shutdown 自体が失敗した: {shutdown_response}"
+            "{subject:?}: shutdown itself failed: {shutdown_response}"
         );
         client.notify("exit", json!(null));
     }
@@ -288,27 +294,29 @@ fn spec_9_1_5_answers_held_requests_on_shutdown() {
 
 #[test]
 fn spec_9_1_5_answers_held_requests_when_the_upstream_exits() {
-    // 設計 4.2「上流の消失」: 保留分にエラーを応答してから接続を閉じる。
+    // Design 4.2 "loss of the upstream": answers the held requests with an error, then closes the
+    // connection.
     for subject in SUBJECTS {
         let mut client = start_indexing(subject, false);
         let held = client.send_references();
         assert!(client.response_within(held, NEGATIVE_WINDOW).is_none());
 
-        // 偽上流は exit 通知で終了する（shutdown なしでも）。
+        // The fake upstream exits on the exit notification (even without shutdown).
         client.notify("exit", json!(null));
         let response = client.await_response_to(held);
         assert!(
             response.get("error").is_some(),
-            "{subject:?}: 上流消失時の保留分が失敗応答でない: {response}"
+            "{subject:?}: the held request on loss of the upstream is not a failure response: \
+             {response}"
         );
     }
 }
 
 // ---------------------------------------------------------------------------
-// 7.2 完全性を、下流側 + 偽上流で回す
+// 7.2 coverage, run through the downstream side + the fake upstream
 //
-// 偽上流はインデックス未完了の間、references に空配列を返す (無言の嘘)。
-// 下流側が ready まで待たせるので、クライアントには完全な結果だけが届く。
+// The fake upstream returns an empty array for references while indexing is incomplete (a silent
+// lie). The downstream side makes it wait until ready, so only complete results reach the client.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -340,14 +348,14 @@ fn spec_7_2_coverage_through_the_downstream_side_with_a_fake_upstream() {
         let found = response["result"].as_array().cloned().unwrap_or_default();
         assert!(
             found.iter().any(|l| l["range"]["start"]["line"] == 3),
-            "{subject:?}: インデックス未完了の空応答がクライアントに届いた: {response}"
+            "{subject:?}: an empty response from incomplete indexing reached the client: {response}"
         );
         client.shutdown();
     }
 }
 
 // ---------------------------------------------------------------------------
-// 仕様 5.2: 宣言したクライアントには代行しない
+// Spec 5.2: does not stand in for a client that declared
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -358,7 +366,7 @@ fn does_not_hold_when_the_client_declared_server_state() {
         let response = client
             .response_within(id, Duration::from_secs(5))
             .unwrap_or_else(|| {
-                panic!("{subject:?}: 宣言したクライアントの references が待たされた")
+                panic!("{subject:?}: references from a client that declared was made to wait")
             });
         assert!(response.get("result").is_some(), "{subject:?}: {response}");
         client.shutdown();
@@ -366,18 +374,18 @@ fn does_not_hold_when_the_client_declared_server_state() {
 }
 
 // ---------------------------------------------------------------------------
-// 恒等写像のときの境界の状態の読み方 (設計 4.1・4.2)
+// How the state at the boundary is read under the identity mapping (design 4.1, 4.2)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn upstream_notifications_are_not_forwarded_to_a_client_that_did_not_declare() {
-    // 下流側が読むために上流に通知を出させるが、宣言していないクライアントには
-    // 流さない (仕様 5.2)。
+    // The upstream is made to emit the notification so the downstream side can read it, but it is
+    // not forwarded to a client that did not declare (spec 5.2).
     let mut client = start_indexing(Subject::ConformantUpstream, false);
     client.make_upstream_emit_server_state_changed("ok", "ready");
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "宣言していないクライアントへ上流の serverStateChanged を流した"
+        "forwarded the upstream's serverStateChanged to a client that did not declare"
     );
     client.shutdown();
 }
@@ -393,29 +401,29 @@ fn upstream_notifications_are_forwarded_to_a_client_that_declared() {
 
 #[test]
 fn the_initial_state_of_a_conformant_upstream_is_read_by_asking_it() {
-    // 上流の通知は変化のときにしか来ない。初期状態は lsp-det が自分で
-    // 問い合わせて得る。その問い合わせの応答はクライアントには見えない。
+    // The upstream's notification comes only on a change. lsp-det obtains the initial state by
+    // asking on its own. The response to that request is not visible to the client.
     let mut client = start_indexing(Subject::ConformantUpstream, false);
     assert!(
         saw_upstream(&mut client, "experimental/serverState"),
-        "lsp-det が上流に初期状態を問い合わせていない"
+        "lsp-det did not ask the upstream for the initial state"
     );
     let id = client.send_references();
     assert!(
         client.response_within(id, NEGATIVE_WINDOW).is_none(),
-        "初期状態 (indexing) を読めておらず references が待たされなかった"
+        "the initial state (indexing) was not read, and references was not made to wait"
     );
     client.cancel(id);
     client.await_response_to(id);
     client.shutdown();
 }
 
-/// 未使用警告を避ける（被験者ごとに使うヘルパーが異なる）。
+/// Avoids an unused warning (which helpers are used differs per subject).
 #[allow(dead_code)]
 fn _unused(_: Value) {}
 
 // ---------------------------------------------------------------------------
-// 9.1 の 1（ADR 0014）: 通知で始まった再インデックスの間も保留する
+// 9.1 item 1 (ADR 0014): also holds during reindexing that started from a notification
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -436,7 +444,7 @@ fn spec_9_1_1_holds_while_reindexing_after_watched_file_changes() {
     let id = client.send_references();
     assert!(
         client.response_within(id, NEGATIVE_WINDOW).is_none(),
-        "通知で始まった再インデックスの間に references が応答された"
+        "references was answered during reindexing that started from a notification"
     );
 
     client.make_upstream_emit_status("ok", true);
@@ -445,21 +453,21 @@ fn spec_9_1_1_holds_while_reindexing_after_watched_file_changes() {
     assert_eq!(
         locations.len(),
         2,
-        "ready 後の応答が通知した変更を織り込んでいない: {response}"
+        "the response after ready does not incorporate the notified change: {response}"
     );
     client.shutdown();
 }
 
 // ---------------------------------------------------------------------------
-// ADR 0015: 下流側の代行 (プロトコルの外)
+// ADR 0015: the downstream side's stand-ins (outside the protocol)
 //
-// (A) capability を宣言せず通知も送らないクライアントに代わって、7.0 の
-//     リクエストの前に git ls-files の一覧の mtime を比べ
-//     workspace/didChangeWatchedFiles を送る
-// (B) 既に開いている uri への didOpen を全文の didChange に書き換える
+// (A) On behalf of a client that neither declares the capability nor sends the notification,
+//     compares the mtimes of the git ls-files listing before a 7.0 request and sends
+//     workspace/didChangeWatchedFiles
+// (B) Rewrites a didOpen for an already open uri into a full-text didChange
 // ---------------------------------------------------------------------------
 
-/// 代行の被験者: rust-analyzer と名乗る偽上流を ready にしておく。
+/// The subject for the stand-ins: a fake upstream that calls itself rust-analyzer, made ready.
 fn ready_client_in(root: &std::path::Path, capabilities: Value) -> ConformanceClient {
     let mut client = ConformanceClient::start(&ServerUnderTest::lsp_det_with_fake_upstream());
     client.initialize_with_root_and_capabilities(root, capabilities);
@@ -500,7 +508,7 @@ fn stands_in_for_watched_files_before_a_cross_workspace_request() {
     let a = ws.file("a.rs");
     let b = ws.file("b.rs");
 
-    // 起動後の変更: a.rs を書き換え、b.rs を作る (どちらも開かない)。
+    // Changes after launch: rewrite a.rs and create b.rs (open neither).
     std::fs::write(&a, "pub fn target() {}\npub fn more() {}\n").unwrap();
     std::fs::write(&b, "pub fn other() {}\n").unwrap();
 
@@ -514,23 +522,23 @@ fn stands_in_for_watched_files_before_a_cross_workspace_request() {
     let references = seen.iter().position(|m| m == "textDocument/references");
     assert!(
         matches!((watched, references), (Some(w), Some(r)) if w < r),
-        "代行の通知が references より先に上流へ届いていない: {seen:?}"
+        "the stand-in notification did not reach the upstream before references: {seen:?}"
     );
     let notifications = client.upstream_notifications("workspace/didChangeWatchedFiles");
     assert_eq!(
         notifications.len(),
         1,
-        "通知は 1 つにまとめる: {notifications:#?}"
+        "the notifications are combined into 1: {notifications:#?}"
     );
     let mut changes = changes_of(&notifications[0]);
     changes.sort();
     assert_eq!(
         changes,
         vec![(support::file_uri(&a), 2), (support::file_uri(&b), 1)],
-        "Changed と Created が uri と種類つきで届く"
+        "Changed and Created arrive with uri and type"
     );
 
-    // 変更がなければ通知しない。
+    // No notification if nothing changed.
     let id = client.send_references();
     client.await_response_to(id);
     assert_eq!(
@@ -538,10 +546,10 @@ fn stands_in_for_watched_files_before_a_cross_workspace_request() {
             .upstream_notifications("workspace/didChangeWatchedFiles")
             .len(),
         1,
-        "変更がないのに通知した"
+        "notified although nothing changed"
     );
 
-    // Deleted。
+    // Deleted.
     std::fs::remove_file(&b).unwrap();
     let id = client.send_references();
     client.await_response_to(id);
@@ -564,7 +572,7 @@ fn does_not_stand_in_when_the_client_declares_watched_files() {
         client
             .upstream_notifications("workspace/didChangeWatchedFiles")
             .is_empty(),
-        "宣言したクライアントの代行をした"
+        "stood in for a client that declared"
     );
     client.shutdown();
 }
@@ -573,7 +581,7 @@ fn does_not_stand_in_when_the_client_declares_watched_files() {
 fn stops_standing_in_once_the_client_sends_its_own_notification() {
     let ws = support::TempGitWorkspace::new("own");
     let mut client = ready_client_in(&ws.root, plain_capabilities());
-    // クライアントが自分で送る (Serena は宣言せずに送る)。
+    // The client sends it itself (Serena sends without declaring).
     client.did_change_watched_files(&[(&ws.file("a.rs"), 2)]);
     std::fs::write(ws.file("b.rs"), "pub fn other() {}\n").unwrap();
     let id = client.send_references();
@@ -582,7 +590,7 @@ fn stops_standing_in_once_the_client_sends_its_own_notification() {
     assert_eq!(
         notifications.len(),
         1,
-        "クライアント自身の通知だけが届く: {notifications:#?}"
+        "only the client's own notification arrives: {notifications:#?}"
     );
     assert_eq!(
         changes_of(&notifications[0]),
@@ -602,7 +610,7 @@ fn does_not_stand_in_outside_a_git_repository() {
         client
             .upstream_notifications("workspace/didChangeWatchedFiles")
             .is_empty(),
-        "git 管理外で代行した"
+        "stood in outside a git repository"
     );
     client.shutdown();
 }
@@ -613,7 +621,7 @@ fn rewrites_a_duplicate_did_open_into_a_full_text_did_change() {
     let mut client = ready_client_in(&ws.root, plain_capabilities());
     let a = ws.file("a.rs");
     client.did_open(&a, "rust");
-    // Claude Code は Write のたびに同じ uri へ didOpen を送り直す。
+    // Claude Code resends didOpen to the same uri on every Write.
     client.notify(
         "textDocument/didOpen",
         json!({"textDocument": {"uri": support::file_uri(&a), "languageId": "rust", "version": 1, "text": "pub fn target() {}\npub fn more() {}\n"}}),
@@ -623,10 +631,10 @@ fn rewrites_a_duplicate_did_open_into_a_full_text_did_change() {
     assert_eq!(
         client.upstream_notifications("textDocument/didOpen").len(),
         1,
-        "2 度目の didOpen をそのまま流した"
+        "forwarded the 2nd didOpen as is"
     );
     let changes = client.upstream_notifications("textDocument/didChange");
-    assert_eq!(changes.len(), 1, "全文の didChange に書き換えていない");
+    assert_eq!(changes.len(), 1, "not rewritten into a full-text didChange");
     assert_eq!(
         changes[0]["textDocument"]["uri"],
         json!(support::file_uri(&a))
@@ -637,7 +645,7 @@ fn rewrites_a_duplicate_did_open_into_a_full_text_did_change() {
         json!([{"text": "pub fn target() {}\npub fn more() {}\n"}])
     );
 
-    // 閉じてから開き直すのは正当な didOpen。
+    // Closing and then reopening is a legitimate didOpen.
     client.did_close(&a);
     client.did_open(&a, "rust");
     sync_with_upstream(&mut client);

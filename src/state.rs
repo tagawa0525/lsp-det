@@ -1,45 +1,45 @@
-//! サーバー状態プロトコルの `ServerState`（docs/spec/server-state.md 3 章・8.1）。
+//! `ServerState` of the server state protocol (docs/spec/server-state.md chapter 3 and 8.1).
 //!
-//! `health` と `readiness` は独立の 2 軸。`message` は人間向けの補足であり
-//! 機械判定に使ってはならない。ワイヤ形式は仕様が規範なので、本モジュールの
-//! テストは serde の出力そのものを固定する。
+//! `health` and `readiness` are two independent axes. `message` is a supplement for humans
+//! and must not be used for machine judgment. The wire format is normative in the spec, so
+//! the tests in this module pin down the serde output itself.
 
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-/// 状態を問い合わせるリクエスト (仕様 4.1)。
+/// The request that asks for the state (spec 4.1).
 ///
-/// LSP 本体に取り込まれるまで `experimental/` プレフィックスを使う
-/// (仕様 4.3)。取り込み時に `workspace/` へ改名する。
+/// The `experimental/` prefix is used until it is taken into LSP itself (spec 4.3). It is
+/// renamed to `workspace/` when taken in.
 pub const SERVER_STATE_METHOD: &str = "experimental/serverState";
 
-/// 状態変化の通知 (仕様 4.2)。
+/// The notification of a state change (spec 4.2).
 pub const SERVER_STATE_CHANGED_METHOD: &str = "experimental/serverStateChanged";
 
-/// サーバーが機能しているか (仕様 3 章)。
+/// Whether the server is functioning (spec chapter 3).
 ///
-/// サーバーの死を表す値はない。プロセスの消失は接続の終了 (EOF) で伝える
-/// (仕様 8.2 の 7、ADR 0009 決定 C-3)。
+/// There is no value for the server's death. The disappearance of the process is conveyed by
+/// the end of the connection (EOF) (spec 8.2 item 7, ADR 0009 decision C-3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Health {
     Ok,
     Warning,
     Error,
-    /// health を観測する手段がない、またはまだ観測していない (最初の信号が
-    /// 届く前)。観測者のみが送出する (仕様 8.1、8.2 の 2)。
+    /// There is no means to observe health, or it has not been observed yet (before the first
+    /// signal arrives). Emitted only by observers (spec 8.1, 8.2 item 2).
     Unknown,
 }
 
-/// 要求に完全に答えられるか。
+/// Whether requests can be answered completely.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Readiness {
     Initializing,
     Indexing,
     Ready,
-    /// readiness を観測する手段がない。観測者のみが送出する (仕様 8.1)。
+    /// There is no means to observe readiness. Emitted only by observers (spec 8.1).
     Unknown,
 }
 
@@ -51,12 +51,13 @@ pub struct ServerState {
     pub message: Option<String>,
 }
 
-/// `ServerCapabilities.experimental.serverStateProvider` の値 (仕様 5 章、ADR 0016)。
+/// The value of `ServerCapabilities.experimental.serverStateProvider` (spec chapter 5,
+/// ADR 0016).
 ///
-/// 常にオブジェクト。`{}` は状態の通知だけを約束する。`coverage` と
-/// `freshness` は `ready` が応答について何を意味するかを足し、値は
-/// あるべき姿からの欠けを名指しする (真偽値ではない)。実装は自分が守れる
-/// 保証だけを宣言する。守れない保証の宣言は仕様違反である (仕様 5.1)。
+/// Always an object. `{}` promises only the state notifications. `coverage` and `freshness`
+/// add what `ready` means for responses, and their values name what is missing from the ideal
+/// (they are not booleans). An implementation declares only the guarantees it can keep.
+/// Declaring a guarantee it cannot keep is a spec violation (spec 5.1).
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct ServerStateProvider {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,8 +66,8 @@ pub struct ServerStateProvider {
     pub freshness: Option<Freshness>,
 }
 
-/// `ready` のとき、7.0 のメソッドの応答が基づく範囲と、件数の上限で
-/// 結果を切るメソッド (メソッド名 → 上限)。
+/// When `ready`, the scope the responses of the 7.0 methods are based on, and the methods
+/// that cap their results at a count (method name -> cap).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Coverage {
     pub scope: CoverageScope,
@@ -76,21 +77,21 @@ pub struct Coverage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CoverageScope {
-    /// ワークスペース全体のインデックス。
+    /// The index of the whole workspace.
     Workspace,
-    /// クライアントが開いている文書だけ。
+    /// Only the documents the client has open.
     OpenDocuments,
 }
 
-/// `ready` のとき織り込んでいる `workspace/didChangeWatchedFiles` の変更の
-/// 種類。`textDocument/didChange` は常に織り込む。
+/// The kinds of `workspace/didChangeWatchedFiles` changes incorporated when `ready`.
+/// `textDocument/didChange` is always incorporated.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Freshness {
     #[serde(rename = "fileChanges")]
     pub file_changes: Vec<FileChangeType>,
 }
 
-/// LSP の `FileChangeType` の名前。
+/// The names of LSP's `FileChangeType`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FileChangeType {
     Created,
@@ -98,7 +99,7 @@ pub enum FileChangeType {
     Deleted,
 }
 
-/// 3 種類すべて (あるべき姿)。
+/// All 3 kinds (the ideal).
 pub const ALL_FILE_CHANGES: [FileChangeType; 3] = [
     FileChangeType::Created,
     FileChangeType::Changed,
@@ -106,13 +107,13 @@ pub const ALL_FILE_CHANGES: [FileChangeType; 3] = [
 ];
 
 impl ServerStateProvider {
-    /// 状態の通知だけを約束する (保証なし)。
+    /// Promises only the state notifications (no guarantees).
     pub fn notifications_only() -> Self {
         Self::default()
     }
 
-    /// ワークスペース全体のインデックスに基づく `coverage` (上限で切る
-    /// メソッドがあればその一覧) と、挙げた種類の変更を織り込む `freshness`。
+    /// `coverage` based on the index of the whole workspace (with the list of methods that
+    /// cap, if any) and `freshness` that incorporates the listed kinds of changes.
     pub fn workspace(incomplete: &[(&str, u64)], file_changes: &[FileChangeType]) -> Self {
         ServerStateProvider {
             coverage: Some(Coverage {
@@ -130,11 +131,11 @@ impl ServerStateProvider {
 }
 
 impl ServerState {
-    /// `initialize` 直後の状態。まだ何も答えられない (仕様 7.1 の 1)。
+    /// The state right after `initialize`. Nothing can be answered yet (spec 7.1 item 1).
     ///
-    /// `health` は `unknown`。readiness と違い「initialize 直後」に対応する
-    /// 既知の値がなく、最初の信号が届くまで `ok` を名乗るのは観測なしの
-    /// 主張になる (ADR 0008 追補 E)。
+    /// `health` is `unknown`. Unlike readiness, there is no known value that corresponds to
+    /// "right after initialize", and claiming `ok` until the first signal arrives would be an
+    /// assertion without observation (ADR 0008 addendum E).
     pub fn initializing() -> Self {
         ServerState {
             health: Health::Unknown,
@@ -143,9 +144,9 @@ impl ServerState {
         }
     }
 
-    /// どちらの軸も観測できない状態。写像のない上流側はここから動かない
-    /// (仕様 8.2 の 3)。`initializing` や `ok` から始めないのは、追跡して
-    /// いないものを追跡しているように見せないため。
+    /// The state where neither axis can be observed. An upstream side without a mapping never
+    /// moves from here (spec 8.2 item 3). It does not start from `initializing` or `ok` so as
+    /// not to appear to track what is not being tracked.
     pub fn unobserved() -> Self {
         ServerState {
             health: Health::Unknown,
@@ -154,8 +155,8 @@ impl ServerState {
         }
     }
 
-    /// 通知を要する変化か。仕様 4.2 は「`health` または `readiness` が
-    /// 変わるたびに送る」と定めており、`message` だけの変化は含まない。
+    /// Whether this is a change that requires a notification. Spec 4.2 says "send every time
+    /// `health` or `readiness` changes", which excludes a change of `message` alone.
     pub fn notifiable_change_from(&self, previous: &ServerState) -> bool {
         self.health != previous.health || self.readiness != previous.readiness
     }
@@ -224,14 +225,15 @@ mod tests {
 
     #[test]
     fn dead_is_not_a_health_value() {
-        // 仕様 3 章 (ADR 0009 決定 C-3): サーバーの死は値ではなく接続の終了で
-        // 伝える。ワイヤに "dead" が現れたら、それは本仕様の値ではない。
+        // Spec chapter 3 (ADR 0009 decision C-3): the server's death is conveyed by the end of
+        // the connection, not by a value. If "dead" appears on the wire, it is not a value of
+        // this spec.
         assert!(serde_json::from_str::<Health>("\"dead\"").is_err());
     }
 
     #[test]
     fn round_trips_through_json() {
-        // 準拠テストスイート (偽クライアント側) が読み戻せる必要がある。
+        // The conformance test suite (the fake client side) must be able to read it back.
         let state = ServerState {
             health: Health::Warning,
             readiness: Readiness::Initializing,
@@ -243,10 +245,10 @@ mod tests {
 
     #[test]
     fn initial_state_is_not_ready() {
-        // 仕様 7.1 の 1: initialize 直後の readiness は ready ではない。
+        // Spec 7.1 item 1: readiness right after initialize is not ready.
         let state = ServerState::initializing();
         assert_eq!(state.readiness, Readiness::Initializing);
-        // health はまだ観測していない (ADR 0008 追補 E)。
+        // health has not been observed yet (ADR 0008 addendum E).
         assert_eq!(state.health, Health::Unknown);
         assert_eq!(state.message, None);
     }
@@ -270,7 +272,7 @@ mod tests {
 
     #[test]
     fn a_message_only_change_is_not_notifiable() {
-        // 仕様 4.2 が挙げるのは health と readiness の 2 軸だけ。
+        // Spec 4.2 lists only the two axes health and readiness.
         let base = ServerState::initializing();
         let same_axes = ServerState {
             message: Some("still loading crates".to_string()),
@@ -295,7 +297,7 @@ mod tests {
 
     #[test]
     fn notifications_only_serializes_as_an_empty_object() {
-        // 仕様 5 章: {} は状態の通知だけを約束する (ADR 0016)。
+        // Spec chapter 5: {} promises only the state notifications (ADR 0016).
         assert_eq!(
             serde_json::to_string(&ServerStateProvider::notifications_only()).unwrap(),
             "{}"
@@ -304,7 +306,7 @@ mod tests {
 
     #[test]
     fn a_declaration_omits_the_guarantees_it_does_not_claim() {
-        // 守れない保証を宣言しないことが仕様 5.1 の要求。
+        // Not declaring a guarantee it cannot keep is what spec 5.1 requires.
         assert_eq!(
             serde_json::to_string(&ServerStateProvider::workspace(&[], &[])).unwrap(),
             r#"{"coverage":{"scope":"workspace","incomplete":{}},"freshness":{"fileChanges":[]}}"#

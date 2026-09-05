@@ -1,13 +1,13 @@
-//! ローカルのパスと `file:` URI の相互変換 (下流側の代行で使う。ADR 0015)。
+//! Conversion between local paths and `file:` URIs (used by the downstream side's stand-in.
+//! ADR 0015).
 //!
-//! 扱うのは `file:` スキームだけで、ホスト名は持たない。パスの各バイトは
-//! RFC 3986 の unreserved と `/` と `:` (Windows のドライブ文字) を除いて
-//! パーセントエンコードする。Windows のドライブは `file:///C:/...` の形にし、
-//! `\` は `/` に直す。
+//! Only the `file:` scheme is handled, and there is no host name. Every byte of the path is
+//! percent-encoded except RFC 3986 unreserved characters, `/`, and `:` (the Windows drive
+//! letter). A Windows drive takes the form `file:///C:/...`, and `\` becomes `/`.
 
 use std::path::{Path, PathBuf};
 
-/// パスを `file:` URI にする。
+/// Turns a path into a `file:` URI.
 pub fn path_to_uri(path: &Path) -> String {
     let text = path.to_string_lossy();
     let mut out = String::from("file://");
@@ -16,7 +16,7 @@ pub fn path_to_uri(path: &Path) -> String {
     } else {
         text.into_owned()
     };
-    // Windows のドライブ (`C:/...`) は `file:///C:/...` にする。
+    // A Windows drive (`C:/...`) becomes `file:///C:/...`.
     if !normalized.starts_with('/') {
         out.push('/');
     }
@@ -30,17 +30,17 @@ pub fn path_to_uri(path: &Path) -> String {
     out
 }
 
-/// `file:` URI をパスにする。他のスキーム・読めない形は `None`。
+/// Turns a `file:` URI into a path. Other schemes and unreadable forms give `None`.
 pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
     let rest = uri.strip_prefix("file://")?;
-    // `file:///path` はホストなし。`file://host/path` は扱わない。
+    // `file:///path` has no host. `file://host/path` is not handled.
     let path = rest
         .strip_prefix('/')
         .map(|p| format!("/{p}"))
         .or_else(|| rest.is_empty().then(String::new))?;
     let decoded = percent_decode(&path);
     if cfg!(windows) {
-        // `/C:/...` → `C:/...`。
+        // `/C:/...` -> `C:/...`.
         let trimmed = decoded
             .strip_prefix('/')
             .filter(|p| p.as_bytes().get(1) == Some(&b':'))

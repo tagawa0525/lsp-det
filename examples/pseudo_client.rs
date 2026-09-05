@@ -1,12 +1,12 @@
-//! 擬似クライアント。プロセス寿命のテスト（`tests/process_lifetime.rs`）専用。
+//! A pseudo client. Only for the process lifetime test (`tests/process_lifetime.rs`).
 //!
-//! 引数のコマンドを、自分の stdin / stdout / stderr を継承させて起動し、
-//! 子の pid を stderr に出してから、殺されるまで何もしない。
+//! Launches the command given in the arguments with our own stdin / stdout / stderr
+//! inherited, prints the child's pid to stderr, and then does nothing until killed.
 //!
-//! stdin を継承させるのが要点である。テストが持つパイプを子（lsp-det）が
-//! 直接持つので、この擬似クライアントを殺しても子の stdin は閉じない。
-//! EOF では終了しない状況を作り、OS の機構（ADR 0012 決定 B）だけが子を
-//! 終了させることを確かめる。
+//! Inheriting stdin is the point. The child (lsp-det) directly holds the pipe the test owns,
+//! so killing this pseudo client does not close the child's stdin. This creates a situation
+//! where EOF does not cause an exit, and verifies that only the OS mechanism
+//! (ADR 0012 decision B) makes the child exit.
 
 use std::process::{Command, Stdio};
 
@@ -16,7 +16,7 @@ fn main() {
         eprintln!("usage: pseudo_client <command> [args...]");
         std::process::exit(2);
     };
-    // 子を wait しないのは意図的 (殺されるまで何もしない)。
+    // Not waiting on the child is intentional (do nothing until killed).
     #[allow(clippy::zombie_processes)]
     let child = Command::new(program)
         .args(rest)
@@ -29,7 +29,8 @@ fn main() {
             std::process::exit(1);
         });
     eprintln!("pseudo-client: child pid {}", child.id());
-    // 殺されるまで待つ。子を wait しないので、子が先に終わっても戻らない。
+    // Wait until killed. Since the child is not waited on, this does not return even if the
+    // child exits first.
     loop {
         std::thread::park();
     }

@@ -1,26 +1,27 @@
-//! 下流側: プロトコルを話さないクライアントに代わって、仕様 9 章の推奨挙動を
-//! 実行する (v0.1-design.md 4.3)。
+//! The downstream side: performs the recommended behavior of spec chapter 9 on behalf of a
+//! client that does not speak the protocol (v0.1-design.md 4.3).
 //!
-//! 境界の上の `ServerState` を見て、ワークスペース横断リクエスト (仕様 7.0)
-//! を保留・転送・拒否する。保留に時間の上限はない (設計 2 章の非目標)。
-//! 応答を返さないリクエストを作らないため、キャンセル・`shutdown`・上流の
-//! 消失では保留分すべてに応答する (仕様 9 章 6 項)。
+//! It looks at the `ServerState` on the boundary and holds, forwards, or rejects
+//! cross-workspace requests (spec 7.0). There is no time limit on holding (a non-goal in
+//! design chapter 2). To never create a request that gets no response, every held request is
+//! answered on cancellation, on `shutdown`, and on the disappearance of the upstream
+//! (spec chapter 9 item 6).
 //!
-//! 判定表 (設計 4.3):
+//! The decision table (design 4.3):
 //!
 //! | `health` \ `readiness`       | `initializing` / `indexing` | `ready` | `unknown` |
 //! | ---------------------------- | --------------------------- | ------- | --------- |
-//! | `ok` / `warning` / `unknown` | 保留                        | 転送    | 転送      |
-//! | `error`                      | 即座にエラー                | 同左    | 同左      |
+//! | `ok` / `warning` / `unknown` | hold                        | forward | forward   |
+//! | `error`                      | error immediately           | same    | same      |
 
 use crate::framing::RawMessage;
 use crate::peek::RequestId;
 use crate::state::{Health, Readiness, ServerState};
 
-/// 仕様 7.0 の 1 の一覧。下流側が `ready` を待つ (保留する) 対象で、
-/// この定数の役割はそれだけ。`coverage` の保証対象 (仕様 7.0 の 2) は
-/// ここから `workspace/symbol` を除いたもので、コードには現れない
-/// (保証は宣言の意味であり、判定には使わない。ADR 0013)。
+/// The list of spec 7.0 item 1. What the downstream side waits for `ready` on (holds), and
+/// that is the only role of this constant. What `coverage` guarantees (spec 7.0 item 2) is
+/// this list minus `workspace/symbol`, and it does not appear in the code (the guarantee is
+/// the meaning of the declaration and is not used for the decision. ADR 0013).
 pub const CROSS_WORKSPACE_METHODS: &[&str] = &[
     "textDocument/references",
     "textDocument/definition",
@@ -39,7 +40,7 @@ pub fn is_cross_workspace(method: &str) -> bool {
     CROSS_WORKSPACE_METHODS.contains(&method)
 }
 
-/// `$/cancelRequest` の `params.id`。読めなければ `None`。
+/// The `params.id` of `$/cancelRequest`. `None` if it cannot be read.
 pub fn cancel_target(body: &[u8]) -> Option<RequestId> {
     #[derive(serde::Deserialize)]
     struct Params {
@@ -54,50 +55,51 @@ pub fn cancel_target(body: &[u8]) -> Option<RequestId> {
         .map(|e| e.params.id)
 }
 
-/// JSON-RPC / LSP のエラーコード。
+/// JSON-RPC / LSP error codes.
 pub mod error_code {
-    /// JSON-RPC `InternalError`。上流が消えて答えられない。
+    /// JSON-RPC `InternalError`. The upstream is gone and cannot answer.
     pub const INTERNAL_ERROR: i64 = -32603;
-    /// LSP `RequestCancelled`。クライアントが `$/cancelRequest` した。
+    /// LSP `RequestCancelled`. The client sent `$/cancelRequest`.
     pub const REQUEST_CANCELLED: i64 = -32800;
-    /// LSP `RequestFailed` (3.17)。構文的には正しいが、`health` が `error` で
-    /// 結果を信頼できない、または `shutdown` で待てなくなった。
+    /// LSP `RequestFailed` (3.17). Syntactically correct, but `health` is `error` and the
+    /// result cannot be trusted, or `shutdown` made it impossible to keep waiting.
     pub const REQUEST_FAILED: i64 = -32803;
 }
 
-/// クライアントのリクエストをどう扱うか。
+/// How to handle the client's request.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Decision {
-    /// 上流へ流す。
+    /// Forward to the upstream.
     Forward(RawMessage),
-    /// `ready` まで保留した。
+    /// Held until `ready`.
     Held,
-    /// クライアントにエラー応答を返す。上流へは流さない。
+    /// Return an error response to the client. Not forwarded to the upstream.
     Reject(RawMessage),
 }
 
-/// 状態変化で保留分をどうするか。
+/// What to do with the held requests on a state change.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Release {
-    /// 上流へ流す。
+    /// Forward to the upstream.
     Forward(RawMessage),
-    /// クライアントにエラー応答を返す。
+    /// Return an error response to the client.
     Reject(RawMessage),
 }
 
-/// 保留分を捨てる理由。エラーコードと文言が変わる。
+/// The reason for discarding the held requests. The error code and the wording change with
+/// it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DrainReason {
-    /// クライアントが `shutdown` を要求した。
+    /// The client requested `shutdown`.
     Shutdown,
-    /// 上流プロセスが消えた。
+    /// The upstream process is gone.
     UpstreamExited,
 }
 
 #[derive(Default)]
 pub struct Gate {
     held: Vec<(RequestId, RawMessage)>,
-    /// クライアントが仕様 5.2 の宣言をした。自分で判断するので代行しない。
+    /// The client made the declaration of spec 5.2. It decides for itself, so do not stand in.
     client_decides: bool,
 }
 
@@ -106,13 +108,13 @@ impl Gate {
         Self::default()
     }
 
-    /// クライアントが `experimental.serverState` を宣言したら呼ぶ。以後は
-    /// 何も保留しない (仕様 5.2)。
+    /// Called when the client declared `experimental.serverState`. From then on nothing is
+    /// held (spec 5.2).
     pub fn set_client_decides(&mut self, decides: bool) {
         self.client_decides = decides;
     }
 
-    /// クライアントのリクエストを判定する。`method` は覗き見済みのもの。
+    /// Decide on the client's request. `method` is the one already peeked.
     pub fn on_request(
         &mut self,
         msg: RawMessage,
@@ -133,7 +135,7 @@ impl Gate {
         }
     }
 
-    /// 境界の上の状態が変わった。保留分を再評価する。
+    /// The state on the boundary changed. Re-evaluate the held requests.
     pub fn on_state(&mut self, state: &ServerState) -> Vec<Release> {
         match verdict(state) {
             Verdict::Hold => Vec::new(),
@@ -150,8 +152,8 @@ impl Gate {
         }
     }
 
-    /// `$/cancelRequest`。保留中なら除去して `RequestCancelled` を返す。
-    /// 保留していなければ `None` (上流へ素通しする)。
+    /// `$/cancelRequest`. If held, remove it and return `RequestCancelled`.
+    /// If not held, `None` (passed through to the upstream).
     pub fn on_cancel(&mut self, id: &RequestId) -> Option<RawMessage> {
         let index = self.held.iter().position(|(held, _)| held == id)?;
         self.held.remove(index);
@@ -162,7 +164,7 @@ impl Gate {
         ))
     }
 
-    /// 保留分すべてにエラー応答を作り、空にする。
+    /// Build an error response for every held request, and empty the queue.
     pub fn drain(&mut self, reason: DrainReason) -> Vec<RawMessage> {
         let (code, message) = match reason {
             DrainReason::Shutdown => (
@@ -185,7 +187,8 @@ impl Gate {
     }
 }
 
-/// 判定表の行。`health` を先に見る (仕様 3 章の推奨解釈)。
+/// A row of the decision table. `health` is looked at first (the recommended interpretation
+/// of spec chapter 3).
 enum Verdict {
     Forward,
     Hold,
@@ -202,8 +205,8 @@ fn verdict(state: &ServerState) -> Verdict {
     }
 }
 
-/// `health` が `error` のときの応答。`ServerState` の `message` を添える
-/// (設計 4.3)。壊れたサーバーを隠さない。
+/// The response when `health` is `error`. Attaches the `message` of `ServerState`
+/// (design 4.3). Do not hide a broken server.
 fn request_failed(id: &RequestId, state: &ServerState) -> RawMessage {
     let message = match &state.message {
         Some(detail) => format!("lsp-det: the language server reports health: error ({detail})"),
@@ -219,7 +222,7 @@ fn error_response(id: &RequestId, code: i64, message: &str) -> RawMessage {
             "id": id,
             "error": {"code": code, "message": message},
         }))
-        .expect("固定の構造なので常にシリアライズできる"),
+        .expect("a fixed structure, so it can always be serialized"),
     }
 }
 
@@ -260,7 +263,7 @@ mod tests {
         state(Health::Ok, Readiness::Indexing)
     }
 
-    // --- 判定表 -------------------------------------------------------------
+    // --- Decision table ------------------------------------------------------------------
 
     #[test]
     fn holds_a_cross_workspace_request_while_indexing() {
@@ -292,7 +295,7 @@ mod tests {
 
     #[test]
     fn forwards_when_readiness_is_unknown() {
-        // 仕様 9 章 3 項: 待つべき信号がない。
+        // Spec chapter 9 item 3: there is no signal to wait for.
         let mut gate = Gate::new();
         let s = state(Health::Unknown, Readiness::Unknown);
         assert!(matches!(
@@ -303,7 +306,7 @@ mod tests {
 
     #[test]
     fn treats_warning_like_ok() {
-        // 仕様 9 章 5 項: 待っても改善しない。
+        // Spec chapter 9 item 5: waiting does not improve it.
         let mut gate = Gate::new();
         assert_eq!(
             decide(
@@ -327,7 +330,7 @@ mod tests {
 
     #[test]
     fn rejects_immediately_when_health_is_error() {
-        // 仕様 9 章 2 項。readiness によらない。
+        // Spec chapter 9 item 2. Regardless of readiness.
         for readiness in [Readiness::Indexing, Readiness::Ready, Readiness::Unknown] {
             let mut gate = Gate::new();
             let s = ServerState {
@@ -345,10 +348,10 @@ mod tests {
                             .as_str()
                             .unwrap()
                             .contains("Failed to load workspaces."),
-                        "message を添える: {v}"
+                        "the message is attached: {v}"
                     );
                 }
-                other => panic!("error なら即座に拒否するはず: {other:?}"),
+                other => panic!("error should reject immediately: {other:?}"),
             }
             assert_eq!(gate.held_count(), 0);
         }
@@ -356,7 +359,7 @@ mod tests {
 
     #[test]
     fn forwards_non_cross_workspace_requests_regardless_of_state() {
-        // 仕様 9 章 4 項。
+        // Spec chapter 9 item 4.
         let mut gate = Gate::new();
         for (method, s) in [
             ("textDocument/hover", indexing()),
@@ -373,14 +376,14 @@ mod tests {
         ] {
             assert!(
                 matches!(decide(&mut gate, 1, method, &s), Decision::Forward(_)),
-                "{method} は待たない"
+                "{method} is not made to wait"
             );
         }
     }
 
     #[test]
     fn forwards_everything_when_the_client_decides() {
-        // 仕様 5.2。
+        // Spec 5.2.
         let mut gate = Gate::new();
         gate.set_client_decides(true);
         assert!(matches!(
@@ -405,7 +408,7 @@ mod tests {
         assert!(!is_cross_workspace("textDocument/hover"));
     }
 
-    // --- 状態変化 -----------------------------------------------------------
+    // --- State changes -------------------------------------------------------------------
 
     #[test]
     fn releases_held_requests_in_order_when_ready() {
@@ -417,7 +420,7 @@ mod tests {
             .iter()
             .map(|r| match r {
                 Release::Forward(msg) => json(msg)["id"].clone(),
-                Release::Reject(_) => panic!("ready なら転送する"),
+                Release::Reject(_) => panic!("ready should forward"),
             })
             .collect();
         assert_eq!(ids, vec![Value::from(1), Value::from(2)]);
@@ -446,14 +449,14 @@ mod tests {
             Release::Reject(response) => {
                 assert_eq!(json(response)["error"]["code"], error_code::REQUEST_FAILED)
             }
-            other => panic!("error なら拒否するはず: {other:?}"),
+            other => panic!("error should reject: {other:?}"),
         }
         assert_eq!(gate.held_count(), 0);
     }
 
     #[test]
     fn releases_when_readiness_becomes_unknown() {
-        // 信号がなくなったなら待つ理由もない。
+        // If the signal is gone, there is no reason to wait either.
         let mut gate = Gate::new();
         decide(&mut gate, 1, "textDocument/references", &indexing());
         let released = gate.on_state(&state(Health::Unknown, Readiness::Unknown));
@@ -468,12 +471,12 @@ mod tests {
         decide(&mut gate, 1, "textDocument/references", &indexing());
         let response = gate
             .on_cancel(&RequestId::Number(1))
-            .expect("保留中なら応答する");
+            .expect("answers if held");
         let v = json(&response);
         assert_eq!(v["id"], 1);
         assert_eq!(v["error"]["code"], error_code::REQUEST_CANCELLED);
         assert_eq!(gate.held_count(), 0);
-        // ready になっても流さない。
+        // Not forwarded even when it becomes ready.
         assert!(
             gate.on_state(&state(Health::Ok, Readiness::Ready))
                 .is_empty()

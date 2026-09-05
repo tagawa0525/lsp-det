@@ -88,21 +88,35 @@ Params:       ServerState
 // サーバー・観測者 → クライアント (InitializeResult)
 interface ServerCapabilities {
   experimental?: {
-    serverStateProvider?: boolean | {
-      /**
-       * readiness が "ready" かつ health が "error" でないとき、
-       * 7.0 の保証対象メソッドの応答がワークスペース全体のインデックスに
-       * 基づく（インデックスの進行によって後から同じ問い合わせの結果が
-       * 増えることがない）ことを保証する。件数の上限による打ち切りは
-       * 対象外（10 章）。
-       */
-      coverage?: boolean;
-      /**
-       * readiness が "ready" かつ health が "error" でないとき、
-       * 受信済みの textDocument/didChange をすべて織り込んだ応答を
-       * 返すことを保証する。
-       */
-      freshness?: boolean;
+    /**
+     * キーがあれば本プロトコルを話す。{} は状態の通知だけを約束する。
+     * coverage / freshness は、readiness が "ready" かつ health が "error"
+     * でないときの応答について、それぞれの保証を足す。キーがなければ
+     * その保証はしない。
+     */
+    serverStateProvider?: {
+      coverage?: {
+        /**
+         * 7.0 のメソッドの応答が基づく範囲。
+         * "workspace":     ワークスペース全体のインデックス。インデックスの
+         *                  進行によって後から同じ問い合わせの結果が増えることがない
+         * "openDocuments": クライアントが開いている文書だけ。開いていない
+         *                  ファイルの内容は応答に現れない
+         */
+        scope: "workspace" | "openDocuments";
+        /**
+         * 件数の上限で結果を切るメソッドと、その上限。上限に達した応答は
+         * 完全でないことがある。LSP のメソッド名をキーにする。
+         */
+        incomplete: { [method: string]: number };
+      };
+      freshness?: {
+        /**
+         * 織り込んでいる workspace/didChangeWatchedFiles の変更の種類
+         * （FileChangeType の名前）。textDocument/didChange は常に織り込む。
+         */
+        fileChanges: ("Created" | "Changed" | "Deleted")[];
+      };
     };
   };
 }
@@ -117,16 +131,18 @@ interface ClientCapabilities {
 
 ### 5.1 保証
 
-`serverStateProvider: true`（または両フラグなし）は、状態の通知そのものだけを約束する。`indexing` 中の応答が不完全でありうるという警告として、それだけでも価値を持つ。
+`serverStateProvider: {}`（保証のキーなし）は、状態の通知そのものだけを約束する。`indexing` 中の応答が不完全でありうるという警告として、それだけでも価値を持つ。
 
-`coverage` と `freshness` は LSP の他の capability（`renameProvider: boolean | { prepareProvider }` 等）と同じくオプションであり、`ready` が結果について何を意味するかを足す。両者は**独立**で順序関係はない。現実のサーバーは 4 象限すべてに存在する:
+`coverage` と `freshness` は LSP の他の capability の options（`renameProvider: { prepareProvider }` 等）と同じくオプションのオブジェクトであり、`ready` が結果について何を意味するかを足す。値は真偽値ではなく、**あるべき姿からの欠けを名指しする**形をとる。ワークスペース全体のインデックスに基づき、打ち切らず、知らされた変更をすべて織り込むサーバーは `coverage: {scope: "workspace", incomplete: {}}`、`freshness: {fileChanges: ["Created", "Changed", "Deleted"]}` と宣言する。そこから欠けているものを、範囲（`scope`）、上限で切るメソッドと件数（`incomplete`）、織り込まない変更の種類（`fileChanges` からの欠落）として書く。クライアントは欠けを読んで、問い合わせを絞る・ファイルを開く・応答の件数を上限と比べる、といった判断ができる。
+
+両者は**独立**で順序関係はない。現実のサーバーは 4 象限すべてに存在する:
 
 |                   | freshness                                                    | freshness なし                              |
 | ----------------- | ------------------------------------------------------------ | ------------------------------------------- |
 | **coverage**      | スナップショット方式 + 全インデックス（rust-analyzer）       | 全インデックスだが非同期処理（tsserver 系） |
 | **coverage なし** | リクエスト毎スナップショットだが全インデックスなし（clangd） | 保証なし                                    |
 
-実装は自分が守れる保証だけを宣言する。守れない保証の宣言は本プロトコルへの違反である。
+実装は自分が守れる保証だけを宣言する。守れない保証の宣言は本プロトコルへの違反である。`incomplete` の件数と `fileChanges` の種類も同じで、確かめていない値を書いてはならない。
 
 ### 5.2 クライアント宣言の意味
 
@@ -136,8 +152,8 @@ interface ClientCapabilities {
 
 ## 6. セマンティクス
 
-1. **網羅**（`coverage` 宣言時）: `readiness` が `"ready"` かつ `health` が `"error"` でないとき、7.0 の保証対象メソッドへの応答はワークスペース全体のインデックスに基づかなければならず、インデックスの進行によって後から同じ問い合わせの結果が増えてはならない。サーバーが件数の上限を持つ検索（`workspace/symbol`）は対象外である（7.0、10 章）
-2. **鮮度**（`freshness` 宣言時）: `readiness` が `"ready"` かつ `health` が `"error"` でないとき、それまでに受信した `textDocument/didChange` と `workspace/didChangeWatchedFiles` はすべて織り込み済みでなければならない。約束するのは知らされた変更までであり、サーバーが自前のファイル監視で拾った変更は対象外である（観測者には見えず、検証できない）。この保証の実質はクロスファイルの鮮度（変更したファイル以外を起点とする問い合わせに、インデックスが変更を反映していること）である。単一ファイル内の変更→問い合わせの多くは、LSP の既存の処理順序保証（同一接続では後続リクエストが先行通知の後に処理される）だけで満たされる
+1. **網羅**（`coverage` 宣言時）: `readiness` が `"ready"` かつ `health` が `"error"` でないとき、7.0 のメソッドへの応答は `scope` の範囲のインデックスに基づかなければならず、その範囲のインデックスの進行によって後から同じ問い合わせの結果が増えてはならない。`scope` が `"workspace"` ならワークスペース全体、`"openDocuments"` ならクライアントが開いている文書の範囲である。`incomplete` に挙げたメソッドは、応答の件数がその上限に達したとき結果が完全でないことがある。挙げていないメソッドの応答は上限で切られてはならない
+2. **鮮度**（`freshness` 宣言時）: `readiness` が `"ready"` かつ `health` が `"error"` でないとき、それまでに受信した `textDocument/didChange` と、`workspace/didChangeWatchedFiles` のうち `fileChanges` に挙げた種類の変更は、すべて織り込み済みでなければならない。挙げていない種類の変更は、`"ready"` の後も織り込み途中でありうる（サーバーは取り込みを `readiness` で伝えられない、と自覚して宣言する）。約束するのは知らされた変更までであり、サーバーが自前のファイル監視で拾った変更は対象外である（観測者には見えず、検証できない）。この保証の実質はクロスファイルの鮮度（変更したファイル以外を起点とする問い合わせに、インデックスが変更を反映していること）である。単一ファイル内の変更→問い合わせの多くは、LSP の既存の処理順序保証（同一接続では後続リクエストが先行通知の後に処理される）だけで満たされる
 3. **再インデックス**: ワークスペースの再解析（依存ファイル変更、ブランチ切り替え等）が始まったら、`readiness` を `"indexing"` に戻して通知しなければならない
 4. **既存機構との関係**: `$/progress` は人間向けの進捗表示であり本プロトコルを代替しない。`ServerCancelled` エラーはポーリングを強いるため本プロトコルを代替しない（LSP issue #1367 の議論を参照）
 5. **失敗の表現**: サーバーはインデックスの失敗（ワークスペースをロードできない等）を `readiness` ではなく `health`（`"error"` または `"warning"`）で表さなければならない。`readiness` は `"indexing"` に留めても `"ready"` にしてもよい。`health` が `"error"` のとき、1・2 項の保証は適用されない。推奨解釈（非規範。1 章のとおりクライアントの挙動は強制しない）: このとき `readiness` が `"ready"` になるのを待ち続けることは本プロトコルの意図に反する。待つ側は `health` を見て抜ける
@@ -147,10 +163,11 @@ interface ClientCapabilities {
 
 準拠テストの fixture は、インデックスに観測可能な時間を要する規模（ファイル数）でなければならない。小規模な fixture では `initialize` 応答の時点で既に `ready` に達し、7.1 の 3 の遷移が観測できない。これはテスト側の前提であり、サーバーが `initialize` 直後に正直に `ready` を返すことを禁じるものではない。
 
-### 7.0 ワークスペース横断メソッド
+### 7.0 ワークスペース横断メソッド（`coverage` の対象、9 章で `ready` を待つ対象）
 
-1. **一覧**（9 章で `ready` を待つ対象）: `textDocument/references`, `textDocument/definition`, `textDocument/typeDefinition`, `textDocument/declaration`, `textDocument/implementation`, `workspace/symbol`, `textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls`, `callHierarchy/outgoingCalls`, `textDocument/rename`, `textDocument/prepareRename`
-2. **`coverage` の保証対象**: 1 から `workspace/symbol` を除いたもの。`workspace/symbol` はエディタのピッカー向けのあいまい検索で、サーバーが件数の上限を持ち、打ち切りを伝える語彙が LSP にない（10 章）。インデックス中の応答が部分的である点は変わらないので、待つ対象には残す
+`textDocument/references`, `textDocument/definition`, `textDocument/typeDefinition`, `textDocument/declaration`, `textDocument/implementation`, `workspace/symbol`, `textDocument/prepareCallHierarchy`, `callHierarchy/incomingCalls`, `callHierarchy/outgoingCalls`, `textDocument/rename`, `textDocument/prepareRename`
+
+件数の上限で結果を切るメソッド（`workspace/symbol` はエディタのピッカー向けのあいまい検索で、多くのサーバーが上限を持つ）は、上限を `coverage.incomplete` に宣言する。打ち切りを伝える語彙は LSP にないので、クライアントは応答の件数を上限と比べて判断する（10 章）。
 
 ### 7.1 保証なしの宣言
 
@@ -161,12 +178,15 @@ interface ClientCapabilities {
 
 ### 7.2 coverage 宣言時
 
-1. `"ready"` になった後の `textDocument/references` が、事前計算した完全な結果と一致する
+1. `"ready"` になった後の `textDocument/references` が、事前計算した完全な結果と一致する（`scope` が `"openDocuments"` なら、開いている文書の範囲で）
+2. `incomplete` に挙げたメソッドは、上限を超える数の一致がある問い合わせに対し、上限の件数を返す（上限が宣言どおりであること）。挙げていないメソッドは、上限を超える数の一致がある問い合わせに対し、すべてを返す
 
 ### 7.3 freshness 宣言時
 
 1. ファイル A への `textDocument/didChange`（別ファイル B から参照されるシンボルの追加・削除）送信後、`readiness` が `"ready"` の状態で **B を起点に**発行した横断問い合わせ（`textDocument/references` 等）の応答が、A の変更を反映している
-2. ファイル A をディスク上で変更して `workspace/didChangeWatchedFiles`（`Changed`）を送った後、および新しいファイル C を作って `workspace/didChangeWatchedFiles`（`Created`）を送った後、`readiness` が `"ready"` の状態で **B を起点に**発行した横断問い合わせの応答が、それぞれの変更を反映している。A と C は開かない（開くと `didOpen` の経路になり、ディスク上の変更を検証しない）
+2. `fileChanges` に `"Changed"` があるとき: ファイル A をディスク上で変更して `workspace/didChangeWatchedFiles`（`Changed`）を送った後、`readiness` が `"ready"` の状態で **B を起点に**発行した横断問い合わせの応答が、A の変更を反映している。A は開かない（開くと `didOpen` の経路になり、ディスク上の変更を検証しない）
+3. `fileChanges` に `"Created"` があるとき: 新しいファイル C を作って `workspace/didChangeWatchedFiles`（`Created`）を送った後、同様に C の内容を反映している。C は開かない
+4. `fileChanges` に `"Deleted"` があるとき: ファイル C を消して `workspace/didChangeWatchedFiles`（`Deleted`）を送った後、同様に C からの参照が消えている
 
 テストは必ずクロスファイル（変更したファイルとは別のファイルを起点とし、インデックス経由でしか到達できない結果）で行わなければならない。単一ファイルの変更→問い合わせは LSP の処理順序保証だけで通ってしまい、freshness を検証しない（6 章 2 項）。
 
@@ -191,7 +211,7 @@ interface ClientCapabilities {
 2. **最初の信号まで `health` は `unknown`**。サーバーの語彙（rust-analyzer の `experimental/serverStatus` 等）を写す観測者も、最初の信号が届くまでは `health` を知らない。`readiness` は「initialize 直後」に対応する `initializing` から始めてよい
 3. **信号のないサーバーは両軸 `unknown`**。readiness を伝える語彙を持たないサーバー（clangd 等）を代行する観測者は、両軸 `unknown` を報告する。これは正直な準拠であり、`initializing` に留め置く（「まだ何も答えられない」という嘘）ことも `ready` を名乗ることもしてはならない
 4. **6 章 3 項と 7.1 の 3 は `readiness` を追跡している観測者にのみ適用する**。両軸 `unknown` の観測者は再インデックスを観測できない
-5. **保証の宣言は観測に基づく**。観測者がサーバーに代わって `coverage` / `freshness` を宣言できるのは、そのサーバーの当該版に 7.2 / 7.3 を当てて通った場合に限る。観測者はサーバーの内部を保証できず、テストを通した版の範囲を超えて宣言してはならない。サーバーは `InitializeResult.serverInfo` で名前と版を名乗るので、観測者はそれで範囲を判定できる
+5. **保証の宣言は観測に基づく**。観測者がサーバーに代わって `coverage` / `freshness` を宣言できるのは、そのサーバーの当該版に 7.2 / 7.3 のうち宣言する内容に対応する要件を当てて通った場合に限る（`incomplete` の件数、`fileChanges` の各種類も同じ）。観測者はサーバーの内部を保証できず、テストを通した版の範囲を超えて宣言してはならない。サーバーは `InitializeResult.serverInfo` で名前と版を名乗るので、観測者はそれで範囲を判定できる
 6. **サーバーが自ら宣言していれば観測者は加えない**。上流の `InitializeResult` に `serverStateProvider` があれば、中継層はサーバーの宣言をそのまま通し、`experimental/serverState` を上流へ転送し、自前の通知を送らない。同一接続に送信者の異なる 2 系統の状態が流れることを避けるためである。中継層の宣言でサーバーの宣言を隠すことは 5.1 の趣旨に反する
 7. **プロセスの消失は本プロトコルの値ではない**。サーバープロセスの終了は接続の終了（stdio の EOF 等）として伝わり、既存のクライアントはそれで再起動を判断する。中継層は上流の消失を観測したら、未応答のリクエストにエラーを応答したうえで自分の接続も閉じる。「サーバーが死んだ」を表す値を本プロトコルに設けない理由は、死んだサーバーは通知を送れず、生き残った中継層が成功風の応答を返す状態は `health: "error"` で表せるからである
 
@@ -234,16 +254,16 @@ interface ClientCapabilities {
 
 ## 10. 既存実装との対応
 
-| 実装                       | 既存の語彙                                                                                                                                                                                              | 本プロトコルへの写像                                                                                                                                            | 宣言できる保証（見込み）                                                                                                                             |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| rust-analyzer              | `experimental/serverStatus` の `health` / `quiescent`                                                                                                                                                   | `health` はそのまま、`quiescent: true` → `readiness: "ready"`。本プロトコルは事実上その後継                                                                     | coverage + freshness（準拠テスト 7.2 / 7.3 で確認済み）                                                                                              |
-| jdtls                      | `language/status` の `ServiceReady` / `ProjectStatus`                                                                                                                                                   | `ServiceReady` → `readiness: "ready"`、`ProjectStatus: WARNING` → `health: "warning"`                                                                           | coverage                                                                                                                                             |
-| gopls                      | `$/progress`（title "Setting up workspace"）の end                                                                                                                                                      | end → `readiness: "ready"`（観測者による合成）。"Error loading workspace" の progress → `health`                                                                | coverage + freshness（準拠テスト 7.2 / 7.3 を v0.23.0 で確認済み）                                                                                   |
-| pyright                    | `window/logMessage` のファイル列挙完了（"Found N source files" / "No source files found."）。`$/progress` は開いたファイルの解析の進行で、横断リクエストの完全性とは別                                  | 列挙完了 → `readiness: "ready"`（観測者による合成。ワークスペースフォルダの数だけ待つ）。health の信号はなく `unknown`                                          | coverage + freshness（準拠テスト 7.2 / 7.3 を pyright 1.1.412 と basedpyright 1.39.8 で確認済み）                                                    |
-| typescript-language-server | `$/progress`（title "Initializing JS/TS language features…"）の begin / end。tsserver の終了は `window/logMessage`（error）"[tsserver] Exited. Code:"（言語サーバーは生き残り、空配列を成功として返す） | begin → `indexing`、end → `ready` かつ `health: "ok"`。終了ログ → `health: "error"`（再起動はないので戻らない）。プロジェクトはファイルを開くまでロードされない | coverage + freshness（準拠テスト 7.2 / 7.3 を TypeScript 5.9.3 + typescript-language-server 5.3.0 で確認済み。名乗りに出るのは TypeScript の版だけ） |
-| clangd                     | なし                                                                                                                                                                                                    | 観測者は両軸 `"unknown"` を報告する                                                                                                                             | 観測者経由: 保証なし。サーバー自身が実装する場合: freshness のみ（全インデックスを持たない）                                                         |
+| 実装                       | 既存の語彙                                                                                                                                                                                              | 本プロトコルへの写像                                                                                                                                            | 宣言できる保証（見込み）                                                                                                                                                                                                                                                                                                 |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| rust-analyzer              | `experimental/serverStatus` の `health` / `quiescent`                                                                                                                                                   | `health` はそのまま、`quiescent: true` → `readiness: "ready"`。本プロトコルは事実上その後継                                                                     | `coverage: {scope: "workspace", incomplete: {"workspace/symbol": 128}}`（上限は `initializationOptions.workspace.symbol.search.limit`、なければ 128）、`freshness: {fileChanges: ["Created", "Changed", "Deleted"]}`（Created / Deleted の通知で観測者が `indexing` を先読みし `quiescent: true` で戻す。ADR 0014 追補） |
+| jdtls                      | `language/status` の `ServiceReady` / `ProjectStatus`                                                                                                                                                   | `ServiceReady` → `readiness: "ready"`、`ProjectStatus: WARNING` → `health: "warning"`                                                                           | `coverage: {scope: \"workspace\", incomplete: {}}`（見込み。未測定）                                                                                                                                                                                                                                                     |
+| gopls                      | `$/progress`（title "Setting up workspace"）の end                                                                                                                                                      | end → `readiness: "ready"`（観測者による合成）。"Error loading workspace" の progress → `health`                                                                | `coverage: {scope: "workspace", incomplete: {"workspace/symbol": 100}}`（上限は固定）、`freshness: {fileChanges: ["Created", "Changed", "Deleted"]}`（v0.23.0 で確認済み。同期的に取り込む）                                                                                                                             |
+| pyright                    | `window/logMessage` のファイル列挙完了（"Found N source files" / "No source files found."）。`$/progress` は開いたファイルの解析の進行で、横断リクエストの完全性とは別                                  | 列挙完了 → `readiness: "ready"`（観測者による合成。ワークスペースフォルダの数だけ待つ）。health の信号はなく `unknown`                                          | `coverage: {scope: "workspace", incomplete: {}}`、`freshness: {fileChanges: ["Changed"]}`（pyright 1.1.412 と basedpyright 1.39.8 で確認済み。Created / Deleted の後の再列挙の信号 "Found N source files" は直後の問い合わせより後に来て、除外されたファイルでは来ない）                                                 |
+| typescript-language-server | `$/progress`（title "Initializing JS/TS language features…"）の begin / end。tsserver の終了は `window/logMessage`（error）"[tsserver] Exited. Code:"（言語サーバーは生き残り、空配列を成功として返す） | begin → `indexing`、end → `ready` かつ `health: "ok"`。終了ログ → `health: "error"`（再起動はないので戻らない）。プロジェクトはファイルを開くまでロードされない | `coverage: {scope: "workspace", incomplete: {}}`、`freshness: {fileChanges: ["Changed"]}`（TypeScript 5.9.3 + typescript-language-server 5.3.0 で確認済み。名乗りに出るのは TypeScript の版だけ。Created / Deleted の後に信号がなく、TypeScript の再帰ディレクトリ監視は Linux では 1 秒のタイマーで動く）               |
+| clangd                     | なし                                                                                                                                                                                                    | 観測者は両軸 `"unknown"` を報告する                                                                                                                             | 観測者経由: 保証なし。サーバー自身が実装する場合: `coverage: {scope: "openDocuments", …}` と `freshness`（全インデックスを持たない。見込み）                                                                                                                                                                             |
 
-`workspace/symbol` の件数の上限（2026-09-04 の実測、[research/workspace-symbol-truncation-measurement.md](../research/workspace-symbol-truncation-measurement.md)）: rust-analyzer は 128（`workspace.symbol.search.limit` で変更可）、gopls は 100（固定）。どちらも打ち切りを伝えない。pyright と typescript-language-server は打ち切らない。ワークスペースのシンボルを列挙したいクライアントは `textDocument/documentSymbol` をファイルごとに取る。
+`workspace/symbol` の件数の上限（2026-09-04 の実測、[research/workspace-symbol-truncation-measurement.md](../research/workspace-symbol-truncation-measurement.md)）: rust-analyzer は 128（`workspace.symbol.search.limit` で変更可。観測者はクライアントの `initializationOptions` の値を読んで宣言し、起動後の `workspace/didChangeConfiguration` による変更は宣言に反映されない）、gopls は 100（固定）。どちらも打ち切りを伝えない。pyright と typescript-language-server は打ち切らない。上限を知ったクライアントは、応答の件数が上限に達したら問い合わせを絞る。ワークスペースのシンボルを列挙したいクライアントは `textDocument/documentSymbol` をファイルごとに取る。
 
 `experimental/serverState` という名前は rust-analyzer の `experimental/serverStatus` と近いが、これは後継であることを示す意図的な命名である。両者はクライアントのログや設定で混同しやすいため、実装・運用時は注意する。上流提案時には後継関係を明示する。
 

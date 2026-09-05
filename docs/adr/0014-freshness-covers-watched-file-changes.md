@@ -55,3 +55,28 @@
 ### クライアント
 
 Serena は既に通知を送るので、この約束の中に入る。Claude Code は送らないので、ADR 0015 の代行で通知に変える。
+
+## 追補（2026-09-06）: 実装で分かった Created / Deleted の窓と、写像ごとの扱い
+
+第 2 のテストを実サーバーに当てたところ、Changed は 4 サーバーとも通り、Created は pyright と typescript-language-server が通らなかった（[research/disk-edit-propagation-measurement.md](../research/disk-edit-propagation-measurement.md) の追記）。通知を受けたサーバーは新しいファイルを非同期に取り込み、その開始を伝える信号は、通知の直後に届いた問い合わせより後に来る。観測者はその瞬間 `ready` と言うしかない。
+
+サーバーごとに、通知の後に完了の信号が**必ず**来るかを測った。
+
+| サーバー      | Created / Deleted の後の完了の信号                                                                   | 信号が来ない場合                                                                                      |
+| ------------- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| rust-analyzer | ワークスペース内の `.rs` と Cargo のファイルなら、crate に入らないものでも `quiescent: false → true` | 監視の対象でないファイル（見込み。監視の登録は `**/*.rs`、`Cargo.{toml,lock}`、`rust-analyzer.toml`） |
+| gopls         | 同期的に取り込む（信号は要らない）                                                                   | —                                                                                                     |
+| pyright       | 列挙する集合が変わるときだけ "Found N source files"                                                  | 除外されたファイル（`**/.*`、`pyrightconfig.json` の `exclude`）、`.py` 以外                          |
+| tsls          | なし。TypeScript の再帰ディレクトリ監視が Linux では 1 秒のタイマーで動く                            | 常に                                                                                                  |
+
+### 決定 D. クライアントの通知を先読みの引き金にしてよいのは、完了の信号が測定で確かめられた写像だけ
+
+写像は、クライアントから上流へ向かう `workspace/didChangeWatchedFiles` を観測してよい（`Mapping::observe_client`）。観測した通知から「サーバーはこれから再インデックスする」と先読みして `readiness` を `indexing` にしてよいのは、その通知に対してサーバーが完了の信号を必ず出すことが測定で確かめられた場合に限る。信号が来なければ `indexing` のまま止まり、時計を持たない lsp-det には戻る手段がないからである。
+
+- rust-analyzer: Created / Deleted のうち、rust-analyzer 自身が監視を登録する glob（`**/*.rs`、`**/Cargo.toml`、`**/Cargo.lock`、`**/rust-analyzer.toml`）に一致するファイルの通知で `indexing` にし、`quiescent: true` で `ready` に戻す。Changed は先読みしない（信号が来ない。送信中の要求は rust-analyzer が -32801 で拒み、次の要求は正しい）
+- gopls: 先読みしない（要らない）
+- pyright と typescript-language-server: 先読みしない（信号が来ない場合がある）
+
+### pyright と typescript-language-server の扱い
+
+Created / Deleted の直後の窓（pyright は約 0.04 秒、tsls は約 1 秒）は観測者に見えず、埋める手段がない。この事実をどう宣言に表すかは、宣言の形そのものを見直す [ADR 0016](0016-declaration-shape.md) で決める（`freshness` は織り込む `FileChangeType` の一覧になり、この 2 つは `["Changed"]` を宣言する）。`didChange` と Changed では鮮度が成り立っていることは research に記録してある。上流への働きかけ（`docs/upstream-submissions.md`）: pyright には列挙の開始をログに出す（または本プロトコルを話す）変更、tsls には `useClientFileWatcher` で Created が同期になるかの測定を経た提案。

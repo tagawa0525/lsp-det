@@ -196,7 +196,7 @@ fn selects_the_mapping_from_the_server_info_name() {
     let (mut client, result) = client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"coverage": true, "freshness": true}),
+        json!({"coverage": {"scope": "workspace", "incomplete": {"workspace/symbol": 128}}, "freshness": {"fileChanges": ["Created", "Changed", "Deleted"]}}),
         "rust-analyzer と名乗った上流に rust-analyzer の写像が選ばれていない: {result}"
     );
     client.make_upstream_emit_status("ok", true);
@@ -215,7 +215,7 @@ fn spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
         let result = client.initialize(true);
         assert_eq!(
             result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-            json!(true),
+            json!({}),
             "テストを当てていない版 {version:?} に保証を宣言した: {result}"
         );
         // 写像そのものは働く (状態は追跡する)。
@@ -327,7 +327,7 @@ fn gopls_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
     let (mut client, result) = gopls_client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!(true),
+        json!({}),
         "gopls に測っていない保証を宣言した: {result}"
     );
     client.shutdown();
@@ -342,7 +342,7 @@ fn gopls_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
     let result = client.initialize(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"coverage": true, "freshness": true}),
+        json!({"coverage": {"scope": "workspace", "incomplete": {"workspace/symbol": 100}}, "freshness": {"fileChanges": ["Created", "Changed", "Deleted"]}}),
         "測った版に保証を宣言していない: {result}"
     );
     client.shutdown();
@@ -525,7 +525,7 @@ fn pyright_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
     let result = client.initialize(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!(true),
+        json!({}),
         "pyright に測っていない保証を宣言した: {result}"
     );
     client.shutdown();
@@ -538,7 +538,7 @@ fn pyright_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
     let (mut client, result) = pyright_client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"coverage": true, "freshness": true}),
+        json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
         "測った版に保証を宣言していない: {result}"
     );
     client.shutdown();
@@ -555,7 +555,7 @@ fn basedpyright_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
     let result = client.initialize(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"coverage": true, "freshness": true}),
+        json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
         "測った版に保証を宣言していない: {result}"
     );
     client.shutdown();
@@ -686,7 +686,7 @@ fn spec_5_declares_without_guarantees_when_there_is_no_adapter() {
     let (mut client, result) = client_without_adapter(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!(true),
+        json!({}),
         "写像なしは保証のない宣言 (true) をする: {result}"
     );
     client.shutdown();
@@ -760,7 +760,7 @@ fn spec_8_4_2_asks_the_conformant_upstream_only_after_initialized() {
     let result = client.initialize(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"freshness": true}),
+        json!({"freshness": {"fileChanges": ["Changed"]}}),
         "上流の宣言を書き換えた: {result}"
     );
     let state = client.server_state();
@@ -782,7 +782,7 @@ fn spec_8_4_2_defers_to_a_conformant_upstream_without_an_adapter() {
     // 上流の宣言をそのまま通す (保証なしの宣言で上書きしない)。
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"freshness": true}),
+        json!({"freshness": {"fileChanges": ["Changed"]}}),
         "上流の宣言を書き換えた: {result}"
     );
 
@@ -815,7 +815,7 @@ fn a_false_upstream_declaration_is_not_a_declaration() {
     let result = client.initialize(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!(true),
+        json!({}),
         "false を宣言とみなして恒等写像に切り替えた: {result}"
     );
     assert_eq!(client.server_state().readiness, Readiness::Unknown);
@@ -848,7 +848,7 @@ fn spec_8_4_2_defers_to_a_conformant_upstream_even_with_an_adapter() {
     let result = client.initialize(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"freshness": true})
+        json!({"freshness": {"fileChanges": ["Changed"]}})
     );
     assert_eq!(
         client.server_state().message.as_deref(),
@@ -1139,7 +1139,7 @@ fn typescript_language_server_spec_8_2_5_declares_no_guarantees_for_an_untested_
     let result = client.initialize(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!(true),
+        json!({}),
         "測っていない保証を宣言した: {result}"
     );
     client.shutdown();
@@ -1152,7 +1152,7 @@ fn typescript_language_server_spec_5_declares_the_measured_guarantees_for_a_test
     let (mut client, result) = tsls_client(true);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"coverage": true, "freshness": true}),
+        json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
         "測った版に保証を宣言していない: {result}"
     );
     client.shutdown();
@@ -1272,7 +1272,7 @@ fn pyright_spec_7_1_through_lsp_det_with_real_pyright() {
     );
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"coverage": true, "freshness": true}),
+        json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
         "測った版の実 pyright に保証が宣言されていない: {result}"
     );
     let state = client.server_state();
@@ -1303,7 +1303,7 @@ fn pyright_spec_7_1_through_lsp_det_with_real_basedpyright() {
     );
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"coverage": true, "freshness": true}),
+        json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
         "測った版の実 basedpyright に保証が宣言されていない: {result}"
     );
     assert_ne!(client.server_state().readiness, Readiness::Unknown);
@@ -1433,7 +1433,7 @@ fn typescript_language_server_spec_7_1_through_lsp_det_with_real_server() {
     );
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"coverage": true, "freshness": true}),
+        json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
         "測った版の実サーバーに保証が宣言されていない: {result}"
     );
     client.did_open(&project.file("a.ts"), "typescript");
@@ -1612,7 +1612,7 @@ fn gopls_spec_7_1_through_lsp_det_with_real_gopls() {
     let result = client.initialize_with_root(true, &project.root);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({"coverage": true, "freshness": true}),
+        json!({"coverage": {"scope": "workspace", "incomplete": {"workspace/symbol": 100}}, "freshness": {"fileChanges": ["Created", "Changed", "Deleted"]}}),
         "測った版の実 gopls に保証が宣言されていない: {result}"
     );
     assert_ne!(client.server_state().readiness, Readiness::Ready);
@@ -1761,5 +1761,380 @@ fn spec_7_1_through_lsp_det_with_real_rust_analyzer() {
 
     // 実サーバーは自分のペースで ready になる。health が壊れたら抜ける。
     client.wait_until_ready();
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 7.3 の 2: ディスク上の変更 (workspace/didChangeWatchedFiles) の鮮度 (ADR 0014)
+//
+// 変更するファイル (呼び出し側と新規ファイル) は開かない。開くと didOpen の
+// 経路になり、ディスク上の変更を検証しない。起点は定義側のファイル。
+// ---------------------------------------------------------------------------
+
+/// 偽上流: 通知で再インデックス (quiescent: false) が始まり、終われば結果に
+/// 変更が織り込まれている。上流側は既存の信号で indexing → ready を伝える。
+#[test]
+fn spec_7_3_2_watched_file_changes_are_reflected_after_reindexing_with_a_fake_upstream() {
+    let server = ServerUnderTest::lsp_det_with_fake_upstream_flags(&[
+        "--references-depend-on-readiness",
+        "--reindex-on-watched-files",
+    ]);
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(true);
+    client.make_upstream_emit_status("ok", true);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    let root = support::repo_root();
+    let before = client.references(&root.join("src/a.rs"), 0, 7).len();
+
+    client.did_change_watched_files(&[(&root.join("src/c.rs"), 1)]);
+    assert_eq!(
+        client.await_state_changed().readiness,
+        Readiness::Indexing,
+        "通知で始まった再インデックスが indexing として伝わらない"
+    );
+    client.make_upstream_emit_status("ok", true);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+
+    let after = client.references(&root.join("src/a.rs"), 0, 7).len();
+    assert_eq!(
+        after,
+        before + 1,
+        "ready の後の応答が通知した変更を織り込んでいない"
+    );
+    client.shutdown();
+}
+
+/// 実サーバー共通の手順。定義側 `def` を開き、呼び出し側 `caller` を開かずに
+/// ディスク上で変え (Changed)、新規ファイル `new_file` を作り (Created)、
+/// 消す (Deleted)。`extra` は同時に Changed で送るファイル (Rust の lib.rs)。
+#[allow(clippy::too_many_arguments)] // 手順の引数をそのまま並べる方が読みやすい
+fn watched_file_changes_are_reflected(
+    client: &mut ConformanceClient,
+    def: &std::path::Path,
+    caller: &std::path::Path,
+    two_calls: &str,
+    new_file: &std::path::Path,
+    new_file_text: &str,
+    extra: Option<(&std::path::Path, &str)>,
+    references_in: fn(&mut ConformanceClient, &std::path::Path, &std::path::Path) -> Vec<Value>,
+) {
+    let before = references_in(client, def, caller);
+    assert!(
+        !before.is_empty(),
+        "前提が崩れている。呼び出し側からの参照が見えるはず"
+    );
+
+    // Changed: 呼び出しを 1 つ足す。
+    std::fs::write(caller, two_calls).unwrap();
+    client.did_change_watched_files(&[(caller, 2)]);
+    client.wait_until_ready();
+    let after_change = references_in(client, def, caller);
+    assert_eq!(
+        after_change.len(),
+        before.len() + 1,
+        "ready を名乗りながら、ディスク上で足した呼び出しを返さない (鮮度違反): {after_change:#?}"
+    );
+
+    // Created: 新しいファイルからも呼ぶ。
+    std::fs::write(new_file, new_file_text).unwrap();
+    let mut changes = vec![(new_file, 1u8)];
+    if let Some((path, text)) = extra {
+        std::fs::write(path, text).unwrap();
+        changes.push((path, 2));
+    }
+    client.did_change_watched_files(&changes);
+    client.wait_until_ready();
+    let in_new_file = references_in(client, def, new_file);
+    assert!(
+        !in_new_file.is_empty(),
+        "ready を名乗りながら、新しいファイルからの参照を返さない (鮮度違反)"
+    );
+
+    // Deleted: 新しいファイルを消す (7.3 の 4)。Rust は lib.rs も元に戻す。
+    std::fs::remove_file(new_file).unwrap();
+    let mut changes = vec![(new_file, 3u8)];
+    if let Some((path, _)) = extra {
+        std::fs::write(path, "pub mod a;\npub mod b;\n").unwrap();
+        changes.push((path, 2));
+    }
+    client.did_change_watched_files(&changes);
+    client.wait_until_ready();
+    let after_delete = references_in(client, def, new_file);
+    assert!(
+        after_delete.is_empty(),
+        "ready を名乗りながら、消したファイルからの参照を返す (鮮度違反): {after_delete:#?}"
+    );
+}
+
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn spec_7_3_2_watched_file_changes_through_lsp_det_with_real_rust_analyzer() {
+    let project = support::TempCargoProject::with_cross_file_reference("watched");
+    let mut client = ConformanceClient::start(&real_rust_analyzer(&project));
+    client.initialize(true);
+    client.wait_until_ready();
+    client.did_open(&project.file("a.rs"), "rust");
+    watched_file_changes_are_reflected(
+        &mut client,
+        &project.file("a.rs"),
+        &project.file("b.rs"),
+        support::B_WITH_TWO_CALLS,
+        &project.file("c.rs"),
+        support::C_RS_WITH_CALL,
+        Some((&project.file("lib.rs"), support::LIB_RS_WITH_C)),
+        references_in,
+    );
+    client.shutdown();
+}
+
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn gopls_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_gopls() {
+    let project = support::TempGoProject::with_cross_file_reference("watched");
+    let mut client = ConformanceClient::start(&real_gopls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    client.did_open(&project.file("a.go"), "go");
+    watched_file_changes_are_reflected(
+        &mut client,
+        &project.file("a.go"),
+        &project.file("b.go"),
+        support::GO_B_WITH_TWO_CALLS,
+        &project.file("c.go"),
+        support::GO_C_WITH_CALL,
+        None,
+        go_references_in,
+    );
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// ADR 0014 追補 決定 D: rust-analyzer の写像は Created / Deleted の通知で
+// indexing を先読みし、quiescent: true で戻す。Changed と監視の対象外の
+// ファイルでは先読みしない。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rust_analyzer_mapping_predicts_indexing_from_a_created_notification() {
+    let (mut client, _) = client(true);
+    client.make_upstream_emit_status("ok", true);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+
+    let root = support::repo_root();
+    client.did_change_watched_files(&[(&root.join("src/c.rs"), 1)]);
+    let predicted = client.await_state_changed();
+    assert_eq!(
+        predicted.readiness,
+        Readiness::Indexing,
+        "Created の通知で indexing を先読みしない"
+    );
+    assert_eq!(
+        predicted.health,
+        Health::Ok,
+        "先読みは readiness だけを動かす"
+    );
+
+    // 上流の完了の信号で戻る。
+    client.make_upstream_emit_status("ok", true);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn rust_analyzer_mapping_predicts_indexing_from_a_deleted_cargo_toml_notification() {
+    let (mut client, _) = client(true);
+    client.make_upstream_emit_status("ok", true);
+    client.await_state_changed();
+
+    let root = support::repo_root();
+    client.did_change_watched_files(&[(&root.join("Cargo.toml"), 3)]);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.shutdown();
+}
+
+#[test]
+fn rust_analyzer_mapping_does_not_predict_for_changed_or_unwatched_files() {
+    let (mut client, _) = client(true);
+    client.make_upstream_emit_status("ok", true);
+    client.await_state_changed();
+
+    let root = support::repo_root();
+    // Changed は信号が来ない (送信中の要求が -32801 で拒まれるだけ)。
+    client.did_change_watched_files(&[(&root.join("src/b.rs"), 2)]);
+    // 監視の対象でないファイルの Created も信号が来ない。
+    client.did_change_watched_files(&[(&root.join("notes.txt"), 1)]);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "信号が来ない通知で先読みしてはならない (indexing のまま止まる)"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// ADR 0016: 宣言は欠けを名指しする。上限は initializationOptions から読む
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rust_analyzer_mapping_reads_the_workspace_symbol_limit_from_initialization_options() {
+    let server = ServerUnderTest::lsp_det_with_fake_upstream();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize_with_initialization_options(
+        true,
+        json!({"workspace": {"symbol": {"search": {"limit": 1000}}}}),
+    );
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"]["coverage"]["incomplete"],
+        json!({"workspace/symbol": 1000}),
+        "クライアントが上げた上限を宣言に反映していない: {result}"
+    );
+    client.shutdown();
+}
+
+/// 7.2 の 2: incomplete に挙げたメソッドは上限の件数を返し、挙げていない
+/// メソッドはすべてを返す。300 個の一致するシンボルを持つ fixture で測る。
+fn workspace_symbol_count_through(client: &mut ConformanceClient) -> usize {
+    let response = client.request("workspace/symbol", json!({"query": "wsymprobe"}));
+    response["result"].as_array().map_or(0, |items| {
+        items
+            .iter()
+            .filter(|item| {
+                item["name"]
+                    .as_str()
+                    .is_some_and(|n| n.to_ascii_lowercase().contains("wsymprobe"))
+            })
+            .count()
+    })
+}
+
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn spec_7_2_2_rust_analyzer_returns_the_declared_limit_for_workspace_symbol() {
+    let project = support::TempCargoProject::with_many_symbols("limit", 300);
+    let mut client = ConformanceClient::start(&real_rust_analyzer(&project));
+    let result = client.initialize(true);
+    client.wait_until_ready();
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"]["coverage"]["incomplete"]
+            ["workspace/symbol"],
+        json!(128)
+    );
+    assert_eq!(
+        workspace_symbol_count_through(&mut client),
+        128,
+        "宣言した上限と一致しない"
+    );
+    client.shutdown();
+}
+
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn spec_7_2_2_gopls_returns_the_declared_limit_for_workspace_symbol() {
+    let project = support::TempGoProject::with_many_symbols("limit", 300);
+    let mut client = ConformanceClient::start(&real_gopls(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"]["coverage"]["incomplete"]
+            ["workspace/symbol"],
+        json!(100)
+    );
+    assert_eq!(
+        workspace_symbol_count_through(&mut client),
+        100,
+        "宣言した上限と一致しない"
+    );
+    client.shutdown();
+}
+
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn spec_7_2_2_pyright_returns_every_workspace_symbol() {
+    let project = support::TempPyProject::with_many_symbols("limit", 300);
+    let mut client = ConformanceClient::start(&real_pyright(&project, "pyright-langserver"));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    assert_eq!(
+        workspace_symbol_count_through(&mut client),
+        300,
+        "incomplete に挙げていないのに打ち切った"
+    );
+    client.shutdown();
+}
+
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn spec_7_2_2_typescript_language_server_returns_every_workspace_symbol() {
+    let project = support::TempTsProject::with_many_symbols("limit", 300);
+    let mut client = ConformanceClient::start(&real_tsls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&project.file("s0.ts"), "typescript");
+    client.wait_until_ready();
+    assert_eq!(
+        workspace_symbol_count_through(&mut client),
+        300,
+        "incomplete に挙げていないのに打ち切った"
+    );
+    client.shutdown();
+}
+
+/// 7.3 の 2 だけ (fileChanges が ["Changed"] の写像): 呼び出し側をディスク上で
+/// 変えて Changed を送る。Created / Deleted は宣言しないので試さない。
+fn changed_file_is_reflected(
+    client: &mut ConformanceClient,
+    def: &std::path::Path,
+    caller: &std::path::Path,
+    two_calls: &str,
+    references_in: fn(&mut ConformanceClient, &std::path::Path, &std::path::Path) -> Vec<Value>,
+) {
+    let before = references_in(client, def, caller);
+    assert!(
+        !before.is_empty(),
+        "前提が崩れている。呼び出し側からの参照が見えるはず"
+    );
+    std::fs::write(caller, two_calls).unwrap();
+    client.did_change_watched_files(&[(caller, 2)]);
+    client.wait_until_ready();
+    let after = references_in(client, def, caller);
+    assert_eq!(
+        after.len(),
+        before.len() + 1,
+        "ready を名乗りながら、ディスク上で足した呼び出しを返さない (鮮度違反): {after:#?}"
+    );
+}
+
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn pyright_spec_7_3_2_changed_file_through_lsp_det_with_real_pyright() {
+    let project = support::TempPyProject::with_cross_file_reference("changed");
+    let mut client = ConformanceClient::start(&real_pyright(&project, "pyright-langserver"));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    client.did_open(&project.file("a.py"), "python");
+    changed_file_is_reflected(
+        &mut client,
+        &project.file("a.py"),
+        &project.file("b.py"),
+        support::PY_B_WITH_TWO_CALLS,
+        py_references_in,
+    );
+    client.shutdown();
+}
+
+#[test]
+#[ignore = "実サーバー結合。ローカル専用 (v0.1-design.md 6 章)。cargo test -- --ignored で実行"]
+fn typescript_language_server_spec_7_3_2_changed_file_through_lsp_det_with_real_server() {
+    let project = support::TempTsProject::with_cross_file_reference("changed");
+    let mut client = ConformanceClient::start(&real_tsls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&project.file("a.ts"), "typescript");
+    client.wait_until_ready();
+    changed_file_is_reflected(
+        &mut client,
+        &project.file("a.ts"),
+        &project.file("b.ts"),
+        support::TS_B_WITH_TWO_CALLS,
+        ts_references_in,
+    );
     client.shutdown();
 }

@@ -27,6 +27,8 @@ pub use typescript_language_server::{
 
 use crate::initialize::ServerInfo;
 use crate::peek::MessageView;
+#[cfg(test)]
+use crate::state::ALL_FILE_CHANGES;
 use crate::state::{ServerState, ServerStateProvider};
 
 /// 言語サーバー固有の語彙から `ServerState` を読む写像。
@@ -46,6 +48,19 @@ pub trait Mapping {
     /// の版ではない。既定では何もしない。
     fn learn_identity(&mut self, info: &ServerInfo) {
         let _ = info;
+    }
+    /// クライアントの `initialize` の `initializationOptions`。宣言する上限
+    /// (`coverage.incomplete`) が設定で変わるサーバー (rust-analyzer) が読む。
+    /// 既定では何もしない。
+    fn learn_initialization_options(&mut self, options: &serde_json::Value) {
+        let _ = options;
+    }
+    /// クライアント→上流方向のメッセージを観測する。通知から再インデックスの
+    /// 開始を先読みしてよいのは、完了の信号が必ず来ることを測った写像だけ
+    /// (ADR 0014 追補 決定 D)。既定では何も読まない。
+    fn observe_client(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
+        let _ = (view, body);
+        None
     }
 }
 
@@ -216,7 +231,7 @@ mod tests {
         let tested = select("rust-analyzer", Some("1.98.0 (88d9e12 2026-08-18)")).unwrap();
         assert_eq!(
             tested.guarantees(),
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[("workspace/symbol", 128)], &ALL_FILE_CHANGES)
         );
 
         for untested in [
@@ -228,7 +243,7 @@ mod tests {
             let adapter = select("rust-analyzer", untested).unwrap();
             assert_eq!(
                 adapter.guarantees(),
-                ServerStateProvider::Basic(true),
+                ServerStateProvider::notifications_only(),
                 "テストを当てていない版 {untested:?} に保証を宣言した"
             );
         }

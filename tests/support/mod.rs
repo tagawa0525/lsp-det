@@ -354,6 +354,29 @@ impl ConformanceClient {
     }
 
     /// 任意の `ClientCapabilities` で `initialize` → `initialized` を済ませる。
+    /// `initializationOptions` 付きの `initialize` → `initialized`。
+    pub fn initialize_with_initialization_options(
+        &mut self,
+        declare_server_state: bool,
+        options: Value,
+    ) -> Value {
+        let mut capabilities = json!({"textDocument": {"hover": {}}});
+        if declare_server_state {
+            capabilities["experimental"] = json!({"serverState": true});
+        }
+        let result = self.request(
+            "initialize",
+            json!({
+                "processId": std::process::id(),
+                "rootUri": null,
+                "capabilities": capabilities,
+                "initializationOptions": options,
+            }),
+        );
+        self.notify("initialized", json!({}));
+        result
+    }
+
     pub fn initialize_with_capabilities(&mut self, capabilities: Value) -> Value {
         let result = self.initialize_raw_with_capabilities(capabilities);
         self.notify("initialized", json!({}));
@@ -715,6 +738,19 @@ impl ConformanceClient {
     }
 
     /// 全文置換の `didChange`。仕様 6.2 の鮮度保証が対象とする通知。
+    /// `workspace/didChangeWatchedFiles`。`kind` は LSP の FileChangeType
+    /// (1 = Created, 2 = Changed, 3 = Deleted)。
+    pub fn did_change_watched_files(&mut self, changes: &[(&std::path::Path, u8)]) {
+        let changes: Vec<Value> = changes
+            .iter()
+            .map(|(path, kind)| json!({"uri": file_uri(path), "type": kind}))
+            .collect();
+        self.notify(
+            "workspace/didChangeWatchedFiles",
+            json!({"changes": changes}),
+        );
+    }
+
     pub fn did_change(&mut self, path: &std::path::Path, version: i64, text: &str) {
         self.notify(
             "textDocument/didChange",
@@ -727,14 +763,18 @@ impl ConformanceClient {
 
     /// `textDocument/references`。宣言は含めない（利用箇所だけ数える）。
     pub fn references(&mut self, path: &std::path::Path, line: u32, character: u32) -> Vec<Value> {
-        let response = self.request(
-            "textDocument/references",
-            json!({
-                "textDocument": {"uri": file_uri(path)},
-                "position": {"line": line, "character": character},
-                "context": {"includeDeclaration": false},
-            }),
-        );
+        let params = json!({
+            "textDocument": {"uri": file_uri(path)},
+            "position": {"line": line, "character": character},
+            "context": {"includeDeclaration": false},
+        });
+        let mut response = self.request("textDocument/references", params.clone());
+        if response["error"]["code"] == json!(-32801) {
+            // ContentModified: サーバーが変更中の計算を捨てた。LSP はクライアントに
+            // 再送を求める (rust-analyzer は didChangeWatchedFiles 直後の要求を
+            // これで拒む)。応答ではないので一度だけ送り直す。
+            response = self.request("textDocument/references", params);
+        }
         response["result"].as_array().cloned().unwrap_or_default()
     }
 
@@ -886,6 +926,26 @@ impl TempCargoProject {
     }
 }
 
+impl TempCargoProject {
+    /// 接頭辞 `wsymprobe` を共有する `n` 個のトップレベル関数 (3 ファイルに分ける)。
+    /// 仕様 7.2 の 2 (件数の上限) の fixture。
+    pub fn with_many_symbols(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        let src = project.root.join("src");
+        let mut lib = String::from("pub mod a;\npub mod b;\n");
+        for file in 0..3 {
+            lib.push_str(&format!("pub mod s{file};\n"));
+            let body: String = (0..n)
+                .filter(|i| i % 3 == file)
+                .map(|i| format!("pub fn wsymprobe_{i:03}() {{}}\n"))
+                .collect();
+            std::fs::write(src.join(format!("s{file}.rs")), body).unwrap();
+        }
+        std::fs::write(src.join("lib.rs"), lib).unwrap();
+        project
+    }
+}
+
 impl Drop for TempCargoProject {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
@@ -912,6 +972,23 @@ impl TempGoProject {
 
     pub fn file(&self, name: &str) -> PathBuf {
         self.root.join(name)
+    }
+}
+
+impl TempGoProject {
+    pub fn with_many_symbols(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        for file in 0..3 {
+            let body: String = std::iter::once("package fixture\n\n".to_string())
+                .chain(
+                    (0..n)
+                        .filter(|i| i % 3 == file)
+                        .map(|i| format!("func Wsymprobe{i:03}() {{}}\n")),
+                )
+                .collect();
+            std::fs::write(project.root.join(format!("s{file}.go")), body).unwrap();
+        }
+        project
     }
 }
 
@@ -1026,6 +1103,22 @@ impl TempTsProject {
     }
 }
 
+impl TempTsProject {
+    pub fn with_many_symbols(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        for file in 0..3 {
+            let body: String = (0..n)
+                .filter(|i| i % 3 == file)
+                .map(|i| {
+                    format!("export function wsymprobe_{i:03}(): number {{\n  return 1;\n}}\n")
+                })
+                .collect();
+            std::fs::write(project.root.join(format!("s{file}.ts")), body).unwrap();
+        }
+        project
+    }
+}
+
 impl Drop for TempTsProject {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
@@ -1039,6 +1132,9 @@ pub const TS_A: &str = "export function target(): number {\n  return 1;\n}\n";
 pub const TS_B_WITH_CALL: &str =
     "import { target } from './a';\n\nexport function caller(): number {\n  return target();\n}\n";
 pub const TS_B_WITHOUT_CALL: &str = "export function caller(): number {\n  return 1;\n}\n";
+pub const TS_B_WITH_TWO_CALLS: &str = "import { target } from './a';\n\nexport function caller(): number {\n  target();\n  return target();\n}\n";
+pub const TS_C_WITH_CALL: &str =
+    "import { target } from './a';\n\nexport function other(): number {\n  return target();\n}\n";
 
 /// 一時的な Python プロジェクト。`a.py` の `target` を `b.py` の `caller` から呼ぶ。
 /// pyright は `initialize` の `workspaceFolders` をフォルダごとの service
@@ -1064,6 +1160,20 @@ impl TempPyProject {
     }
 }
 
+impl TempPyProject {
+    pub fn with_many_symbols(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        for file in 0..3 {
+            let body: String = (0..n)
+                .filter(|i| i % 3 == file)
+                .map(|i| format!("def wsymprobe_{i:03}():\n    return 1\n\n\n"))
+                .collect();
+            std::fs::write(project.root.join(format!("s{file}.py")), body).unwrap();
+        }
+        project
+    }
+}
+
 impl Drop for TempPyProject {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
@@ -1075,17 +1185,30 @@ pub const PY_A: &str = "def target():\n    return 1\n";
 /// 呼び出しは 5 行目 (0 起点で line 4)。1 行目の import も参照として数えられる。
 pub const PY_B_WITH_CALL: &str = "from a import target\n\n\ndef caller():\n    return target()\n";
 pub const PY_B_WITHOUT_CALL: &str = "def caller():\n    return 1\n";
+pub const PY_B_WITH_TWO_CALLS: &str =
+    "from a import target\n\n\ndef caller():\n    target()\n    return target()\n";
+pub const PY_C_WITH_CALL: &str = "import a\n\n\ndef other():\n    return a.target()\n";
 
 /// `Target` は 3 行目の 6 文字目 (0 起点で line 2, character 5) にある。
 pub const GO_A: &str = "package fixture\n\nfunc Target() {}\n";
 /// 呼び出しは 4 行目 (0 起点で line 3)。
 pub const GO_B_WITH_CALL: &str = "package fixture\n\nfunc Caller() {\n\tTarget()\n}\n";
 pub const GO_B_WITHOUT_CALL: &str = "package fixture\n\nfunc Caller() {}\n";
+pub const GO_B_WITH_TWO_CALLS: &str =
+    "package fixture\n\nfunc Caller() {\n\tTarget()\n\tTarget()\n}\n";
+pub const GO_C_WITH_CALL: &str = "package fixture\n\nfunc Other() {\n\tTarget()\n}\n";
 
 /// `target` は 1 行目の 8 文字目 (0 起点で line 0, character 7) にある。
 pub const A_RS: &str = "pub fn target() {}\n";
 pub const B_WITH_CALL: &str = "use crate::a::target;\n\npub fn caller() {\n    target();\n}\n";
 pub const B_WITHOUT_CALL: &str = "pub fn caller() {}\n";
+/// ディスク上の変更 (仕様 7.3 の 2): 呼び出しを 1 つ足す。
+pub const B_WITH_TWO_CALLS: &str =
+    "use crate::a::target;\n\npub fn caller() {\n    target();\n    target();\n}\n";
+/// 新規ファイル (仕様 7.3 の 2): 別のファイルからも呼ぶ。Rust では `mod` で
+/// 名指しされるまで crate に入らないので、lib.rs も変える。
+pub const C_RS_WITH_CALL: &str = "pub fn other() {\n    crate::a::target();\n}\n";
+pub const LIB_RS_WITH_C: &str = "pub mod a;\npub mod b;\npub mod c;\n";
 
 /// `write!` を使うため。
 pub fn flush<W: Write>(writer: &mut W) {

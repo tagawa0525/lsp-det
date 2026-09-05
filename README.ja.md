@@ -33,14 +33,14 @@ interface ServerState {
 }
 ```
 
-| 名前                                | 種別               | 内容                                                                               |
-| ----------------------------------- | ------------------ | ---------------------------------------------------------------------------------- |
-| `experimental/serverState`          | リクエスト         | 問い合わせ時点の `ServerState` を即答する                                          |
-| `experimental/serverStateChanged`   | 通知               | `health` か `readiness` が変わるたびに送る（クライアントが購読を宣言したときのみ） |
-| `serverStateProvider` (server cap.) | `InitializeResult` | `boolean` または `{coverage?, freshness?}`                                         |
-| `serverState` (client cap.)         | `InitializeParams` | 通知の購読と「待つか進むかは自分で判断する」という意思表示                         |
+| 名前                                | 種別               | 内容                                                                                     |
+| ----------------------------------- | ------------------ | ---------------------------------------------------------------------------------------- |
+| `experimental/serverState`          | リクエスト         | 問い合わせ時点の `ServerState` を即答する                                                |
+| `experimental/serverStateChanged`   | 通知               | `health` か `readiness` が変わるたびに送る（クライアントが購読を宣言したときのみ）       |
+| `serverStateProvider` (server cap.) | `InitializeResult` | `{coverage?: {scope, incomplete}, freshness?: {fileChanges}}`。`{}` は通知だけを約束する |
+| `serverState` (client cap.)         | `InitializeParams` | 通知の購読と「待つか進むかは自分で判断する」という意思表示                               |
 
-保証は `ready` かつ `health` が `error` でないときに効く。`coverage` はワークスペース横断メソッド（`references` / `definition` / `implementation` / `rename` / call hierarchy 等）の応答がワークスペース全体のインデックスに基づき、インデックスの進行によって後から増えないこと。`workspace/symbol` は `ready` まで保留するが保証の対象外（rust-analyzer と gopls は 128 件・100 件で黙って打ち切る）。`freshness` は受信済みの `didChange` をすべて織り込んでいること。両者は独立で、実装は守れる保証だけを宣言する。
+保証は `ready` かつ `health` が `error` でないときに効き、真偽値ではなく「あるべき姿から何が欠けているか」を名指しして宣言する。`coverage` は、ワークスペース横断メソッド（`references` / `definition` / `implementation` / `workspace/symbol` / `rename` / call hierarchy 等）の応答がどの範囲のインデックスに基づくか（`"workspace"` か `"openDocuments"`。インデックスの進行によって後から増えない）と、件数の上限で結果を切るメソッドとその上限（`incomplete`。rust-analyzer は `workspace/symbol` を 128 件、gopls は 100 件で黙って切る）。`freshness` は、`textDocument/didChange` に加えて `workspace/didChangeWatchedFiles` のどの種類の変更を `ready` のとき織り込んでいるか（`fileChanges`）。pyright と typescript-language-server は `Changed` は織り込むが、`Created` / `Deleted` の取り込みが終わる前に `ready` を名乗る。
 
 プロトコルの中に `dead` はない。プロセスの消失は接続の終了として伝わり、生き残った中継層が成功風の応答を返す状態は `health: "error"` で表す。中継層など外から観測する主体は、観測できない軸に `unknown` を使い、観測なしに `ok` や `ready` を名乗らない（8 章）。
 
@@ -104,7 +104,7 @@ Claude Code のプラグイン（`.lsp.json`）:
 lsp-det は stderr に写像の選択と状態遷移を出す。
 
 ```text
-lsp-det: upstream is "rust-analyzer" version "2026-08-03"; using its mapping, declaring {"coverage":true,"freshness":true}
+lsp-det: upstream is "rust-analyzer" version "2026-08-03"; using its mapping, declaring {"coverage":{"scope":"workspace","incomplete":{"workspace/symbol":128}},"freshness":{"fileChanges":["Created","Changed","Deleted"]}}
 lsp-det: [0.041s] server state -> {"health":"unknown","readiness":"initializing"} (previous held 0.041s)
 lsp-det: [0.213s] server state -> {"health":"ok","readiness":"indexing"} (previous held 0.172s)
 lsp-det: [6.712s] server state -> {"health":"ok","readiness":"ready"} (previous held 6.499s)

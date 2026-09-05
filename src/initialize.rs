@@ -137,7 +137,8 @@ pub fn declare_server_state_provider(
 }
 
 fn is_declaration(value: &Value) -> bool {
-    matches!(value, Value::Bool(true) | Value::Object(_))
+    // 宣言は常にオブジェクト (ADR 0016)。`true` / `false` は宣言ではない。
+    matches!(value, Value::Object(_))
 }
 
 /// `initialize` の `params.capabilities` に真偽フラグを足した新しいボディを返す。
@@ -394,10 +395,10 @@ mod tests {
     #[test]
     fn adds_the_provider_to_an_initialize_result() {
         let body = r#"{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"hoverProvider":true}}}"#;
-        let out = declared(body, &ServerStateProvider::coverage());
+        let out = declared(body, &ServerStateProvider::workspace(&[], &[]));
         assert_eq!(
             out["result"]["capabilities"]["experimental"]["serverStateProvider"],
-            serde_json::json!({"coverage": true})
+            serde_json::json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": []}})
         );
         // 上流の宣言はそのまま残る。
         assert_eq!(
@@ -410,23 +411,38 @@ mod tests {
     fn keeps_the_upstream_experimental_capabilities() {
         let body =
             r#"{"id":1,"result":{"capabilities":{"experimental":{"upstreamThing":{"a":1}}}}}"#;
-        let out = declared(body, &ServerStateProvider::Basic(true));
+        let out = declared(body, &ServerStateProvider::notifications_only());
         assert_eq!(
             out["result"]["capabilities"]["experimental"]["upstreamThing"]["a"],
             Value::from(1)
         );
         assert_eq!(
             out["result"]["capabilities"]["experimental"]["serverStateProvider"],
-            Value::Bool(true)
+            serde_json::json!({})
         );
     }
 
     #[test]
     fn creates_the_capabilities_object_in_a_bare_result() {
-        let out = declared(r#"{"id":1,"result":{}}"#, &ServerStateProvider::Basic(true));
+        let out = declared(
+            r#"{"id":1,"result":{}}"#,
+            &ServerStateProvider::notifications_only(),
+        );
         assert_eq!(
             out["result"]["capabilities"]["experimental"]["serverStateProvider"],
-            Value::Bool(true)
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn a_bare_true_is_not_a_declaration() {
+        // 宣言は常にオブジェクト (ADR 0016)。`true` は宣言ではなく、上書きする。
+        let body =
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":true}}}}"#;
+        let out = declared(body, &ServerStateProvider::notifications_only());
+        assert_eq!(
+            out["result"]["capabilities"]["experimental"]["serverStateProvider"],
+            serde_json::json!({})
         );
     }
 
@@ -434,12 +450,14 @@ mod tests {
     fn never_overwrites_an_upstream_declaration() {
         // 上流が本当に持つ保証 (freshness) を保証なしの宣言で隠してはならない。
         for body in [
-            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":{"freshness":true}}}}}"#,
+            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":{"freshness":{"fileChanges":["Changed"]}}}}}}"#,
             r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":{}}}}}"#,
-            r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":true}}}}"#,
         ] {
             assert_eq!(
-                declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true)),
+                declare_server_state_provider(
+                    body.as_bytes(),
+                    &ServerStateProvider::notifications_only()
+                ),
                 UpstreamDeclares,
                 "上流の宣言として透過すべき: {body}"
             );
@@ -454,10 +472,10 @@ mod tests {
             r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":false}}}}"#,
             r#"{"id":1,"result":{"capabilities":{"experimental":{"serverStateProvider":null}}}}"#,
         ] {
-            let out = declared(body, &ServerStateProvider::Basic(true));
+            let out = declared(body, &ServerStateProvider::notifications_only());
             assert_eq!(
                 out["result"]["capabilities"]["experimental"]["serverStateProvider"],
-                Value::Bool(true),
+                serde_json::json!({}),
                 "false / null は宣言ではない: {body}"
             );
         }
@@ -472,7 +490,10 @@ mod tests {
             "{not json",
         ] {
             assert_eq!(
-                declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true)),
+                declare_server_state_provider(
+                    body.as_bytes(),
+                    &ServerStateProvider::notifications_only()
+                ),
                 NotASuccess,
                 "成功応答とみなしてはならない: {body}"
             );
@@ -486,7 +507,10 @@ mod tests {
             r#"{"id":1,"result":{"capabilities":{"experimental":null}}}"#,
         ] {
             assert_eq!(
-                declare_server_state_provider(body.as_bytes(), &ServerStateProvider::Basic(true)),
+                declare_server_state_provider(
+                    body.as_bytes(),
+                    &ServerStateProvider::notifications_only()
+                ),
                 Unrewritable,
                 "書き換え不能とみなすべき: {body}"
             );

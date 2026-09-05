@@ -9,6 +9,8 @@
 use crate::adapter::{self, Mapping};
 use crate::initialize::ServerInfo;
 use crate::peek::MessageView;
+#[cfg(test)]
+use crate::state::{ALL_FILE_CHANGES, FileChangeType};
 use crate::state::{ServerState, ServerStateProvider};
 
 pub struct Tracker {
@@ -19,6 +21,9 @@ pub struct Tracker {
     /// 上流が `serverInfo` で名乗ったが既知の写像がなかった。以後、上流の
     /// 通知から名乗りを探す必要はない。
     named_but_unknown: bool,
+    /// クライアントの `initialize` の `initializationOptions`。写像は名乗りの
+    /// 後に選ばれるので、それまで保持して選んだ写像に渡す。
+    initialization_options: Option<serde_json::Value>,
 }
 
 impl Default for Tracker {
@@ -35,7 +40,31 @@ impl Tracker {
             adapter: None,
             identity: None,
             named_but_unknown: false,
+            initialization_options: None,
         }
+    }
+
+    /// クライアントの `initialize` を覚える (`initializationOptions` を写像に渡す)。
+    pub fn remember_initialize(&mut self, body: &[u8]) {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+            return;
+        };
+        let options = value["params"]["initializationOptions"].clone();
+        if options.is_null() {
+            return;
+        }
+        if let Some(adapter) = self.adapter.as_mut() {
+            adapter.learn_initialization_options(&options);
+        }
+        self.initialization_options = Some(options);
+    }
+
+    /// クライアント→上流方向のメッセージを観測して状態を更新する。
+    /// 通知を要する変化があった場合のみ新しい状態を返す。
+    pub fn observe_client(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
+        let adapter = self.adapter.as_mut()?;
+        let next = adapter.observe_client(view, body)?;
+        self.apply(next)
     }
 
     /// 上流は名乗ったが既知の写像がない (両軸 `unknown` で確定)。透過経路は
@@ -78,7 +107,10 @@ impl Tracker {
     }
 
     fn adopt(&mut self, identity: ServerInfo) -> Option<ServerState> {
-        let adapter = adapter::select(&identity.name, identity.version.as_deref())?;
+        let mut adapter = adapter::select(&identity.name, identity.version.as_deref())?;
+        if let Some(options) = &self.initialization_options {
+            adapter.learn_initialization_options(options);
+        }
         self.state = adapter.initial_state();
         self.adapter = Some(adapter);
         self.identity = Some(identity);
@@ -96,13 +128,13 @@ impl Tracker {
     }
 
     /// `InitializeResult` に宣言する保証 (仕様 5 章)。
-    /// 写像がなければ保証なしの宣言 (`true`)。
+    /// 写像がなければ保証なしの宣言 (`{}`)。
     pub fn provider(&self) -> ServerStateProvider {
         // 保証は写像に聞く (仕様 8.2 の 5)。どの名乗りのどの版を根拠にするかは
         // 写像が決める (`Mapping::learn_identity`)。
         self.adapter
             .as_ref()
-            .map_or(ServerStateProvider::Basic(true), |adapter| {
+            .map_or(ServerStateProvider::notifications_only(), |adapter| {
                 adapter.guarantees()
             })
     }
@@ -258,7 +290,10 @@ mod tests {
         let mut tracker = Tracker::new();
         let unversioned = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"basedpyright language server starting"}}"#;
         observe(&mut tracker, unversioned);
-        assert_eq!(tracker.provider(), ServerStateProvider::Basic(true));
+        assert_eq!(
+            tracker.provider(),
+            ServerStateProvider::notifications_only()
+        );
         observe(&mut tracker, PYRIGHT_STARTED);
 
         tracker.select_mapping(Some(&ServerInfo {
@@ -267,7 +302,7 @@ mod tests {
         }));
         assert_eq!(
             tracker.provider(),
-            ServerStateProvider::coverage_and_freshness(),
+            ServerStateProvider::workspace(&[], &[FileChangeType::Changed]),
             "serverInfo の版で保証を宣言し直していない"
         );
         let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("観測は保たれている");
@@ -285,7 +320,7 @@ mod tests {
         observe(&mut tracker, startup);
         assert_eq!(
             tracker.provider(),
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
         );
         tracker.select_mapping(Some(&ServerInfo {
             name: "typescript-language-server".to_string(),
@@ -293,7 +328,7 @@ mod tests {
         }));
         assert_eq!(
             tracker.provider(),
-            ServerStateProvider::coverage_and_freshness(),
+            ServerStateProvider::workspace(&[], &[FileChangeType::Changed]),
             "包み紙の版で保証を落とした"
         );
     }
@@ -311,7 +346,7 @@ mod tests {
         }));
         assert_eq!(
             tracker.provider(),
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
         );
         let ready = observe(&mut tracker, PYRIGHT_FOUND).expect("数えたフォルダの完了で ready");
         assert_eq!(ready.readiness, Readiness::Ready);
@@ -399,11 +434,11 @@ mod tests {
     fn declares_the_adapter_guarantees_or_no_guarantees() {
         assert_eq!(
             with_adapter().provider(),
-            ServerStateProvider::coverage_and_freshness()
+            ServerStateProvider::workspace(&[("workspace/symbol", 128)], &ALL_FILE_CHANGES)
         );
         assert_eq!(
             without_adapter().provider(),
-            ServerStateProvider::Basic(true)
+            ServerStateProvider::notifications_only()
         );
     }
 

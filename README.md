@@ -33,14 +33,14 @@ interface ServerState {
 }
 ```
 
-| Name                                | Kind               | Content                                                                                       |
-| ----------------------------------- | ------------------ | --------------------------------------------------------------------------------------------- |
-| `experimental/serverState`          | Request            | Answers the `ServerState` at the moment of the query, without waiting                         |
-| `experimental/serverStateChanged`   | Notification       | Sent whenever `health` or `readiness` changes (only if the client declared the subscription)  |
-| `serverStateProvider` (server cap.) | `InitializeResult` | `boolean` or `{coverage?, freshness?}`                                                        |
-| `serverState` (client cap.)         | `InitializeParams` | Subscribes to notifications and declares "I read the state and decide whether to wait myself" |
+| Name                                | Kind               | Content                                                                                             |
+| ----------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------- |
+| `experimental/serverState`          | Request            | Answers the `ServerState` at the moment of the query, without waiting                               |
+| `experimental/serverStateChanged`   | Notification       | Sent whenever `health` or `readiness` changes (only if the client declared the subscription)        |
+| `serverStateProvider` (server cap.) | `InitializeResult` | `{coverage?: {scope, incomplete}, freshness?: {fileChanges}}`; `{}` promises the notifications only |
+| `serverState` (client cap.)         | `InitializeParams` | Subscribes to notifications and declares "I read the state and decide whether to wait myself"       |
 
-Guarantees apply when `readiness` is `ready` and `health` is not `error`. `coverage` means that the responses of the cross-workspace methods (`references`, `definition`, `implementation`, `rename`, call hierarchy and so on) are computed over the whole workspace index, so they will not grow later as indexing proceeds. `workspace/symbol` is held until `ready` but not covered by the guarantee: rust-analyzer and gopls cap its results (128 and 100) without saying so. `freshness` means that every `didChange` received so far has been incorporated. The two are independent, and an implementation declares only the guarantees it can keep.
+Guarantees apply when `readiness` is `ready` and `health` is not `error`, and they are declared by naming what is missing from the ideal rather than as booleans. `coverage` says which scope the cross-workspace answers (`references`, `definition`, `implementation`, `workspace/symbol`, `rename`, call hierarchy and so on) are computed over (`"workspace"` or `"openDocuments"`), so they will not grow later as indexing proceeds, and lists the methods whose results the server caps together with the cap (`incomplete`: rust-analyzer caps `workspace/symbol` at 128, gopls at 100, without saying so). `freshness` lists which kinds of `workspace/didChangeWatchedFiles` changes are incorporated when `ready` (`fileChanges`, in addition to `textDocument/didChange`): pyright and typescript-language-server incorporate `Changed` but report `ready` before a `Created` or `Deleted` file is folded in.
 
 There is no `dead` in the protocol. A vanished process shows up as the end of the connection, and a surviving relay that returns successful-looking responses is `health: "error"`. An observer outside the server, such as a relay, reports `unknown` on an axis it cannot observe and never claims `ok` or `ready` without observation (chapter 8).
 
@@ -105,7 +105,7 @@ The real file for all four servers is [dogfood/claude-plugin/.lsp.json](dogfood/
 lsp-det logs the selected mapping and every state transition to stderr.
 
 ```text
-lsp-det: upstream is "rust-analyzer" version "2026-08-03"; using its mapping, declaring {"coverage":true,"freshness":true}
+lsp-det: upstream is "rust-analyzer" version "2026-08-03"; using its mapping, declaring {"coverage":{"scope":"workspace","incomplete":{"workspace/symbol":128}},"freshness":{"fileChanges":["Created","Changed","Deleted"]}}
 lsp-det: [0.041s] server state -> {"health":"unknown","readiness":"initializing"} (previous held 0.041s)
 lsp-det: [0.213s] server state -> {"health":"ok","readiness":"indexing"} (previous held 0.172s)
 lsp-det: [6.712s] server state -> {"health":"ok","readiness":"ready"} (previous held 6.499s)

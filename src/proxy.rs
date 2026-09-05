@@ -144,6 +144,9 @@ enum ClientKind {
     /// クライアントの `initialized` 通知。恒等写像の初期状態の問い合わせは
     /// これを流した後に送る。
     Initialized,
+    /// その他の通知。写像がクライアントの通知から先読みした変化があれば持つ
+    /// (ADR 0014 追補 決定 D)。
+    Notification(Option<ServerState>),
     Other,
 }
 
@@ -277,6 +280,9 @@ impl UpstreamSide {
                     None => ClientKind::Other,
                 }
             }
+            Ok(view) if view.is_notification() && !self.identity => {
+                ClientKind::Notification(self.tracker.observe_client(&view, &msg.body))
+            }
             _ => ClientKind::Other,
         };
 
@@ -292,6 +298,7 @@ impl UpstreamSide {
             }
             ClientKind::InitializeRequest(id) => {
                 self.initialize_id = id;
+                self.tracker.remember_initialize(&msg.body);
                 self.client_declared = initialize::client_declares_server_state(&msg.body);
                 self.client_declared_progress =
                     initialize::client_declares_work_done_progress(&msg.body);
@@ -334,6 +341,17 @@ impl UpstreamSide {
                 if self.identity_query_pending {
                     self.identity_query_pending = false;
                     outs.push(Out::ToUpstream(self_state_request()));
+                }
+                outs
+            }
+            ClientKind::Notification(predicted) => {
+                // 通知は先に上流へ流し、先読みした変化はその後に伝える。
+                let mut outs = vec![Out::ToUpstream(msg)];
+                if let Some(state) = predicted {
+                    outs.extend(releases(gate, &state));
+                    if let Some(notification) = self.notify(&state) {
+                        outs.push(Out::ToClient(notification));
+                    }
                 }
                 outs
             }
@@ -674,6 +692,18 @@ impl StateTracker {
 
     fn upstream_is_unmapped(&self) -> bool {
         self.tracker.upstream_is_unmapped()
+    }
+
+    /// クライアントの `initialize` を写像に渡す (`initializationOptions`)。
+    fn remember_initialize(&mut self, body: &[u8]) {
+        self.tracker.remember_initialize(body);
+    }
+
+    /// クライアントの通知から写像が先読みした変化をログして返す。
+    fn observe_client(&mut self, view: &peek::MessageView, body: &[u8]) -> Option<ServerState> {
+        let state = self.tracker.observe_client(view, body)?;
+        self.log(&state);
+        Some(state)
     }
 
     /// 恒等写像のとき、上流から読んだ境界の状態をログする。

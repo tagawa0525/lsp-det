@@ -97,11 +97,15 @@ pub struct RustAnalyzerAdapter {
 /// `workspace_symbol_search_limit`)。
 const DEFAULT_WORKSPACE_SYMBOL_LIMIT: u64 = 128;
 
-/// rust-analyzer が `client/registerCapability` で監視を登録するファイル。
-/// これらの Created / Deleted には必ず `quiescent: false → true` が続く
+/// rust-analyzer が `client/registerCapability` で監視を登録するファイル
+/// (`**/*.rs`、`**/Cargo.{toml,lock}`、`**/rust-analyzer.toml`) か。これらの
+/// Created / Deleted には必ず `quiescent: false → true` が続く
 /// (research/disk-edit-propagation-measurement.md の追記)。
-const WATCHED_FILE_SUFFIXES: &[&str] =
-    &[".rs", "/Cargo.toml", "/Cargo.lock", "/rust-analyzer.toml"];
+fn is_watched_file(uri: &str) -> bool {
+    // URI の最後の要素で見る。Windows の file URI は `\\` 区切りで来ることがある。
+    let name = uri.rsplit(['/', '\\']).next().unwrap_or(uri);
+    name.ends_with(".rs") || matches!(name, "Cargo.toml" | "Cargo.lock" | "rust-analyzer.toml")
+}
 
 impl Default for RustAnalyzerAdapter {
     fn default() -> Self {
@@ -172,12 +176,10 @@ impl Mapping for RustAnalyzerAdapter {
             return None;
         }
         let changes = parse_watched_file_changes(body)?;
-        let reindexes = changes.iter().any(|change| {
-            matches!(change.kind, 1 | 3)
-                && WATCHED_FILE_SUFFIXES
-                    .iter()
-                    .any(|suffix| change.uri.ends_with(suffix))
-        });
+        // FileChangeType: 1 = Created, 2 = Changed, 3 = Deleted。
+        let reindexes = changes
+            .iter()
+            .any(|change| matches!(change.kind, 1 | 3) && is_watched_file(&change.uri));
         reindexes.then_some(ServerState {
             health: self.last_health,
             readiness: Readiness::Indexing,
@@ -238,7 +240,8 @@ impl Mapping for RustAnalyzerAdapter {
 
 struct WatchedFileChange {
     uri: String,
-    kind: u8,
+    /// LSP の `FileChangeType` の値 (1..=3)。範囲外の値の変更は捨てる。
+    kind: u64,
 }
 
 /// `workspace/didChangeWatchedFiles` の `changes` (uri と FileChangeType)。
@@ -251,7 +254,9 @@ fn parse_watched_file_changes(body: &[u8]) -> Option<Vec<WatchedFileChange>> {
             .filter_map(|change| {
                 Some(WatchedFileChange {
                     uri: change["uri"].as_str()?.to_string(),
-                    kind: change["type"].as_u64()? as u8,
+                    kind: change["type"]
+                        .as_u64()
+                        .filter(|kind| (1..=3).contains(kind))?,
                 })
             })
             .collect(),
@@ -273,6 +278,17 @@ fn parse_status_params(body: &[u8]) -> Option<ServerStatusParams> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn watched_files_are_recognised_with_either_path_separator() {
+        assert!(super::is_watched_file("file:///w/src/c.rs"));
+        assert!(super::is_watched_file("file:///C:/w/Cargo.toml"));
+        assert!(super::is_watched_file("file:///C:\\w\\Cargo.lock"));
+        assert!(!super::is_watched_file("file:///w/notes.txt"));
+        assert!(!super::is_watched_file(
+            "file:///w/src/rust-analyzer.toml.bak"
+        ));
+    }
+
     use super::*;
     use crate::peek::peek;
 

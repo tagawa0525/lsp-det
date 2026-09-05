@@ -303,7 +303,7 @@ mod tests {
     }
 
     #[test]
-    fn a_grade_omits_the_guarantees_it_does_not_claim() {
+    fn a_declaration_omits_the_guarantees_it_does_not_claim() {
         // 守れない保証を宣言しないことが仕様 5.1 の要求。
         assert_eq!(
             serde_json::to_string(&ServerStateProvider::workspace(&[], &[])).unwrap(),
@@ -312,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn a_grade_serializes_both_guarantees_when_claimed() {
+    fn a_declaration_serializes_both_guarantees_when_claimed() {
         let both = ServerStateProvider::workspace(&[("workspace/symbol", 128)], &ALL_FILE_CHANGES);
         assert_eq!(
             serde_json::to_string(&both).unwrap(),

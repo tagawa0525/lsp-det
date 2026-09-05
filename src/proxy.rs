@@ -144,6 +144,9 @@ enum ClientKind {
     /// クライアントの `initialized` 通知。恒等写像の初期状態の問い合わせは
     /// これを流した後に送る。
     Initialized,
+    /// その他の通知。写像がクライアントの通知から先読みした変化があれば持つ
+    /// (ADR 0014 追補 決定 D)。
+    Notification(Option<ServerState>),
     Other,
 }
 
@@ -277,6 +280,9 @@ impl UpstreamSide {
                     None => ClientKind::Other,
                 }
             }
+            Ok(view) if view.is_notification() && !self.identity => {
+                ClientKind::Notification(self.tracker.observe_client(&view, &msg.body))
+            }
             _ => ClientKind::Other,
         };
 
@@ -338,15 +344,8 @@ impl UpstreamSide {
                 }
                 outs
             }
-            ClientKind::Other => {
-                // 写像がクライアントの通知から先読みする (ADR 0014 追補 決定 D)。
-                // 通知は先に上流へ流し、状態の変化はその後に伝える。
-                let predicted = match peek::peek(&msg.body) {
-                    Ok(view) if view.is_notification() && !self.identity => {
-                        self.tracker.observe_client(&view, &msg.body)
-                    }
-                    _ => None,
-                };
+            ClientKind::Notification(predicted) => {
+                // 通知は先に上流へ流し、先読みした変化はその後に伝える。
                 let mut outs = vec![Out::ToUpstream(msg)];
                 if let Some(state) = predicted {
                     outs.extend(releases(gate, &state));
@@ -356,6 +355,7 @@ impl UpstreamSide {
                 }
                 outs
             }
+            ClientKind::Other => vec![Out::ToUpstream(msg)],
         }
     }
 

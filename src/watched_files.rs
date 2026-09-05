@@ -56,13 +56,15 @@ impl WatchedFiles {
             roots: usable,
             snapshot: BTreeMap::new(),
         };
-        stand_in.snapshot = stand_in.scan();
+        stand_in.snapshot = stand_in.scan()?;
         Some(stand_in)
     }
 
-    /// 前回からの差を通知にする。差がなければ `None`。
+    /// 前回からの差を通知にする。差がなければ `None`。`git` が一時的に失敗
+    /// したときも `None` で、一覧は更新しない (失敗を「全部消えた」と
+    /// 誤認して Deleted を大量に送らないため)。
     pub fn changes_since_last_scan(&mut self) -> Option<RawMessage> {
-        let current = self.scan();
+        let current = self.scan()?;
         let mut changes: Vec<serde_json::Value> = Vec::new();
         for (path, mtime) in &current {
             match self.snapshot.get(path) {
@@ -90,17 +92,18 @@ impl WatchedFiles {
         })
     }
 
-    fn scan(&self) -> BTreeMap<PathBuf, SystemTime> {
+    /// 全ルートの一覧。どれかのルートで `git ls-files` が失敗したら `None`。
+    fn scan(&self) -> Option<BTreeMap<PathBuf, SystemTime>> {
         let mut files = BTreeMap::new();
         for root in &self.roots {
-            for relative in list_files(root).unwrap_or_default() {
+            for relative in list_files(root)? {
                 let path = root.join(relative);
                 if let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) {
                     files.insert(path, mtime);
                 }
             }
         }
-        files
+        Some(files)
     }
 }
 

@@ -1274,12 +1274,7 @@ impl TempGitWorkspace {
             std::env::temp_dir().join(format!("lsp-det-stand-in-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("一時ワークスペースを作れない");
-        let status = Command::new("git")
-            .args(["init", "-q"])
-            .current_dir(&root)
-            .status()
-            .expect("git を起動できない");
-        assert!(status.success(), "git init に失敗");
+        git_init(&root);
         std::fs::write(root.join("a.rs"), "pub fn target() {}\n").unwrap();
         TempGitWorkspace { root }
     }

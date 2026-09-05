@@ -122,7 +122,7 @@ lsp-det: [6.712s] server state -> {"health":"ok","readiness":"ready"} (previous 
 nix develop            # rustc、rust-analyzer、gopls、pyright、typescript-language-server を固定する
 cargo build --release  # target/release/lsp-det
 cargo test             # 偽の言語サーバー・偽のクライアントによる決定的なテスト
-cargo test --test conformance -- --ignored   # 実サーバー結合 19 件（ローカルのみ、CI では回さない）
+cargo test --test conformance -- --ignored   # 実サーバー結合 31 件（ローカルのみ、CI では回さない）
 ```
 
 テストは仕様をそのまま実行可能にしたもので、被験者を差し替えれば実サーバー・実クライアントにも当たる。

@@ -2,16 +2,22 @@
 
 マイルストーンの完了と、その決定の出所（ADR）を版ごとに記す。設計判断の経緯は `docs/adr/`、実測は `docs/research/`。
 
-## 予定（0.3.0）
+## 予定
 
-2026-09-04 に決めた次のバッチ。ADR 3 本を先に書き（仕様と設計の変更を含めて）マージしてから、実装に入る。
+- 外向きの提出は `docs/upstream-submissions.md` の順で、詰めてから。typescript-language-server の不具合修正 PR、Claude Code への報告（5 件の再現と「lsp-det を挟むと消える」）、Serena の不具合と提案、fork の 4 パッチ
+- 仕様の英訳（ADR 0010 決定 A-4）
 
-- ADR 0013（仕様）: `completeness` を `coverage` に改名し、定義を「応答はワークスペース全体のインデックスに基づく。インデックスの進行によって後から結果が増えることはない」に絞る。`workspace/symbol` は保証の対象から外す（rust-analyzer は 128 件、gopls は 100 件で黙って打ち切る。ピッカー向けのあいまい検索であり列挙の契約を持たない）。保留の対象には残す
-- ADR 0014（仕様）: `freshness` の対象に、クライアントから受信した `workspace/didChangeWatchedFiles` を加える。準拠テスト 7.3 に第 2 のテスト（ディスク上の変更と新規ファイル）を足す
-- ADR 0015（設計 4.3）: 下流側の代行 2 つ。capability `workspace.didChangeWatchedFiles` を宣言せず、通知 `workspace/didChangeWatchedFiles` も送らないクライアントに代わって、保留の対象のリクエストごとに `git ls-files` の一覧の mtime を比べて通知を送る（写像は関与せず、言語ごとの一覧は持たない。git 管理外では代行しない）。既に開いている uri への `didOpen` を全文の `didChange` に書き換える
-- ADR 0016（仕様）: 保証の宣言を、真偽値ではなく欠けを名指しする形にする。`serverStateProvider` は常にオブジェクトで、`coverage: {scope, incomplete: {メソッド: 上限}}`、`freshness: {fileChanges: FileChangeType の一覧}`。ADR 0013 の決定 B（`workspace/symbol` を保証から外す）を置き換え、7.0 を 1 つの一覧に戻す
-- 実装済み: 0013 の改名、0016 の宣言の型と写像（rust-analyzer は `initializationOptions` の上限を読み、Created / Deleted の通知で `indexing` を先読みする。gopls 100、pyright と tsls は `["Changed"]`）、0014 の準拠テスト（Changed / Created / Deleted、上限）、0015 の代行 2 つ（`src/watched_files.rs`、`src/documents.rs`。費用は 4269 ファイルの zed で 1 回の走査 22ms）
-- 外向きの提出は `docs/upstream-submissions.md` の順で、詰めてから
+## 0.3.0（2026-09-06）
+
+2026-09-04 に決めたバッチ。ADR 4 本を先に書き、続けて実装した。
+
+- **ADR 0013**（2026-09-04）: `completeness` を `coverage` に改名し、定義を「ワークスペース全体のインデックスに基づき、インデックスの進行によって後から結果が増えない」に絞る。`workspace/symbol` の扱いは 0016 が置き換えた
+- **ADR 0014**（2026-09-04、追補 2026-09-06）: `freshness` の対象に、受信した `workspace/didChangeWatchedFiles` を加える。準拠テスト 7.3 を Changed / Created / Deleted に分ける。追補: 通知の後に完了の信号が必ず来ると測った写像（rust-analyzer）だけが、Created / Deleted の通知で `indexing` を先読みしてよい
+- **ADR 0015**（2026-09-04）: 下流側の代行 2 つ。capability を宣言せず通知も送らないクライアントに代わって、7.0 のリクエストごとに `git ls-files` の一覧の mtime を比べて `didChangeWatchedFiles` を送る（`src/watched_files.rs`。写像は関与せず、git 管理外では行わない。4269 ファイルの zed で 1 回 22ms）。既に開いている uri への `didOpen` を全文の `didChange` に書き換える（`src/documents.rs`）
+- **ADR 0016**（2026-09-06）: 保証の宣言を、真偽値ではなく欠けを名指しする形にする。`serverStateProvider` は常にオブジェクトで、`coverage: {scope: "workspace" | "openDocuments", incomplete: {メソッド: 上限}}`、`freshness: {fileChanges: FileChangeType の一覧}`。仕様はあるべき姿を書き、現実のずれは宣言で自覚させる。7.0 は 1 つの一覧に戻す
+- **各サーバーの宣言**（実測に基づく）: rust-analyzer は `incomplete: {"workspace/symbol": 128}`（`initializationOptions` の上限を読む）と `fileChanges` 3 種、gopls は 100 と 3 種、pyright と typescript-language-server は `incomplete: {}` と `["Changed"]`（Created / Deleted の取り込みの開始を伝えない）
+- **実測**: `workspace/symbol` の打ち切り、ディスク上の編集の伝わり方（4 サーバー × 4 場面、Claude Code の `initialize` の capability の原文、通知後の完了の信号）、Serena が MCP ツールと LSP の間で行う処理、言語サーバーが埋められている穴の分類（約 40 言語）
+- **上流**: fork の rust-analyzer と gopls のパッチを新しい宣言に追従（受け入れ条件は通過）。`docs/upstream-submissions.md` に提出の備忘録
 
 ## 0.2.0（2026-09-04）
 

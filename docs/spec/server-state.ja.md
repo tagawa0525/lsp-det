@@ -2,7 +2,7 @@
 
 [English](server-state.md)
 
-状態: 草案。本文書がサーバー状態プロトコルの規範（normative）であり、他文書の記述と食い違う場合は本文書を正とする。LSP 本体に取り込まれるまでは `experimental/` 配下の拡張として実装する（4.3）。
+状態: 草案。規範（normative）は英語版 [server-state.md](server-state.md) であり、他文書の記述と食い違う場合は英語版を正とする。本文書はその日本語版で、同じコミットで追従させる（ADR 0017）。LSP 本体に取り込まれるまでは `experimental/` 配下の拡張として実装する（4.3）。
 
 ## 1. 目的
 

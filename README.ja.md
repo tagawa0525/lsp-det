@@ -150,13 +150,13 @@ cargo test --test conformance -- --ignored   # 実サーバー結合 31 件（�
 
 ## 文書
 
-| 文書                                                         | 内容                                                                                                                |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| [docs/spec/server-state.ja.md](docs/spec/server-state.ja.md) | サーバー状態プロトコルの規範。他文書と食い違えばこれが正                                                            |
-| [docs/v0.1-design.md](docs/v0.1-design.md)                   | プロキシの実装スコープ（上流側・下流側・写像・実行モデル）                                                          |
-| [docs/adr/README.md](docs/adr/README.md)                     | 設計判断の索引。生きている決定と却下した案                                                                          |
-| [docs/vision.md](docs/vision.md)                             | 長期構想（宣言範囲・起動方法の宣言は凍結中）                                                                        |
-| [docs/research/](docs/research/)                             | 調査と実測 22 本。各言語サーバーの readiness の実態、先行プロキシ、Serena / Claude Code / Zed / VS Code の LSP 統合 |
+| 文書                                                         | 内容                                                                                                                                         |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| [docs/spec/server-state.ja.md](docs/spec/server-state.ja.md) | サーバー状態プロトコルの仕様の日本語版。規範は英語版 [docs/spec/server-state.md](docs/spec/server-state.md) で、他文書と食い違えば英語版が正 |
+| [docs/v0.1-design.md](docs/v0.1-design.md)                   | プロキシの実装スコープ（上流側・下流側・写像・実行モデル）                                                                                   |
+| [docs/adr/README.md](docs/adr/README.md)                     | 設計判断の索引。生きている決定と却下した案                                                                                                   |
+| [docs/vision.md](docs/vision.md)                             | 長期構想（宣言範囲・起動方法の宣言は凍結中）                                                                                                 |
+| [docs/research/](docs/research/)                             | 調査と実測 22 本。各言語サーバーの readiness の実態、先行プロキシ、Serena / Claude Code / Zed / VS Code の LSP 統合                          |
 
 ## 現在地
 

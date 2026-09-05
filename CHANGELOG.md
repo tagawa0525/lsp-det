@@ -4,7 +4,10 @@
 
 ## 予定
 
-- 外向きの提出は `docs/upstream-submissions.md` の順で、詰めてから。typescript-language-server の不具合修正 PR、Claude Code への報告（4 件の再現と「lsp-det を挟むと消える」）、Serena の不具合と提案、fork の 4 パッチ
+- 外部レビュー（ADR 0018）への対応: 保留の開始と解放を stderr に出す、ドッグフーディング第 6 回（実害の一事例）、仕様 10 章に Dart / Sorbet、gopls #1200 の証拠、提出メモの前提
+- 0.4.0（ADR 0019、M8〜M14）: Serena 30 言語のコーパス、反例の実サーバーでの検証（Metals、Elixir、Kotlin、Nextflow から）、相方サーバーとの合成の測定、devShell の分割
+- 0.5.0: Dart、Sorbet、jdtls、clangd（着手時に ADR）
+- 外向きの提出は 0.5.0 の後、`docs/upstream-submissions.md` の順で。typescript-language-server の不具合修正 PR、Claude Code への報告（既存 issue 3 件へのコメントと新規 2 件）、Serena の不具合と提案、fork の 4 パッチ
 
 ## 0.3.0（2026-09-06）
 

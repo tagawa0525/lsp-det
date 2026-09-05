@@ -49,3 +49,24 @@ ADR 0014 と ADR 0015 の根拠。コーディングエージェントはファ�
 - S2 の rust-analyzer は監視の宣言の有無で挙動が変わる。他のクライアントの宣言（Serena の各言語の capability）では別途測る必要がある
 - CC の capability は 2.1.259 の非対話モードで記録した。対話モードで同じかは確かめていない
 - tsls の自前監視は tsserver の機能で、監視の範囲（プロジェクト外のファイル等）は測っていない
+
+## 追記（2026-09-06）: 通知の後の完了の信号は必ず来るか
+
+ADR 0014 の第 2 のテストを実サーバーに当てると、Changed は 4 つとも通り、Created は pyright と tsls が通らなかった。通知の直後の問い合わせが古い答えを返し、再インデックスの信号はその後に届く。先読み（通知を見て `indexing` にする）が安全かを決めるため、サーバーごとに信号が必ず来るかを測った。
+
+| サーバー      | 変種                                                                    | 通知後 3 秒以内のサーバーからのメッセージ                            | 直後の問い合わせ → 期待の件数まで |
+| ------------- | ----------------------------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------- |
+| pyright       | Created `c.py`                                                          | "Found 3 source files"（+0.041 秒）                                  | 古い → +0.143 秒                  |
+| pyright       | Created `.venv/lib/x.py`、`notes.txt`、`skip/d.py`（config の exclude） | **なし**                                                             | 古いまま                          |
+| pyright       | Deleted `b.py`                                                          | "Found 1 source file"（+0.049 秒）                                   | +0.049 秒                         |
+| pyright       | Changed `b.py`                                                          | なし                                                                 | 即時に正                          |
+| rust-analyzer | Created `src/c.rs`（lib.rs は触らない、crate に入らない）               | `quiescent: false`（+0.013）→ Fetching → Indexing → `true`（+0.303） | -32801 で拒否 → 次は正            |
+| rust-analyzer | Created + lib.rs Changed、Deleted `src/b.rs`                            | 同じ往復（0.3 秒）。health は `ok` のまま                            | +0.19 / +0.29 秒                  |
+| rust-analyzer | Changed `src/b.rs`                                                      | なし                                                                 | -32801 で拒否 → +0.106 秒で正     |
+| rust-analyzer | 監視を宣言しないクライアント（自前の notify）                           | 書き込みの 6ms 後に同じ往復                                          | 同上                              |
+| tsls          | Created `c.ts`（`include: ["**/*.ts"]`）                                | **なし**（33 回すべて）                                              | 古い → **+1.03 秒**               |
+| tsls          | Created `c.ts`（`include: ["*.ts"]`、非再帰）                           | なし                                                                 | 即時に正                          |
+
+- "Searching for source files" は pyright のログに一度も出ない（写像が再開の信号として読んでいた文字列は、この版では出ない）
+- tsls の 1.03 秒は TypeScript 自身の監視の実装で、Linux では再帰の glob を `setTimeout(…, 1000)` で更新する（`typescript.js` の `createDirectoryWatcherSupportingRecursive`）。tsls は `useClientFileWatcher` を `initializationOptions` で指定し、かつクライアントが `dynamicRegistration` と `relativePatternSupport` を宣言し TypeScript 5.4.4 以上のときだけ、クライアントの通知を tsserver の `watchChange` に流す。それ以外では `didChangeWatchedFiles` は何もしない（`src/lsp-server.ts:184-201, 498-500`）
+- 測定の道具は scratchpad の `diskedit/probe2.py`（`run2_all.sh`、`summarize2.py`）

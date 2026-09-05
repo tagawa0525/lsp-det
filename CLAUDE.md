@@ -41,7 +41,7 @@
 成功基準は「仕様・上流側と下流側それぞれの準拠テスト・上流側と下流側の参照実装が自己無矛盾で、rust-analyzer と gopls に当てて通ること」（ADR 0009）。作者の Claude Code 環境での稼働は成功基準ではなく観測手段。
 
 - v0.1（M1〜M4: 素通しプロキシ、上流側、下流側、gopls の写像）と v0.2（ADR 0010 の M5〜M7: pyright、typescript-language-server、Serena 統合。ADR 0012 の 3 OS 対応）は完了。マイルストーンごとの内容と日付は `CHANGELOG.md`
-- 次は 0.3.0: ADR 0013（`completeness` を `coverage` に改名し `workspace/symbol` を保証から外す）、0014（`didChangeWatchedFiles` を `freshness` に加える）、0015（下流側の代行: `didChangeWatchedFiles` の代行と重複 `didOpen` の書き換え）。ADR 3 本を先に書いてから実装する。外向きの提出は `docs/upstream-submissions.md`
+- 次は 0.3.0: ADR 0013（`completeness` を `coverage` に改名）、0014（`didChangeWatchedFiles` を `freshness` に加える）、0015（下流側の代行: `didChangeWatchedFiles` の代行と重複 `didOpen` の書き換え）、0016（保証の宣言を、欠けを名指しする形に: `coverage: {scope, incomplete}`、`freshness: {fileChanges}`）。ADR を先に書いてから実装する。外向きの提出は `docs/upstream-submissions.md`
 - 実サーバーの結合テストは `cargo test --test conformance -- --ignored`（19 件）と `cargo test --test process_lifetime -- --ignored`（4 件）。`TESTED_VERSIONS` を動かすのはこれらを通してから
 
 ドッグフーディングは `dogfood/README.md` の手順。観測結果は `docs/research/claude-code-dogfooding.md` に追記する（第 1〜3 回で、経路の成立・起動直後の横断リクエストが保留されて完全な結果になること・82 秒の保留でも CC がタイムアウトしないこと・gopls 経路・`error` の拒否の見せ方を確認済み）。観測項目: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007: 通常編集では往復しない）。

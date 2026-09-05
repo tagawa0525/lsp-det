@@ -20,7 +20,7 @@
 //! - `--exit-before-initialize-result`: `initialize` を受け取った瞬間に、
 //!   応答せず終了する（起動時クラッシュ）
 //! - `--declare-server-state-provider`: 上流自身が本プロトコルに準拠している
-//!   ふりをする。`InitializeResult` に `serverStateProvider: {freshness: true}`
+//!   ふりをする。`InitializeResult` に `serverStateProvider: {freshness: {fileChanges: ["Changed"]}}`
 //!   を宣言し、`experimental/serverState` に自分の状態で答える。状態は
 //!   `--initial-readiness <initializing|indexing|ready>`（既定 `ready`）から
 //!   始まり、`$/fake/emitServerStateChanged`（通知。params は
@@ -194,7 +194,8 @@ fn main() {
                 }
                 let mut experimental = json!({"fakeUpstreamMarker": true});
                 if declare_server_state_provider {
-                    experimental["serverStateProvider"] = json!({"freshness": true});
+                    experimental["serverStateProvider"] =
+                        json!({"freshness": {"fileChanges": ["Changed"]}});
                 }
                 if declare_server_state_provider_false {
                     experimental["serverStateProvider"] = json!(false);

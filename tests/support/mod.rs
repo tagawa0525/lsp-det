@@ -354,6 +354,29 @@ impl ConformanceClient {
     }
 
     /// 任意の `ClientCapabilities` で `initialize` → `initialized` を済ませる。
+    /// `initializationOptions` 付きの `initialize` → `initialized`。
+    pub fn initialize_with_initialization_options(
+        &mut self,
+        declare_server_state: bool,
+        options: Value,
+    ) -> Value {
+        let mut capabilities = json!({"textDocument": {"hover": {}}});
+        if declare_server_state {
+            capabilities["experimental"] = json!({"serverState": true});
+        }
+        let result = self.request(
+            "initialize",
+            json!({
+                "processId": std::process::id(),
+                "rootUri": null,
+                "capabilities": capabilities,
+                "initializationOptions": options,
+            }),
+        );
+        self.notify("initialized", json!({}));
+        result
+    }
+
     pub fn initialize_with_capabilities(&mut self, capabilities: Value) -> Value {
         let result = self.initialize_raw_with_capabilities(capabilities);
         self.notify("initialized", json!({}));
@@ -899,6 +922,26 @@ impl TempCargoProject {
     }
 }
 
+impl TempCargoProject {
+    /// 接頭辞 `wsymprobe` を共有する `n` 個のトップレベル関数 (3 ファイルに分ける)。
+    /// 仕様 7.2 の 2 (件数の上限) の fixture。
+    pub fn with_many_symbols(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        let src = project.root.join("src");
+        let mut lib = String::from("pub mod a;\npub mod b;\n");
+        for file in 0..3 {
+            lib.push_str(&format!("pub mod s{file};\n"));
+            let body: String = (0..n)
+                .filter(|i| i % 3 == file)
+                .map(|i| format!("pub fn wsymprobe_{i:03}() {{}}\n"))
+                .collect();
+            std::fs::write(src.join(format!("s{file}.rs")), body).unwrap();
+        }
+        std::fs::write(src.join("lib.rs"), lib).unwrap();
+        project
+    }
+}
+
 impl Drop for TempCargoProject {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
@@ -925,6 +968,23 @@ impl TempGoProject {
 
     pub fn file(&self, name: &str) -> PathBuf {
         self.root.join(name)
+    }
+}
+
+impl TempGoProject {
+    pub fn with_many_symbols(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        for file in 0..3 {
+            let body: String = std::iter::once("package fixture\n\n".to_string())
+                .chain(
+                    (0..n)
+                        .filter(|i| i % 3 == file)
+                        .map(|i| format!("func Wsymprobe{i:03}() {{}}\n")),
+                )
+                .collect();
+            std::fs::write(project.root.join(format!("s{file}.go")), body).unwrap();
+        }
+        project
     }
 }
 
@@ -1039,6 +1099,22 @@ impl TempTsProject {
     }
 }
 
+impl TempTsProject {
+    pub fn with_many_symbols(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        for file in 0..3 {
+            let body: String = (0..n)
+                .filter(|i| i % 3 == file)
+                .map(|i| {
+                    format!("export function wsymprobe_{i:03}(): number {{\n  return 1;\n}}\n")
+                })
+                .collect();
+            std::fs::write(project.root.join(format!("s{file}.ts")), body).unwrap();
+        }
+        project
+    }
+}
+
 impl Drop for TempTsProject {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
@@ -1077,6 +1153,20 @@ impl TempPyProject {
 
     pub fn file(&self, name: &str) -> PathBuf {
         self.root.join(name)
+    }
+}
+
+impl TempPyProject {
+    pub fn with_many_symbols(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        for file in 0..3 {
+            let body: String = (0..n)
+                .filter(|i| i % 3 == file)
+                .map(|i| format!("def wsymprobe_{i:03}():\n    return 1\n\n\n"))
+                .collect();
+            std::fs::write(project.root.join(format!("s{file}.py")), body).unwrap();
+        }
+        project
     }
 }
 

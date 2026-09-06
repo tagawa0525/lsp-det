@@ -73,6 +73,7 @@
         pyrefly # M16 (ADR 0019 決定 F)。起動時の索引は stderr にしか出ず、写像はない（両軸 unknown）
         crystalline # M17 (ADR 0019 決定 F)。readiness は起動ログ "LSP server is ready." から
         crystal # crystalline がコンパイルに使う
+        gleam # M19 (ADR 0019 決定 F)。readiness は "Downloading Gleam dependencies" のトークンから
       ];
     in
     {

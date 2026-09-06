@@ -5,7 +5,7 @@ ADR 0019 決定 B-5 の測定。Vue 3 の言語サーバー（`@vue/language-ser
 ## 方法
 
 - typescript-language-server 5.3.0（nixpkgs。tsserver は被験体の `node_modules/typescript` 5.9.3）、`@vue/language-server` 3.3.10（nixpkgs の `vue-language-server`）、`@vue/typescript-plugin` 3.3.10、vue 3.5.13（被験体の `node_modules`。pnpm）。2026-09-06
-- 被験体: `tsconfig.json`（`plugins: [{"name": "@vue/typescript-plugin"}]`、`include` に `src/**/*.vue`）、`src/a.ts`（`export function target()`）、`src/c.ts`（`target()` を呼ぶ）、`src/B.vue`（`<script setup lang="ts">` で `target()` を呼ぶ）、`src/shims-vue.d.ts`
+- 被験体: `tsconfig.json`（`compilerOptions.plugins: [{"name": "@vue/typescript-plugin"}]`、`include` に `src/**/*.vue`）、`src/a.ts`（`export function target()`）、`src/c.ts`（`target()` を呼ぶ）、`src/B.vue`（`<script setup lang="ts">` で `target()` を呼ぶ）、`src/shims-vue.d.ts`
 - 走行 A: typescript-language-server を直接、`initializationOptions.plugins` に `{"name": "@vue/typescript-plugin", "location": "<node_modules>/@vue/typescript-plugin", "languages": ["vue"]}`（Serena と同じ）。`didOpen src/a.ts`、`target` の `references` を 0.1 秒間隔
 - 走行 A': 同じ構成を lsp-det 越しに
 - 走行 B: `vue-language-server --stdio` を `initializationOptions` `{"typescript": {"tsdk": "<node_modules>/typescript/lib"}, "vue": {"hybridMode": true}}` で。`didOpen src/B.vue`、`references`

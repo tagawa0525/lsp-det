@@ -2297,10 +2297,11 @@ fn stand_in_spec_7_3_2_changed_file_through_lsp_det_with_real_server() {
 // ---------------------------------------------------------------------------
 // Metals (M9, ADR 0019 decision F). The mapping in research/metals-readiness-measurement.md:
 // readiness from the `$/progress` titles of the build import ("… bspConfig", "Importing build",
-// "Indexing", "Compiling …"), ready only when no token is open AND the last token that ended
-// was "Indexing" (the gaps between tokens are not ready); a watched-file change on a Scala
-// source or build file predicts indexing until the next "Indexing" end; health from the `level`
-// of `metals/status` with `statusType: "module"`.
+// "Indexing", "Compiling …"); the initial import completes only with an "Indexing" end (the
+// gaps between tokens are not ready), after which a "Compiling" end is ready too; a watched
+// change of a source predicts indexing until the next compile end, a created / deleted source
+// or a build file until the next "Indexing" end; health from the `level` of `metals/status`
+// with `statusType: "module"`.
 // ---------------------------------------------------------------------------
 
 fn metals_client(declare_server_state: bool) -> (ConformanceClient, Value) {
@@ -2359,28 +2360,36 @@ fn metals_does_not_claim_ready_in_the_gap_before_the_first_indexing_end() {
 }
 
 #[test]
-fn metals_stays_indexing_until_the_last_ended_token_is_indexing() {
-    // Measured after a Created file: Compiling ends after Indexing, then Importing build and
-    // Indexing run again; the fresh answer came only after the final Indexing end.
+fn metals_completes_a_compile_only_after_the_initial_import() {
+    // Measured: a changed source only recompiles ("Compiling …" with no import round after
+    // it), so after the import a compile end is ready. Before the first "Indexing" end it is
+    // not (the initial import is still under way).
     let (mut client, _) = metals_client(true);
-    metals_progress(&mut client, "x1", "begin", Some("Indexing"));
-    client.await_state_changed();
     metals_progress(
         &mut client,
-        "c",
+        "c0",
         "begin",
         Some("Compiling fixture_309b29d35b"),
     );
-    metals_progress(&mut client, "x1", "end", None);
-    metals_progress(&mut client, "c", "end", None);
+    client.await_state_changed();
+    metals_progress(&mut client, "c0", "end", None);
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "claimed ready when the last ended token was Compiling"
+        "claimed ready on a compile before the initial import completed"
     );
     metals_progress(&mut client, "i", "begin", Some("Importing build"));
     metals_progress(&mut client, "i", "end", None);
-    metals_progress(&mut client, "x2", "begin", Some("Indexing"));
-    metals_progress(&mut client, "x2", "end", None);
+    metals_progress(&mut client, "x", "begin", Some("Indexing"));
+    metals_progress(&mut client, "x", "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    metals_progress(
+        &mut client,
+        "c1",
+        "begin",
+        Some("Compiling fixture_309b29d35b"),
+    );
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    metals_progress(&mut client, "c1", "end", None);
     assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
     client.shutdown();
 }
@@ -2449,7 +2458,8 @@ fn metals_predicts_indexing_from_a_watched_scala_file_change() {
     metals_progress(&mut client, "x", "end", None);
     assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
     let root = support::repo_root();
-    client.did_change_watched_files(&[(&root.join("C.scala"), 1)]);
+    // A changed source: the next compile end reverts it.
+    client.did_change_watched_files(&[(&root.join("B.scala"), 2)]);
     assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
     metals_progress(
         &mut client,
@@ -2458,6 +2468,22 @@ fn metals_predicts_indexing_from_a_watched_scala_file_change() {
         Some("Compiling fixture_309b29d35b"),
     );
     metals_progress(&mut client, "c", "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    // A created source changes the build: a compile does not revert it, the next Indexing
+    // end does (measured: Compiling, then Importing build and Indexing).
+    client.did_change_watched_files(&[(&root.join("C.scala"), 1)]);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    metals_progress(
+        &mut client,
+        "c2",
+        "begin",
+        Some("Compiling fixture_309b29d35b"),
+    );
+    metals_progress(&mut client, "c2", "end", None);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "reverted a predicted build change on a compile end"
+    );
     metals_progress(&mut client, "x2", "begin", Some("Indexing"));
     metals_progress(&mut client, "x2", "end", None);
     assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
@@ -2519,8 +2545,14 @@ fn metals_spec_7_1_through_lsp_det_with_real_metals() {
     client.initialize_with_root(true, &project.root);
     assert_ne!(client.server_state().readiness, Readiness::Ready);
     client.wait_until_ready();
-    assert_eq!(client.server_state().health, Health::Ok);
+    let state = client.server_state();
     client.shutdown();
+    let log = client.stderr_after_exit();
+    assert_eq!(
+        state.health,
+        Health::Ok,
+        "health is not ok at ready: {state:?}\nlsp-det's stderr:\n{log}"
+    );
 }
 
 /// Measures 7.2 coverage against real Metals.

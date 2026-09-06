@@ -4,16 +4,20 @@
 //! titles of the build import (measured with Metals 1.6.8 and scala-cli):
 //!
 //! - **readiness**: a begin of "… bspConfig", "Importing build", "Indexing", or "Compiling …"
-//!   means `indexing`. `ready` needs two things: no token of those titles is open, AND the
-//!   last token that ended was "Indexing". The second condition is what carries the mapping
-//!   across the measured gaps in which no token is open while the import is still under way
-//!   (10 s between "bspConfig" and "Importing build" on a cold cache; 0.3 s between the end of
-//!   an "Indexing" and the "Importing build" of a re-import). Serena fills those gaps with a
-//!   3-second quiet period; this mapping needs no clock. "Loading presentation compiler" is
-//!   request processing (1 ms) and is not looked at
+//!   means `indexing`. `ready` needs no token of those titles open, plus a condition on the
+//!   token that ended last: the initial import is complete only once an "Indexing" has ended
+//!   (before that, the gaps between tokens are not ready: 10 s between "bspConfig" and
+//!   "Importing build" on a cold cache), and an "Importing build" or "bspConfig" end is never
+//!   ready by itself ("Indexing" follows it within milliseconds). After the initial import, a
+//!   "Compiling …" end is ready: a changed source only recompiles (measured: no import round
+//!   follows). Serena fills the gaps with a 3-second quiet period; this mapping needs no clock.
+//!   "Loading presentation compiler" is request processing (1 ms) and is not looked at
 //! - **prediction** (ADR 0014 addendum decision D): a `workspace/didChangeWatchedFiles` from
-//!   the client for a Scala source or a build file predicts `indexing`, because the first
-//!   progress begin follows the notification by 0.15-0.33 s. The next "Indexing" end reverts it
+//!   the client predicts `indexing`, because the first progress begin follows the notification
+//!   by 0.15-0.33 s. A changed source is reverted by the next "Compiling" (or "Indexing") end;
+//!   a created or deleted source, or any change of a build file, changes the build and is
+//!   reverted only by the next "Indexing" end (measured: Compiling, then Importing build and
+//!   Indexing, with the fresh answer after the latter)
 //! - **health**: the `level` of `metals/status` with `statusType: "module"` (sent regardless of
 //!   `initializationOptions`): `error` → error with the `tooltip` (or `text`) as the message,
 //!   `warn` → warning, `info` → ok. `unknown` until the first one. The `statusType: "metals"`
@@ -68,7 +72,7 @@ struct StatusParams {
     status_type: Option<String>,
 }
 
-/// The kinds of token the import consists of. Only "Indexing" closes a round.
+/// The kinds of token the import consists of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     BspConfig,
@@ -91,14 +95,22 @@ fn phase_of(title: &str) -> Option<Phase> {
     }
 }
 
-/// A Scala source or a build file. Judged by the last component of the URI (a Windows file URI
-/// can arrive `\`-separated).
-fn is_watched_file(uri: &str) -> bool {
-    let name = uri.rsplit(['/', '\\']).next().unwrap_or(uri);
-    name.ends_with(".scala")
-        || name.ends_with(".sc")
-        || name.ends_with(".sbt")
-        || matches!(name, "build.mill" | "build.sc")
+/// The last component of a file URI (a Windows file URI can arrive `\`-separated).
+fn file_name(uri: &str) -> &str {
+    uri.rsplit(['/', '\\']).next().unwrap_or(uri)
+}
+
+/// A build definition. Changing one makes Metals re-import the build (scala-cli's
+/// `project.scala`, sbt's `build.sbt` and `*.sbt`, Mill's `build.mill` / `build.sc`).
+fn is_build_file(uri: &str) -> bool {
+    let name = file_name(uri);
+    name.ends_with(".sbt") || matches!(name, "project.scala" | "build.mill" | "build.sc")
+}
+
+/// A Scala source. Changing one makes Metals recompile.
+fn is_source_file(uri: &str) -> bool {
+    let name = file_name(uri);
+    (name.ends_with(".scala") || name.ends_with(".sc")) && !is_build_file(uri)
 }
 
 pub struct MetalsAdapter {
@@ -106,9 +118,11 @@ pub struct MetalsAdapter {
     state: ServerState,
     /// Open tokens of the import phases.
     open: Vec<(Value, Phase)>,
-    /// Whether the last token that ended was "Indexing". False until the first one ends, and
-    /// false again after any other phase ends (a re-import is under way).
-    last_ended_indexing: bool,
+    /// An "Indexing" has ended at least once (the initial import is complete).
+    imported: bool,
+    /// A build change is expected to be under way (predicted from a created / deleted source
+    /// or a build file). Only an "Indexing" end clears it.
+    pending_import: bool,
 }
 
 impl Default for MetalsAdapter {
@@ -128,7 +142,8 @@ impl MetalsAdapter {
             version_is_tested,
             state: ServerState::initializing(),
             open: Vec::new(),
-            last_ended_indexing: false,
+            imported: false,
+            pending_import: false,
         }
     }
 
@@ -143,8 +158,16 @@ impl MetalsAdapter {
             "end" => {
                 let index = self.open.iter().position(|(t, _)| *t == token)?;
                 let (_, phase) = self.open.remove(index);
-                self.last_ended_indexing = phase == Phase::Indexing;
-                if self.open.is_empty() && self.last_ended_indexing {
+                if phase == Phase::Indexing {
+                    self.imported = true;
+                    self.pending_import = false;
+                }
+                let completes = match phase {
+                    Phase::Indexing => true,
+                    Phase::Compiling => self.imported && !self.pending_import,
+                    Phase::Importing | Phase::BspConfig => false,
+                };
+                if self.open.is_empty() && completes {
                     self.state.readiness = Readiness::Ready;
                 }
             }
@@ -214,8 +237,9 @@ impl Mapping for MetalsAdapter {
         }
     }
 
-    /// A watched-file change on a Scala source or a build file predicts `indexing` until the
-    /// next "Indexing" end (the measured gap before the first progress begin).
+    /// A watched-file change predicts `indexing` (the measured gap before the first progress
+    /// begin). A changed source is reverted by the next "Compiling" or "Indexing" end; a created
+    /// or deleted source, or any change of a build file, only by the next "Indexing" end.
     fn observe_client(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
         if !view.is_notification() || view.method() != Some(WATCHED_FILES_METHOD) {
             return None;
@@ -223,6 +247,8 @@ impl Mapping for MetalsAdapter {
         #[derive(Deserialize)]
         struct Change {
             uri: String,
+            #[serde(rename = "type")]
+            kind: u8,
         }
         #[derive(Deserialize)]
         struct Params {
@@ -233,19 +259,30 @@ impl Mapping for MetalsAdapter {
             params: Params,
         }
         let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
-        if !envelope
-            .params
-            .changes
-            .iter()
-            .any(|c| is_watched_file(&c.uri))
-        {
+        let mut source_changed = false;
+        let mut build_changed = false;
+        for change in &envelope.params.changes {
+            if is_build_file(&change.uri) {
+                build_changed = true;
+            } else if is_source_file(&change.uri) {
+                // 1 Created, 2 Changed, 3 Deleted (LSP FileChangeType).
+                if change.kind == 2 {
+                    source_changed = true;
+                } else {
+                    build_changed = true;
+                }
+            }
+        }
+        if !source_changed && !build_changed {
             return None;
+        }
+        if build_changed {
+            self.pending_import = true;
         }
         if self.state.readiness != Readiness::Ready {
             return None;
         }
         self.state.readiness = Readiness::Indexing;
-        self.last_ended_indexing = false;
         Some(self.state.clone())
     }
 }
@@ -269,40 +306,60 @@ mod tests {
         adapter.interpret(&view, body.as_bytes())
     }
 
+    fn readiness_after(adapter: &mut MetalsAdapter, body: &str) -> Readiness {
+        feed(adapter, body)
+            .expect("a phase token moves the state")
+            .readiness
+    }
+
     #[test]
-    fn ready_needs_no_open_token_and_an_indexing_end() {
+    fn the_initial_import_completes_only_with_an_indexing_end() {
         let mut m = MetalsAdapter::new();
         assert_eq!(
-            feed(&mut m, &progress("b", "begin", Some("scala-cli bspConfig")))
-                .unwrap()
-                .readiness,
+            readiness_after(&mut m, &progress("b", "begin", Some("scala-cli bspConfig"))),
             Readiness::Indexing
         );
         // The gap: no token open, but Indexing has never ended.
         assert_eq!(
-            feed(&mut m, &progress("b", "end", None)).unwrap().readiness,
+            readiness_after(&mut m, &progress("b", "end", None)),
             Readiness::Indexing
         );
         feed(&mut m, &progress("i", "begin", Some("Importing build")));
-        feed(&mut m, &progress("i", "end", None));
+        assert_eq!(
+            readiness_after(&mut m, &progress("i", "end", None)),
+            Readiness::Indexing,
+            "Importing build alone does not complete the import"
+        );
         feed(&mut m, &progress("x", "begin", Some("Indexing")));
         feed(&mut m, &progress("c", "begin", Some("Compiling fixture_1")));
         assert_eq!(
-            feed(&mut m, &progress("x", "end", None)).unwrap().readiness,
+            readiness_after(&mut m, &progress("x", "end", None)),
             Readiness::Indexing,
             "Compiling is still open"
         );
         assert_eq!(
-            feed(&mut m, &progress("c", "end", None)).unwrap().readiness,
-            Readiness::Indexing,
-            "the last ended token is Compiling"
+            readiness_after(&mut m, &progress("c", "end", None)),
+            Readiness::Ready,
+            "the import is complete and the compile ended"
         );
-        feed(&mut m, &progress("x2", "begin", Some("Indexing")));
+        // After the import, a compile on its own (a changed source) completes.
+        feed(
+            &mut m,
+            &progress("c2", "begin", Some("Compiling fixture_1")),
+        );
         assert_eq!(
-            feed(&mut m, &progress("x2", "end", None))
-                .unwrap()
-                .readiness,
+            readiness_after(&mut m, &progress("c2", "end", None)),
             Readiness::Ready
+        );
+    }
+
+    #[test]
+    fn a_compile_before_the_first_indexing_end_is_not_ready() {
+        let mut m = MetalsAdapter::new();
+        feed(&mut m, &progress("c", "begin", Some("Compiling fixture_1")));
+        assert_eq!(
+            readiness_after(&mut m, &progress("c", "end", None)),
+            Readiness::Indexing
         );
     }
 
@@ -355,11 +412,11 @@ mod tests {
     }
 
     #[test]
-    fn predicts_indexing_from_watched_scala_and_build_files_only_when_ready() {
+    fn predicts_indexing_from_watched_files_only_when_ready() {
         let mut m = MetalsAdapter::new();
-        let changed = |name: &str| {
+        let change = |name: &str, kind: u8| {
             format!(
-                r#"{{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{{"changes":[{{"uri":"file:///w/{name}","type":2}}]}}}}"#
+                r#"{{"jsonrpc":"2.0","method":"workspace/didChangeWatchedFiles","params":{{"changes":[{{"uri":"file:///w/{name}","type":{kind}}}]}}}}"#
             )
         };
         let observe = |m: &mut MetalsAdapter, body: &str| {
@@ -367,37 +424,53 @@ mod tests {
             m.observe_client(&view, body.as_bytes())
         };
         assert!(
-            observe(&mut m, &changed("C.scala")).is_none(),
+            observe(&mut m, &change("C.scala", 2)).is_none(),
             "not ready yet"
         );
         feed(&mut m, &progress("x", "begin", Some("Indexing")));
         feed(&mut m, &progress("x", "end", None));
-        assert!(observe(&mut m, &changed("README.md")).is_none());
+        assert!(observe(&mut m, &change("README.md", 2)).is_none());
+        // A changed source: reverted by the next compile.
         assert_eq!(
-            observe(&mut m, &changed("project.scala"))
-                .unwrap()
-                .readiness,
+            observe(&mut m, &change("B.scala", 2)).unwrap().readiness,
             Readiness::Indexing
         );
         assert!(
-            observe(&mut m, &changed("C.scala")).is_none(),
+            observe(&mut m, &change("C.scala", 2)).is_none(),
             "already indexing"
         );
         feed(&mut m, &progress("c", "begin", Some("Compiling fixture_1")));
         assert_eq!(
-            feed(&mut m, &progress("c", "end", None)).unwrap().readiness,
-            Readiness::Indexing
-        );
-        feed(&mut m, &progress("x2", "begin", Some("Indexing")));
-        assert_eq!(
-            feed(&mut m, &progress("x2", "end", None))
-                .unwrap()
-                .readiness,
+            readiness_after(&mut m, &progress("c", "end", None)),
             Readiness::Ready
         );
-        assert!(is_watched_file("file:///w/build.sbt"));
-        assert!(is_watched_file("file://C:\\w\\A.scala"));
-        assert!(!is_watched_file("file:///w/notes.txt"));
+        // A created source or a build file: only the next Indexing end reverts it.
+        for (name, kind) in [("C.scala", 1), ("project.scala", 2), ("build.sbt", 3)] {
+            assert_eq!(
+                observe(&mut m, &change(name, kind)).unwrap().readiness,
+                Readiness::Indexing,
+                "{name}"
+            );
+            feed(&mut m, &progress("c", "begin", Some("Compiling fixture_1")));
+            assert_eq!(
+                readiness_after(&mut m, &progress("c", "end", None)),
+                Readiness::Indexing,
+                "{name}: a compile does not complete a build change"
+            );
+            feed(&mut m, &progress("i", "begin", Some("Importing build")));
+            feed(&mut m, &progress("i", "end", None));
+            feed(&mut m, &progress("x", "begin", Some("Indexing")));
+            assert_eq!(
+                readiness_after(&mut m, &progress("x", "end", None)),
+                Readiness::Ready,
+                "{name}"
+            );
+        }
+        assert!(is_build_file("file:///w/build.sbt"));
+        assert!(is_build_file("file:///w/project.scala"));
+        assert!(is_source_file("file://C:\\w\\A.scala"));
+        assert!(!is_source_file("file:///w/project.scala"));
+        assert!(!is_source_file("file:///w/notes.txt"));
     }
 
     #[test]

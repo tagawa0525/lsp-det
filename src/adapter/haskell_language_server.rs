@@ -124,13 +124,15 @@ impl HaskellLanguageServerAdapter {
                 self.cradle_failures.remove(&params.uri);
             }
         }
-        let next = match self.cradle_failures.values().next() {
-            Some(message) => ServerState {
-                health: Health::Error,
-                readiness: self.state.readiness,
-                message: Some(message.clone()),
-            },
-            None => ServerState::unobserved(),
+        // Readiness is never touched here: only health is read from diagnostics.
+        let (health, message) = match self.cradle_failures.values().next() {
+            Some(message) => (Health::Error, Some(message.clone())),
+            None => (Health::Unknown, None),
+        };
+        let next = ServerState {
+            health,
+            readiness: self.state.readiness,
+            message,
         };
         if next == self.state {
             return None;

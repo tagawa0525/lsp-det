@@ -637,11 +637,25 @@ impl ConformanceClient {
 
     /// Waits for the next `experimental/serverStateChanged` (spec 4.2).
     pub fn await_state_changed(&mut self) -> ServerState {
-        let params = self
-            .await_notification("experimental/serverStateChanged")
-            .unwrap_or_else(|| panic!("experimental/serverStateChanged did not arrive"));
+        let Some(params) = self.await_notification("experimental/serverStateChanged") else {
+            self.fail_with_stderr("experimental/serverStateChanged did not arrive");
+        };
         serde_json::from_value(params.clone())
             .unwrap_or_else(|err| panic!("cannot read as ServerState ({err}): {params}"))
+    }
+
+    /// Ends the test with the subject's stderr attached (lsp-det's state transitions and
+    /// holds, and the upstream's own output), so that a wait that never ends can be read.
+    /// Kills the subject first: reading stderr to EOF against a live subject would hang.
+    fn fail_with_stderr(&mut self, what: &str) -> ! {
+        let status = self.child.try_wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let mut log = String::new();
+        if let Some(mut stderr) = self.stderr.take() {
+            let _ = stderr.read_to_string(&mut log);
+        }
+        panic!("{what} (the subject's status: {status:?})\nthe subject's stderr:\n{log}");
     }
 
     /// Waits for the given notification and returns its params. `None` if it does not arrive in
@@ -934,8 +948,25 @@ impl ConformanceClient {
     }
 
     fn stash(&mut self, message: Value) {
-        // Keep notifications, responses to other ids, and server-initiated requests alike.
-        // Checking holding requires picking up a "response that arrives later".
+        // A server-initiated request is answered right away, as a real client does. Expert
+        // sends `client/registerCapability` before starting its engine and waits for the
+        // response; a client that never answers never sees the engine start. The answer is
+        // `null` (an empty `workspace/configuration`, an accepted registration, no action
+        // picked for `window/showMessageRequest`). It is not kept: nothing inspects it.
+        if message.get("method").is_some()
+            && let Some(id) = message.get("id").cloned()
+        {
+            let result = if message["method"] == "workspace/configuration" {
+                let n = message["params"]["items"].as_array().map_or(0, Vec::len);
+                Value::Array(vec![Value::Null; n])
+            } else {
+                Value::Null
+            };
+            self.send(json!({"jsonrpc": "2.0", "id": id, "result": result}));
+            return;
+        }
+        // Keep notifications and responses to other ids alike. Checking holding requires
+        // picking up a "response that arrives later".
         self.pending_notifications.push(message);
     }
 

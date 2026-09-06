@@ -4,7 +4,7 @@ A local plugin that makes Claude Code launch rust-analyzer, gopls, pyright, and 
 
 ## Steps
 
-1. Put the `lsp-det` of the working tree on the PATH (the `command` in `.lsp.json` expects a binary on the PATH). Do not install it globally. The `.envrc` at the repository root (direnv) loads the development environment (`flake.nix`) and adds `target/release` to the PATH
+1. Put the `lsp-det` of the working tree on the PATH (the `command` in `.lsp.json` expects a binary on the PATH). Do not install it globally. The `.envrc` at the repository root (direnv) loads the `servers` shell of `flake.nix` (the build tools plus every language server) and adds `target/release` to the PATH
 
    ```bash
    direnv allow

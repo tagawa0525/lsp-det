@@ -121,7 +121,8 @@ lsp-det: [6.712s] released textDocument/references (id 1) after 6.493s: ready
 依存は `serde` / `serde_json` / `thiserror` / `libc` だけで、非同期ランタイムは使わない。
 
 ```bash
-nix develop            # rustc、rust-analyzer、gopls、pyright、typescript-language-server を固定する
+nix develop            # rustc、cargo、clippy、rustfmt。ビルドと決定的なテストにはこれで足りる
+nix develop .#servers  # これに rust-analyzer、gopls、pyright、typescript-language-server を足したもの。実サーバーのテストとドッグフーディング用
 cargo build --release  # target/release/lsp-det
 cargo test             # 偽の言語サーバー・偽のクライアントによる決定的なテスト
 cargo test --test conformance -- --ignored   # 実サーバー結合 31 件（ローカルのみ、CI では回さない）

@@ -13,7 +13,7 @@ lsp-det の次段階は上流への働きかけである（ADR 0009 決定 A-3�
 ## 手順
 
 1. `reference/<repo>` に変更を当てる（clone は浅い。上流に出すときは fork を別に用意する）
-2. ビルドする。`nix develop`（または direnv）の中で:
+2. ビルドする。`nix develop .#servers`（または direnv）の中で（pnpm と node はそこにある）:
 
    ```bash
    scripts/upstream/build-pyright.sh

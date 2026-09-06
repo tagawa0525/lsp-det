@@ -4,8 +4,22 @@
 
 ## 予定
 
-- 0.5.0: Dart、Sorbet、jdtls、clangd（ADR 0020）
-- 外向きの提出は 0.5.0 の後、`docs/upstream-submissions.md` の順で。typescript-language-server の不具合修正 PR、Claude Code への報告（既存 issue 3 件へのコメントと新規 2 件）、Serena の不具合と提案、fork の 4 パッチ
+- 外向きの提出（`docs/upstream-submissions.md` の順。文面を作ってユーザーの確認をもらってから出す）: typescript-language-server の不具合修正 PR、Claude Code への報告（既存 issue 3 件へのコメントと新規 2 件）、Serena の不具合と提案、fork の 4 パッチ、0.4.0 と 0.5.0 で見つけた 10 サーバー分の提案
+- 保留の再測定: Kotlin（次の release）、sourcekit-lsp（nixpkgs に 6.x が来たら）
+
+## 0.5.0（2026-09-07）
+
+固まった語彙に易しい 4 サーバーを当てる ADR 0020 のバッチ。4 つとも実測して写像を書き、3 つは「サーバー自身が要求を待たせる」型で、1 つ（clangd）は lsp-det の保留がそのまま効く型だった。
+
+- **ADR 0020**（2026-09-06）: 順序は Dart → Sorbet → jdtls → clangd（M21〜M24）、1 サーバー 1 PR。Sorbet は rubygems の `sorbet-static` の prebuilt を derivation に（決定 B）。Sorbet の `supportsOperationNotifications` は `initializationOptions` に、lsp-det が起動したコマンドが `sorbet` / `srb` のときだけ注入する（決定 D。コマンド名は注入にしか使わない）。版が語彙に現れないサーバーには保証を宣言しない（決定 E）
+- **Dart analysis server**（M21、PR #67）: `$/progress`（token `ANALYZING`）の begin で `indexing`、end で `ready`。サーバー自身が要求を解析の完了まで待たせるので先読みは要らない。`workspace/didChangeWatchedFiles` は読まれず type 1 の `showMessage` が返る。ディスク上の変更はサーバー自身の監視が非同期に拾い、通知の直後の問い合わせに信号のない窓がある（66 件の直列実行で 7.3 の 3 が 1 度落ちた。PR #71）ので、3.13.0 に coverage と `didChange` だけの freshness を宣言
+- **Sorbet**（M22、PR #69）: `sorbet/showOperation` の要求に伴わない操作（`Indexing`、`SlowPathBlocking`、`SlowPathNonBlocking`、`FastPath`）を入れ子ぶん数え、未完了がなくなった end で `ready`。`serverInfo` がなく名乗りは通知そのもので、版が語彙に現れず保証なし。ディスク上の変更は watchman が root を watch しているときだけ拾い、Sorbet の `subscribe` は `watch-project` を発行しない
+- **jdtls**（M23、PR #68）: `language/status` の `ServiceReady` で `ready`（`$/progress` は読まない。JDT の検索が索引の完了を待つ）。health は `ProjectStatus` の OK / WARNING、`Error`、プロジェクト自身の URI への診断（壊れた classpath は `ProjectStatus` に出ず診断に出る）。1.60.0-SNAPSHOT に coverage と freshness を宣言
+- **clangd**（M24、PR #70）: 背景索引の `$/progress`（token `backgroundIndexProgress`、title "indexing"）の begin で `indexing`、end で `ready`。索引中の `references` は空応答から増え続ける部分応答で、lsp-det の保留で最初の答えから完全になる。`didChange` の後に信号のない古い窓があり、ディスク上の変更は取り込まれないので coverage のみ宣言。`compile_commands.json` のないワークスペースでは begin が来ず `initializing` のまま（決定 (a)）
+- **仕様の訂正**（ユーザーの承認済み）: 10 章の clangd の行「信号なし」を実測に置き換え、8.2 の 3 の例を clangd から pyrefly に、5.1 の象限の表の例を「compile_commands.json のない clangd」にする
+- **lsp-det の直し**: tracker が通知から写像を選ぶとき、その通知を写像にも読ませる（Sorbet の名乗りは入れ子の外側の start そのもので、捨てると内側の end で `ready` を言っていた）。`ServerStateProvider::coverage_only`。上流のコマンド名の basename を小文字に正規化して `.exe` を落とす
+- **実測の記録**: `docs/research/` に 4 本（dart、sorbet、jdtls、clangd の readiness）。上流への提出候補は `docs/upstream-submissions.md` に 4 サーバー分を追記
+- 実サーバーの結合テストは 65 件（直列で全部通過）
 
 ## 0.4.0（2026-09-06）
 

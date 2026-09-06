@@ -283,7 +283,7 @@ mod tests {
         assert!(feed(&mut m, &status("Starting", "Init...")).is_none());
         assert!(feed(&mut m, &status("Started", "Ready")).is_none());
         assert!(feed(&mut m, &status("Message", "some message")).is_none());
-        assert_eq!(m.initial_state().readiness, Readiness::Initializing);
+        assert_eq!(m.state.readiness, Readiness::Initializing);
     }
 
     #[test]
@@ -346,7 +346,7 @@ mod tests {
             )
             .is_none()
         );
-        assert_eq!(m.initial_state().readiness, Readiness::Initializing);
+        assert_eq!(m.state.readiness, Readiness::Initializing);
     }
 
     #[test]

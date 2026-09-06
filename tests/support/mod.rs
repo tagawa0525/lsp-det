@@ -1522,17 +1522,14 @@ impl TempJdtlsProject {
         ));
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&data_dir);
-        std::fs::create_dir_all(root.join("src/app")).expect("cannot create the temporary project");
+        let src_app = root.join("src").join("app");
+        std::fs::create_dir_all(&src_app).expect("cannot create the temporary project");
         std::fs::create_dir_all(&data_dir).expect("cannot create jdtls's data directory");
         std::fs::write(root.join(".project"), JDTLS_PROJECT).unwrap();
         std::fs::write(root.join(".classpath"), JDTLS_CLASSPATH).unwrap();
-        std::fs::write(root.join("src/app/Lib.java"), JDTLS_LIB).unwrap();
+        std::fs::write(src_app.join("Lib.java"), JDTLS_LIB).unwrap();
         for i in 0..n {
-            std::fs::write(
-                root.join(format!("src/app/F{i}.java")),
-                jdtls_caller_file(i),
-            )
-            .unwrap();
+            std::fs::write(src_app.join(format!("F{i}.java")), jdtls_caller_file(i)).unwrap();
         }
         TempJdtlsProject { root, data_dir }
     }

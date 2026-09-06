@@ -2964,6 +2964,8 @@ fn nextflow_is_ready_at_the_initializing_end_when_there_is_nothing_to_scan() {
     client.shutdown();
 }
 
+/// The server's exclude rule matches `/`-separated paths only, so on Windows nothing is
+/// excluded and the mapping mirrors that (`work/ab/stale.nf` stays in the scan set).
 #[test]
 fn nextflow_honours_the_exclude_patterns_of_the_configuration() {
     let project = support::TempNextflowProject::with_cross_file_reference("exclude");
@@ -2971,7 +2973,17 @@ fn nextflow_honours_the_exclude_patterns_of_the_configuration() {
     std::fs::write(project.file("work/ab/stale.nf"), support::NF_GREET).unwrap();
     let (mut client, _) = nextflow_client(&project.root);
     // With `work` excluded the server never diagnoses `work/ab/stale.nf`.
-    nextflow_reach_ready(&mut client, &project);
+    if cfg!(windows) {
+        nextflow_configure(&mut client, &["work", ".nextflow"]);
+        nextflow_initializing(&mut client, "begin");
+        nextflow_initializing(&mut client, "end");
+        nextflow_diagnostics(&mut client, &project.file("modules/greet.nf"));
+        nextflow_diagnostics(&mut client, &project.file("main.nf"));
+        nextflow_diagnostics(&mut client, &project.file("work/ab/stale.nf"));
+        assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    } else {
+        nextflow_reach_ready(&mut client, &project);
+    }
     // Without the exclude it is part of the scan.
     nextflow_configure(&mut client, &[]);
     nextflow_initializing(&mut client, "begin");

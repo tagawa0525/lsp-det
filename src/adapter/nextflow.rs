@@ -102,7 +102,9 @@ struct ProgressValue {
 }
 
 /// The server's exclusion rule (`nextflow.util.PathUtils.isExcluded`): the path string equals
-/// a pattern, or ends with `/` + pattern.
+/// a pattern, or ends with `/` + pattern. On Windows the server's paths are `\`-separated, so
+/// the rule never matches there and nothing is excluded; this mirrors that rather than
+/// excluding files the server scans (the scan set must not be smaller than the server's).
 fn is_excluded(path: &Path, patterns: &[String]) -> bool {
     let text = path.to_string_lossy();
     patterns
@@ -468,6 +470,12 @@ mod tests {
         assert!(!is_excluded(Path::new("/p/m/x.nf"), &[]));
     }
 
+    /// Whether `work/ab/stale.nf` is left out by the exclude pattern `work` on this platform
+    /// (the server's rule matches `/`-separated paths only).
+    fn work_is_excluded_here() -> bool {
+        !cfg!(windows)
+    }
+
     #[test]
     fn walks_the_scripts_under_the_folders_minus_the_excludes() {
         let fixture = Fixture::new("walk");
@@ -482,10 +490,12 @@ mod tests {
         );
         let excluded =
             workspace_scripts(std::slice::from_ref(&fixture.root), &["work".to_string()]);
-        assert_eq!(
-            excluded,
-            BTreeSet::from([fixture.file("main.nf"), fixture.file("modules/greet.nf")])
-        );
+        let mut expected =
+            BTreeSet::from([fixture.file("main.nf"), fixture.file("modules/greet.nf")]);
+        if !work_is_excluded_here() {
+            expected.insert(fixture.file("work/ab/stale.nf"));
+        }
+        assert_eq!(excluded, expected);
         assert!(workspace_scripts(&[], &[]).is_empty());
     }
 
@@ -505,12 +515,22 @@ mod tests {
             "nothing scanned yet"
         );
         assert!(feed(&mut m, &diagnostics(&fixture.file("modules/greet.nf"))).is_none());
-        assert_eq!(
-            feed(&mut m, &diagnostics(&fixture.file("main.nf")))
-                .expect("the last script completes the scan")
-                .readiness,
-            Readiness::Ready
-        );
+        if !work_is_excluded_here() {
+            assert!(feed(&mut m, &diagnostics(&fixture.file("main.nf"))).is_none());
+            assert_eq!(
+                feed(&mut m, &diagnostics(&fixture.file("work/ab/stale.nf")))
+                    .expect("the last script completes the scan")
+                    .readiness,
+                Readiness::Ready
+            );
+        } else {
+            assert_eq!(
+                feed(&mut m, &diagnostics(&fixture.file("main.nf")))
+                    .expect("the last script completes the scan")
+                    .readiness,
+                Readiness::Ready
+            );
+        }
         // A later configuration that differs restarts everything, including the walk.
         assert!(observe(&mut m, &configuration(&[])).is_none());
         assert_eq!(
@@ -585,6 +605,9 @@ mod tests {
         feed(&mut m, &progress("begin"));
         feed(&mut m, &progress("end"));
         feed(&mut m, &diagnostics(&fixture.file("main.nf")));
+        if !work_is_excluded_here() {
+            feed(&mut m, &diagnostics(&fixture.file("work/ab/stale.nf")));
+        }
         let greet = path_to_uri(&fixture.file("modules/greet.nf"));
         let created = path_to_uri(&fixture.file("c.nf"));
         assert!(

@@ -13,10 +13,10 @@ ADR 0019 決定 F の M18。コーパス（[readiness-vocabulary-corpus.md](read
 
 ### 語彙（5.10.1）
 
-| 信号                                                               | 内容                                                                                                                                                                                             |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `$/progress`（token "SourceKitLSP.SoruceKitServer.reloadPackage"） | title "Reloading Package"。`initialized` の直後に create と end だけが届く（begin は create の応答を待つ間に終わる）。SwiftPM の manifest の読み込みで、索引ではない                             |
-| `workspace/_pollIndex`（要求）                                     | クライアントが送ると、index store の未処理の unit を処理し終わるまで待って空の応答を返す（`pollForUnitChangesAndWait`）。0.1〜0.3 秒。**索引の同期をクライアントが要求する語彙**で、通知ではない |
+| 信号                                                                                             | 内容                                                                                                                                                                                             |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `$/progress`（token "SourceKitLSP.SoruceKitServer.reloadPackage"。綴りはサーバーのソースのまま） | title "Reloading Package"。`initialized` の直後に create と end だけが届く（begin は create の応答を待つ間に終わる）。SwiftPM の manifest の読み込みで、索引ではない                             |
+| `workspace/_pollIndex`（要求）                                                                   | クライアントが送ると、index store の未処理の unit を処理し終わるまで待って空の応答を返す（`pollForUnitChangesAndWait`）。0.1〜0.3 秒。**索引の同期をクライアントが要求する語彙**で、通知ではない |
 
 `serverInfo` は null。`backgroundIndexing` の初期化オプションは 5.10.1 にはなく、渡しても何も起きない。索引は `swift build --enable-index-store` が書く index store を IndexStoreDB で読む設計で、サーバー自身は作らない。
 

@@ -28,8 +28,9 @@
 //! Expert's vocabulary tells the observer at the end of the load whether a rebuild follows
 //! (the "backend reports empty / stale" log stays inside the engine), so an observer cannot
 //! promise `coverage` at `ready` without a clock. The readiness mapping still removes the
-//! 25-second stretch of empty answers before the engine is up. [`TESTED_VERSIONS`] stays
-//! empty until Expert exposes the decision (spec 8.2 item 5).
+//! 25-second stretch of empty answers before the engine is up. There is no list of tested
+//! versions here on purpose: no version can pass 7.2 until Expert exposes the decision
+//! (spec 8.2 item 5), so `guarantees` is unconditional.
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -44,13 +45,6 @@ const ENGINE_PREPARE_SUFFIX: &str = "Preparing engine";
 const BUILDING_PREFIX: &str = "Building ";
 const INDEXING_TITLE: &str = "Indexing source code";
 const LOADING_INDEX_TITLE: &str = "Loading search index";
-
-/// Versions for which conformance tests 7.2 / 7.3 were run against a real Expert and passed.
-/// Empty, and it stays empty with 0.1.9: the window between "Loading search index" and a
-/// following "Indexing source code" (see the module documentation) makes 7.2 fail on a fresh
-/// project, and no signal closes it (declaring a guarantee that cannot be kept violates
-/// spec 5.1).
-pub const TESTED_VERSIONS: &[&str] = &[];
 
 #[derive(Debug, Deserialize)]
 struct ProgressParams {
@@ -86,7 +80,6 @@ fn phase_of(title: &str) -> Option<Phase> {
 }
 
 pub struct ExpertAdapter {
-    version_is_tested: bool,
     state: ServerState,
     /// Open tokens of the startup phases.
     open: Vec<(Value, Phase)>,
@@ -103,13 +96,7 @@ impl Default for ExpertAdapter {
 
 impl ExpertAdapter {
     pub fn new() -> Self {
-        Self::for_version(None)
-    }
-
-    pub fn for_version(version: Option<&str>) -> Self {
-        let version_is_tested = version.is_some_and(|v| TESTED_VERSIONS.contains(&v.trim()));
         ExpertAdapter {
-            version_is_tested,
             state: ServerState::initializing(),
             open: Vec::new(),
             last_ended_indexing: false,
@@ -143,12 +130,9 @@ impl Mapping for ExpertAdapter {
         ServerState::initializing()
     }
 
+    /// Never a guarantee, whatever the version (see the module documentation).
     fn guarantees(&self) -> ServerStateProvider {
-        if self.version_is_tested {
-            ServerStateProvider::workspace(&[], &[])
-        } else {
-            ServerStateProvider::notifications_only()
-        }
+        ServerStateProvider::notifications_only()
     }
 
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
@@ -264,12 +248,7 @@ mod tests {
     }
 
     #[test]
-    fn declares_guarantees_only_for_tested_versions() {
-        assert_eq!(
-            ExpertAdapter::for_version(Some("0.1.9")).guarantees(),
-            ServerStateProvider::notifications_only(),
-            "no version has passed 7.2 / 7.3 yet"
-        );
+    fn never_declares_a_guarantee() {
         assert_eq!(
             ExpertAdapter::new().guarantees(),
             ServerStateProvider::notifications_only()

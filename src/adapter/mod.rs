@@ -97,7 +97,8 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         "rust-analyzer" => Some(Box::new(RustAnalyzerAdapter::for_version(version))),
         "gopls" => Some(Box::new(GoplsAdapter::for_version(version))),
         "metals" => Some(Box::new(metals::MetalsAdapter::for_version(version))),
-        "expert" => Some(Box::new(expert::ExpertAdapter::for_version(version))),
+        // The version is not looked at: Expert declares no guarantee for any version.
+        "expert" => Some(Box::new(expert::ExpertAdapter::new())),
         "pyright" | "basedpyright" => Some(Box::new(PyrightAdapter::for_identity(&key, version))),
         typescript_language_server::SERVER_NAME => Some(Box::new(
             TypescriptLanguageServerAdapter::for_version(version),

@@ -152,11 +152,15 @@ pub fn declare_server_state_provider(
     else {
         return Unrewritable;
     };
-    let Some(experimental) = capabilities
+    // An explicit `null` (Expert returns `"experimental": null`) is the same as an absent
+    // optional field in LSP, so it is replaced by an object rather than refused.
+    let experimental_slot = capabilities
         .entry("experimental")
-        .or_insert_with(|| Value::Object(Map::new()))
-        .as_object_mut()
-    else {
+        .or_insert_with(|| Value::Object(Map::new()));
+    if experimental_slot.is_null() {
+        *experimental_slot = Value::Object(Map::new());
+    }
+    let Some(experimental) = experimental_slot.as_object_mut() else {
         return Unrewritable;
     };
 

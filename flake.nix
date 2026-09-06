@@ -38,6 +38,16 @@
         dontUnpack = true;
         installPhase = "install -Dm755 $src $out/bin/expert";
       };
+      # Nextflow の言語サーバーは nixpkgs にないので release の jar を取る (ADR 0019 決定 F、M12)。
+      # java -jar で起動する。serverInfo を返さないので版は語彙に現れない。
+      nextflow-language-server = pkgs.writeShellScriptBin "nextflow-language-server" ''
+        exec ${pkgs.jdk21}/bin/java -jar ${
+          pkgs.fetchurl {
+            url = "https://github.com/nextflow-io/language-server/releases/download/v26.04.3/language-server-all.jar";
+            hash = "sha256-IM+jT24gLWuLq9jXhiAs4A4NObcMzsMpDiqz+9ArwBY=";
+          }
+        } "$@"
+      '';
       # 準拠テストの実サーバー結合（cargo test --test conformance -- --ignored）と
       # ドッグフーディングに使う言語サーバー。版の固定はここ（ADR 0019 決定 D）。
       servers = with pkgs; [
@@ -52,10 +62,11 @@
         typescript-language-server # M6 の写像
         metals # M9 の写像 (ADR 0019 決定 F)。scala-cli のプロジェクトを BSP で取り込む
         scala-cli # Metals のビルドツール兼 BSP サーバー
-        jdk21 # Metals と scala-cli の実行環境
+        jdk21 # Metals、scala-cli、Nextflow の言語サーバーの実行環境
         elixir # Expert が起動時に探す (M10)
         erlang # 同上
         expert # M10 の写像
+        nextflow-language-server # M12 の写像
       ];
     in
     {

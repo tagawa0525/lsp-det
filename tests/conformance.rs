@@ -2788,3 +2788,348 @@ fn expert_spec_7_1_through_lsp_det_with_real_expert() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Nextflow's language server (M12, ADR 0019 decision F). The mapping in
+// research/nextflow-readiness-measurement.md: the server returns no `serverInfo` and is known
+// by `executeCommandProvider.commands` (`nextflow.server.*`); "Initializing" is a reset, not the
+// scan, and the scan's completion is visible only as `publishDiagnostics` for every `*.nf`
+// under the workspace folders (minus the configured excludes), so the observer walks the
+// folders itself; a `didOpen` / `didChange` / `didClose` predicts `indexing` until the
+// diagnostics of that document; watched-file changes are not incorporated; no health signal;
+// no guarantee (the version is not observable).
+// ---------------------------------------------------------------------------
+
+fn nextflow_client(root: &std::path::Path) -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_nextflow();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize_with_root(true, root);
+    (client, result)
+}
+
+/// The settings Serena sends: a value that differs from the server's defaults, which is what
+/// makes the real server initialize its services.
+fn nextflow_configure(client: &mut ConformanceClient, exclude: &[&str]) {
+    client.notify(
+        "workspace/didChangeConfiguration",
+        json!({"settings": {"nextflow": {
+            "errorReportingMode": "errors",
+            "files": {"exclude": exclude},
+        }}}),
+    );
+}
+
+fn nextflow_initializing(client: &mut ConformanceClient, kind: &str) {
+    let value = if kind == "begin" {
+        json!({"kind": "begin", "title": "Initializing", "message": "Initializing workspace..."})
+    } else {
+        json!({"kind": kind})
+    };
+    client.make_upstream_emit_progress(json!({"token": "initialize", "value": value}));
+}
+
+fn nextflow_diagnostics(client: &mut ConformanceClient, path: &std::path::Path) {
+    client.make_upstream_emit_notification(
+        "textDocument/publishDiagnostics",
+        json!({"uri": support::file_uri(path), "diagnostics": []}),
+    );
+}
+
+/// A barrier: a round trip through the fake upstream. Everything the fake was told to emit
+/// before it has been read by lsp-det by the time the answer comes back, so a client
+/// notification sent after this is observed after those emissions.
+fn nextflow_sync(client: &mut ConformanceClient) {
+    let _ = client.upstream_methods_seen();
+}
+
+/// Configures, runs the "Initializing" token, and diagnoses both scripts: the fake's way to
+/// ready.
+fn nextflow_reach_ready(client: &mut ConformanceClient, project: &support::TempNextflowProject) {
+    nextflow_configure(client, &["work", ".nextflow"]);
+    nextflow_initializing(client, "begin");
+    nextflow_initializing(client, "end");
+    nextflow_diagnostics(client, &project.file("modules/greet.nf"));
+    nextflow_diagnostics(client, &project.file("main.nf"));
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+}
+
+#[test]
+fn nextflow_is_selected_by_its_commands_and_stays_initializing_until_every_script_is_diagnosed() {
+    let project = support::TempNextflowProject::with_cross_file_reference("select");
+    let (mut client, _) = nextflow_client(&project.root);
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    nextflow_configure(&mut client, &["work", ".nextflow"]);
+    nextflow_initializing(&mut client, "begin");
+    // Inside the token the real server clears the diagnostics of the files it had cached.
+    // That is not a parse.
+    nextflow_diagnostics(&mut client, &project.file("main.nf"));
+    nextflow_initializing(&mut client, "end");
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "moved at the Initializing end although nothing has been scanned"
+    );
+    nextflow_diagnostics(&mut client, &project.file("modules/greet.nf"));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "claimed ready before every script under the workspace folder was diagnosed"
+    );
+    nextflow_diagnostics(&mut client, &project.file("main.nf"));
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn nextflow_predicts_indexing_from_a_document_notification_until_its_diagnostics() {
+    let project = support::TempNextflowProject::with_cross_file_reference("predict");
+    let main = project.file("main.nf");
+    let (mut client, _) = nextflow_client(&project.root);
+    nextflow_reach_ready(&mut client, &project);
+    client.did_open(&main, "nextflow");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    nextflow_diagnostics(&mut client, &main);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.did_change(&main, 2, support::NF_MAIN_WITHOUT_CALL);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    nextflow_diagnostics(&mut client, &main);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.did_close(&main);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    nextflow_diagnostics(&mut client, &main);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    // A document outside every workspace folder falls to the server's default service, which
+    // is never initialized and never parses it: nothing to predict.
+    let outside = std::env::temp_dir().join(format!(
+        "lsp-det-conformance-nextflow-outside-{}.nf",
+        std::process::id()
+    ));
+    std::fs::write(&outside, support::NF_GREET).unwrap();
+    client.did_open(&outside, "nextflow");
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "predicted a parse of a document outside the workspace folders"
+    );
+    let _ = std::fs::remove_file(&outside);
+    client.shutdown();
+}
+
+#[test]
+fn nextflow_does_not_predict_from_watched_files_and_has_no_health_signal() {
+    let project = support::TempNextflowProject::with_cross_file_reference("watched");
+    let main = project.file("main.nf");
+    let greet = project.file("modules/greet.nf");
+    let (mut client, _) = nextflow_client(&project.root);
+    nextflow_configure(&mut client, &["work", ".nextflow"]);
+    nextflow_initializing(&mut client, "begin");
+    nextflow_initializing(&mut client, "end");
+    nextflow_diagnostics(&mut client, &main);
+    nextflow_sync(&mut client);
+    // A script deleted after the walk is never diagnosed by the scan: it leaves the set.
+    client.did_change_watched_files(&[(&greet, 3)]);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    // Created / Changed are not incorporated by the server (measured), so there is no
+    // completion signal to predict against (ADR 0014 addendum decision D).
+    client.did_change_watched_files(&[(&project.file("c.nf"), 1), (&main, 2)]);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "predicted indexing although the server ignores watched files"
+    );
+    assert_eq!(
+        client.server_state().health,
+        Health::Unknown,
+        "Nextflow's language server has no health signal"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn nextflow_spec_8_2_5_declares_no_guarantees() {
+    let project = support::TempNextflowProject::with_cross_file_reference("declare");
+    let (mut client, result) = nextflow_client(&project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for a server whose version is not observable: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn nextflow_is_ready_at_the_initializing_end_when_there_is_nothing_to_scan() {
+    let project = support::TempNextflowProject::without_scripts("empty");
+    let (mut client, _) = nextflow_client(&project.root);
+    nextflow_configure(&mut client, &["work", ".nextflow"]);
+    nextflow_initializing(&mut client, "begin");
+    nextflow_initializing(&mut client, "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+/// The server's exclude rule matches `/`-separated paths only, so on Windows nothing is
+/// excluded and the mapping mirrors that (`work/ab/stale.nf` stays in the scan set).
+#[test]
+fn nextflow_honours_the_exclude_patterns_of_the_configuration() {
+    let project = support::TempNextflowProject::with_cross_file_reference("exclude");
+    std::fs::create_dir_all(project.file("work/ab")).unwrap();
+    std::fs::write(project.file("work/ab/stale.nf"), support::NF_GREET).unwrap();
+    let (mut client, _) = nextflow_client(&project.root);
+    // With `work` excluded the server never diagnoses `work/ab/stale.nf`.
+    if cfg!(windows) {
+        nextflow_configure(&mut client, &["work", ".nextflow"]);
+        nextflow_initializing(&mut client, "begin");
+        nextflow_initializing(&mut client, "end");
+        nextflow_diagnostics(&mut client, &project.file("modules/greet.nf"));
+        nextflow_diagnostics(&mut client, &project.file("main.nf"));
+        nextflow_diagnostics(&mut client, &project.file("work/ab/stale.nf"));
+        assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    } else {
+        nextflow_reach_ready(&mut client, &project);
+    }
+    // Without the exclude it is part of the scan.
+    nextflow_configure(&mut client, &[]);
+    nextflow_initializing(&mut client, "begin");
+    assert_eq!(
+        client.await_state_changed().readiness,
+        Readiness::Initializing
+    );
+    nextflow_initializing(&mut client, "end");
+    nextflow_diagnostics(&mut client, &project.file("modules/greet.nf"));
+    nextflow_diagnostics(&mut client, &project.file("main.nf"));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "claimed ready without the script under work/ that the new configuration includes"
+    );
+    nextflow_diagnostics(&mut client, &project.file("work/ab/stale.nf"));
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+// --- real Nextflow language server (local only) ------------------------------
+
+fn real_nextflow(project: &support::TempNextflowProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec!["--".to_string(), "nextflow-language-server".to_string()],
+        root: project.root.clone(),
+    }
+}
+
+/// The references to `GREET` (declared in `modules/greet.nf`) that point at `file`.
+fn nextflow_references_in(
+    client: &mut ConformanceClient,
+    greet: &std::path::Path,
+    file: &std::path::Path,
+) -> Vec<Value> {
+    let wanted = support::file_uri(file);
+    let (line, character) = support::NF_GREET_DECLARATION;
+    client
+        .references(greet, line, character)
+        .into_iter()
+        .filter(|location| location["uri"] == Value::String(wanted.clone()))
+        .collect()
+}
+
+/// Via the real server. Observes the transition from initializing to ready. The scan needs a
+/// trigger after the configuration (a `didOpen`; measured).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nextflow_spec_7_1_through_lsp_det_with_real_nextflow() {
+    let project = support::TempNextflowProject::with_cross_file_reference("readiness");
+    let mut client = ConformanceClient::start(&real_nextflow(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    // No guarantee: the version is not observable (research/nextflow-readiness-measurement.md).
+    // 7.2 / 7.3 are still measured below, as what the mapping would keep.
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for a server whose version is not observable: {result}"
+    );
+    assert_ne!(client.server_state().readiness, Readiness::Ready);
+    nextflow_configure(&mut client, &["work", ".nextflow"]);
+    client.did_open(&project.file("modules/greet.nf"), "nextflow");
+    client.wait_until_ready();
+    assert_eq!(
+        client.server_state().health,
+        Health::Unknown,
+        "Nextflow's language server has no health signal"
+    );
+    client.shutdown();
+}
+
+/// Without a configuration that differs from the server's defaults, the real server never
+/// initializes its services and answers everything with empty results (measured). The
+/// mapping stays initializing rather than letting that through.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nextflow_stays_initializing_without_a_configuration_through_real_nextflow() {
+    let project = support::TempNextflowProject::with_cross_file_reference("unconfigured");
+    let mut client = ConformanceClient::start(&real_nextflow(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&project.file("modules/greet.nf"), "nextflow");
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", Duration::from_secs(4)),
+        "moved without a configuration"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+/// Measures 7.2 coverage against the real server: references across 200 scripts, complete
+/// at the first answer after ready.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nextflow_spec_7_2_coverage_through_lsp_det_with_real_nextflow() {
+    let project = support::TempNextflowProject::with_many_calls("coverage", 200);
+    let greet = project.file("modules/greet.nf");
+    let mut client = ConformanceClient::start(&real_nextflow(&project));
+    client.initialize_with_root(true, &project.root);
+    nextflow_configure(&mut client, &["work", ".nextflow"]);
+    client.did_open(&greet, "nextflow");
+    client.wait_until_ready();
+    let (line, character) = support::NF_GREET_DECLARATION;
+    let found = client.references(&greet, line, character);
+    // Each script contributes the include and the call; main.nf the same.
+    assert_eq!(
+        found.len(),
+        2 * 200 + 2,
+        "missed references while declaring ready (coverage violation)"
+    );
+    client.shutdown();
+}
+
+/// Measures 7.3 item 1 (didChange of an open document, cross-file) against the real server.
+/// `references` does not synchronize with the debounced update (measured 1 second stale), so
+/// only the hold makes it fresh.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nextflow_spec_7_3_cross_file_freshness_through_lsp_det_with_real_nextflow() {
+    let project = support::TempNextflowProject::with_cross_file_reference("freshness");
+    let greet = project.file("modules/greet.nf");
+    let main = project.file("main.nf");
+    let mut client = ConformanceClient::start(&real_nextflow(&project));
+    client.initialize_with_root(true, &project.root);
+    nextflow_configure(&mut client, &["work", ".nextflow"]);
+    client.did_open(&greet, "nextflow");
+    client.did_open(&main, "nextflow");
+    client.wait_until_ready();
+    let before = nextflow_references_in(&mut client, &greet, &main);
+    assert!(
+        before
+            .iter()
+            .any(|location| location["range"]["start"]["line"] == support::NF_MAIN_CALL_LINE),
+        "the premise is broken: the call in main.nf should be visible: {before:#?}"
+    );
+    client.did_change(&main, 2, support::NF_MAIN_WITHOUT_CALL);
+    // The mapping predicts `indexing` until the diagnostics of main.nf. This client declares
+    // `experimental.serverState`, so nothing is held on its behalf: it waits itself (spec
+    // chapter 9), as it did before the first query.
+    assert_eq!(client.server_state().readiness, Readiness::Indexing);
+    client.wait_until_ready();
+    let after = nextflow_references_in(&mut client, &greet, &main);
+    assert!(
+        after
+            .iter()
+            .all(|location| location["range"]["start"]["line"] != support::NF_MAIN_CALL_LINE),
+        "returned the removed call while declaring ready (freshness violation): {after:#?}"
+    );
+    client.shutdown();
+}

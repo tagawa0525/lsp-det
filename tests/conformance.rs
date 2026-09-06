@@ -3598,6 +3598,13 @@ fn gleam_spec_7_1_through_lsp_det_with_real_gleam() {
         "declared a guarantee for a server whose version never appears in the protocol: {result}"
     );
     client.did_open(&a, "gleam");
+    let (line, character) = support::GLEAM_TARGET_DECLARATION;
+    // The real Gleam identifies itself only through a `$/progress` sent after `initialized`
+    // (research/gleam-readiness-measurement.md), an unavoidable round trip that a bare
+    // `experimental/serverState` request can race ahead of. The first `references` cannot:
+    // Gleam answers no request before the token ends and compiles synchronously inside request
+    // handling (measured), so waiting on its response synchronizes this test past that gap.
+    let _ = client.references(&a, line, character);
     client.wait_until_ready();
     assert_eq!(
         client.server_state().health,
@@ -3620,9 +3627,11 @@ fn gleam_spec_7_3_cross_file_freshness_through_lsp_det_with_real_gleam() {
     client.initialize_with_root(true, &project.root);
     client.did_open(&a, "gleam");
     client.did_open(&b, "gleam");
-    client.wait_until_ready();
     let (line, character) = support::GLEAM_TARGET_DECLARATION;
+    // The first `references` synchronizes past the async gap between `initialized` and the
+    // dependency-download progress (see gleam_spec_7_1_through_lsp_det_with_real_gleam).
     let before = client.references(&a, line, character).len();
+    client.wait_until_ready();
     client.did_change(&b, 2, support::GLEAM_B_WITH_TWO_CALLS);
     let after = client.references(&a, line, character).len();
     assert_eq!(

@@ -69,6 +69,26 @@
           chmod +x $out/bin/haxe-language-server
         '';
       };
+      # Sorbet は nixpkgs にないので rubygems の sorbet-static（x86_64-linux の prebuilt）を取る (ADR 0020 決定 B、M22)。
+      # gem は tar で、中の data.tar.gz に libexec/sorbet がある。glibc 以外に依存しない。serverInfo を返さないので版は語彙に現れない。
+      sorbet = pkgs.stdenv.mkDerivation {
+        pname = "sorbet";
+        version = "0.6.13485";
+        src = pkgs.fetchurl {
+          url = "https://rubygems.org/downloads/sorbet-static-0.6.13485-x86_64-linux.gem";
+          hash = "sha256-4i2I3wu6WpfmZKMpoiEupZ5qICBiZZehYsYMXd+0+bQ=";
+        };
+        nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+        unpackPhase = ''
+          tar -xf $src data.tar.gz
+          tar -xzf data.tar.gz
+        '';
+        installPhase = ''
+          mkdir -p $out/bin
+          cp libexec/sorbet $out/bin/sorbet
+          chmod +x $out/bin/sorbet
+        '';
+      };
       # 準拠テストの実サーバー結合（cargo test --test conformance -- --ignored）と
       # ドッグフーディングに使う言語サーバー。版の固定はここ（ADR 0019 決定 D）。
       servers = with pkgs; [
@@ -99,6 +119,8 @@
         haxe # haxe-language-server が起動するコンパイラ
         dart # M21 の写像 (ADR 0020)。dart language-server。readiness は $/progress (token ANALYZING) から
         jdt-language-server # M23 の写像 (ADR 0020)。jdtls -data <dir>。readiness は language/status の ServiceReady から
+        sorbet # M22 の写像 (ADR 0020)。sorbet --lsp。readiness は sorbet/showOperation から
+        watchman # Sorbet がディスク上の変更を拾うのに要る（実測記録を参照）
       ];
     in
     {

@@ -25,7 +25,7 @@ A local plugin that makes Claude Code launch rust-analyzer, gopls, pyright, and 
 3. Check that it works
 
    - The Errors tab of `/plugin` shows no launch failure (`Executable not found in $PATH` and the like)
-   - Starting with `claude --debug` shows the language servers' stderr. lsp-det writes `lsp-det: upstream is "rust-analyzer" version ...; using its mapping, declaring {...}` (pyright and typescript-language-server return no `serverInfo`, so the line is `upstream introduced itself in its startup log as "pyright" version ...` or `... "typescript-language-server" version <TypeScript version>`) and every state transition `lsp-det: [0.000s] server state -> {...}` to stderr
+   - Starting with `claude --debug` shows the language servers' stderr. This is also where a hold is diagnosed: lsp-det writes one line when it holds a cross-workspace request (`holding textDocument/references (id 3) while {...}; 1 held`) and one when the request leaves the queue (`released ... after 6.712s: ready`, or `rejected` / `cancelled` / `answered with an error` with the reason). A request that stays held shows a mapping that missed the server's signal; without `--debug` it is visible only as the request not returning. lsp-det writes `lsp-det: upstream is "rust-analyzer" version ...; using its mapping, declaring {...}` (pyright and typescript-language-server return no `serverInfo`, so the line is `upstream introduced itself in its startup log as "pyright" version ...` or `... "typescript-language-server" version <TypeScript version>`) and every state transition `lsp-det: [0.000s] server state -> {...}` to stderr
 
 ## What to observe ([docs/v0.1-design.md](../docs/v0.1-design.md), chapter 8)
 

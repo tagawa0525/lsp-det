@@ -313,6 +313,78 @@ fn spec_9_1_5_answers_held_requests_when_the_upstream_exits() {
 }
 
 // ---------------------------------------------------------------------------
+// Observability of holding (ADR 0018 decision A-1): the start and the end of every hold are on
+// stderr, with the reason, so that a mapping that missed a signal shows up as "still holding"
+// rather than as a client-side timeout
+// ---------------------------------------------------------------------------
+
+#[test]
+fn logs_the_start_and_the_release_of_a_hold_to_stderr() {
+    for subject in SUBJECTS {
+        let mut client = start_indexing(subject, false);
+        let id = client.send_references();
+        make_ready(&mut client, subject);
+        client.await_response_to(id);
+        client.shutdown();
+        let log = client.stderr_after_exit();
+        assert!(
+            log.contains(&format!("holding textDocument/references (id {id})")),
+            "{subject:?}: the start of the hold is not on stderr:\n{log}"
+        );
+        let released = log
+            .lines()
+            .find(|l| l.contains(&format!("released textDocument/references (id {id})")));
+        assert!(
+            released.is_some_and(|l| l.contains("ready")),
+            "{subject:?}: the release and its reason are not on stderr:\n{log}"
+        );
+    }
+}
+
+#[test]
+fn logs_the_reason_when_a_held_request_does_not_reach_the_upstream() {
+    // Rejected because health turned error.
+    for subject in SUBJECTS {
+        let mut client = start_indexing(subject, false);
+        let id = client.send_references();
+        make_error(&mut client, subject);
+        client.await_response_to(id);
+        client.shutdown();
+        let log = client.stderr_after_exit();
+        let rejected = log
+            .lines()
+            .find(|l| l.contains(&format!("rejected textDocument/references (id {id})")));
+        assert!(
+            rejected.is_some_and(|l| l.contains("error")),
+            "{subject:?}: the rejection and its reason are not on stderr:\n{log}"
+        );
+    }
+    // Cancelled by the client.
+    let mut client = start_indexing(Subject::ConformantUpstream, false);
+    let id = client.send_references();
+    client.cancel(id);
+    client.await_response_to(id);
+    client.shutdown();
+    let log = client.stderr_after_exit();
+    assert!(
+        log.lines()
+            .any(|l| l.contains(&format!("cancelled textDocument/references (id {id})"))),
+        "the cancellation is not on stderr:\n{log}"
+    );
+    // Answered with an error because of shutdown.
+    let mut client = start_indexing(Subject::ConformantUpstream, false);
+    let id = client.send_references();
+    client.shutdown();
+    let log = client.stderr_after_exit();
+    assert!(
+        log.lines().any(
+            |l| l.contains(&format!("textDocument/references (id {id})")) && l.contains("shutdown")
+        ),
+        "the error answer on shutdown is not on stderr:\n{log}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // 7.2 coverage, run through the downstream side + the fake upstream
 //
 // The fake upstream returns an empty array for references while indexing is incomplete (a silent

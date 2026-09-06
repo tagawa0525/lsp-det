@@ -13,6 +13,13 @@
 //! | ---------------------------- | --------------------------- | ------- | --------- |
 //! | `ok` / `warning` / `unknown` | hold                        | forward | forward   |
 //! | `error`                      | error immediately           | same    | same      |
+//!
+//! Every hold is observable on stderr: one line when a request is held (with the state it
+//! waited on) and one line when it leaves the queue (with how long it waited and why). Without
+//! a time limit, a mapping that missed a signal would otherwise show up only as the client's
+//! timeout (ADR 0018 decision A-1). The lines are written on events; no clock decides anything.
+
+use std::time::Instant;
 
 use crate::framing::RawMessage;
 use crate::peek::RequestId;
@@ -96,16 +103,39 @@ pub enum DrainReason {
     UpstreamExited,
 }
 
-#[derive(Default)]
+/// A request waiting for `ready`.
+struct Held {
+    id: RequestId,
+    method: String,
+    msg: RawMessage,
+    since: Instant,
+}
+
 pub struct Gate {
-    held: Vec<(RequestId, RawMessage)>,
+    held: Vec<Held>,
     /// The client made the declaration of spec 5.2. It decides for itself, so do not stand in.
     client_decides: bool,
+    /// When the gate was created. Only for the timestamps in the log lines.
+    started: Instant,
+}
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            held: Vec::new(),
+            client_decides: false,
+            started: Instant::now(),
+        }
+    }
 }
 
 impl Gate {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn elapsed(&self) -> f64 {
+        self.started.elapsed().as_secs_f64()
     }
 
     /// Called when the client declared `experimental.serverState`. From then on nothing is
@@ -128,26 +158,57 @@ impl Gate {
         match verdict(state) {
             Verdict::Forward => Decision::Forward(msg),
             Verdict::Hold => {
-                self.held.push((id, msg));
+                self.held.push(Held {
+                    id: id.clone(),
+                    method: method.to_string(),
+                    msg,
+                    since: Instant::now(),
+                });
+                eprintln!(
+                    "lsp-det: [{:.3}s] holding {method} (id {id}) while {}; {} held",
+                    self.elapsed(),
+                    render(state),
+                    self.held.len()
+                );
                 Decision::Held
             }
-            Verdict::Reject => Decision::Reject(request_failed(&id, state)),
+            Verdict::Reject => {
+                eprintln!(
+                    "lsp-det: [{:.3}s] rejected {method} (id {id}): health is error ({})",
+                    self.elapsed(),
+                    render(state)
+                );
+                Decision::Reject(request_failed(&id, state))
+            }
         }
     }
 
     /// The state on the boundary changed. Re-evaluate the held requests.
     pub fn on_state(&mut self, state: &ServerState) -> Vec<Release> {
+        let started = self.started;
         match verdict(state) {
             Verdict::Hold => Vec::new(),
-            Verdict::Forward => self
-                .held
-                .drain(..)
-                .map(|(_, msg)| Release::Forward(msg))
-                .collect(),
+            Verdict::Forward => {
+                let reason = if state.readiness == Readiness::Ready {
+                    "ready"
+                } else {
+                    "readiness is unknown"
+                };
+                self.held
+                    .drain(..)
+                    .map(|held| {
+                        log_end(started, "released", &held, reason);
+                        Release::Forward(held.msg)
+                    })
+                    .collect()
+            }
             Verdict::Reject => self
                 .held
                 .drain(..)
-                .map(|(id, _)| Release::Reject(request_failed(&id, state)))
+                .map(|held| {
+                    log_end(started, "rejected", &held, "health is error");
+                    Release::Reject(request_failed(&held.id, state))
+                })
                 .collect(),
         }
     }
@@ -155,8 +216,14 @@ impl Gate {
     /// `$/cancelRequest`. If held, remove it and return `RequestCancelled`.
     /// If not held, `None` (passed through to the upstream).
     pub fn on_cancel(&mut self, id: &RequestId) -> Option<RawMessage> {
-        let index = self.held.iter().position(|(held, _)| held == id)?;
-        self.held.remove(index);
+        let index = self.held.iter().position(|held| held.id == *id)?;
+        let held = self.held.remove(index);
+        log_end(
+            self.started,
+            "cancelled",
+            &held,
+            "the client sent $/cancelRequest",
+        );
         Some(error_response(
             id,
             error_code::REQUEST_CANCELLED,
@@ -176,15 +243,39 @@ impl Gate {
                 "lsp-det: the upstream language server exited while the request was waiting",
             ),
         };
+        let started = self.started;
+        let why = match reason {
+            DrainReason::Shutdown => "shutdown was requested",
+            DrainReason::UpstreamExited => "the upstream exited",
+        };
         self.held
             .drain(..)
-            .map(|(id, _)| error_response(&id, code, message))
+            .map(|held| {
+                log_end(started, "answered with an error", &held, why);
+                error_response(&held.id, code, message)
+            })
             .collect()
     }
 
     pub fn held_count(&self) -> usize {
         self.held.len()
     }
+}
+
+/// One line for a request leaving the queue: how long it waited and why it left.
+fn log_end(started: Instant, what: &str, held: &Held, reason: &str) {
+    eprintln!(
+        "lsp-det: [{:.3}s] {what} {} (id {}) after {:.3}s: {reason}",
+        started.elapsed().as_secs_f64(),
+        held.method,
+        held.id,
+        held.since.elapsed().as_secs_f64()
+    );
+}
+
+/// The state as it appears in the log lines (the same JSON as the state transition log).
+fn render(state: &ServerState) -> String {
+    serde_json::to_string(state).expect("ServerState can always be serialized")
 }
 
 /// A row of the decision table. `health` is looked at first (the recommended interpretation

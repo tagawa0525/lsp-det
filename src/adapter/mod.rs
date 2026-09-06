@@ -19,6 +19,7 @@ pub mod expert;
 pub mod gleam;
 pub mod gopls;
 pub mod haskell_language_server;
+pub mod haxe_language_server;
 pub mod metals;
 pub mod nextflow;
 pub mod pyright;
@@ -120,6 +121,10 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         crystalline::SERVER_NAME => Some(Box::new(crystalline::CrystallineAdapter::new())),
         // The version is not observable: Gleam declares no guarantee for any version.
         gleam::SERVER_NAME => Some(Box::new(gleam::GleamAdapter::new())),
+        // The version never appears on the protocol: no guarantee.
+        haxe_language_server::SERVER_NAME => Some(Box::new(
+            haxe_language_server::HaxeLanguageServerAdapter::new(),
+        )),
         "pyright" | "basedpyright" => Some(Box::new(PyrightAdapter::for_identity(&key, version))),
         typescript_language_server::SERVER_NAME => Some(Box::new(
             TypescriptLanguageServerAdapter::for_version(version),
@@ -159,7 +164,9 @@ pub fn identity_from_initialize_result(body: &[u8]) -> Option<ServerInfo> {
 /// upstream-to-client notification. That is pyright's `window/logMessage` ("Pyright language
 /// server 1.1.412 starting"), typescript-language-server's own `$/typescriptVersion`, and
 /// crystalline's `window/logMessage` ("\"[workspace] Found projects:…", version never observable),
-/// and Gleam's `$/progress` begin of the dependency download ("Downloading Gleam dependencies").
+/// Gleam's `$/progress` begin of the dependency download ("Downloading Gleam dependencies"), and
+/// haxe-language-server's `window/logMessage` ("Haxe Path: …", sent only after
+/// `workspace/didChangeConfiguration`, with no version in it).
 /// `None` if it is not an identity announcement. No generic recognition mechanism is built
 /// (a mapping that needs one adds its own recognition).
 pub fn identity_from_notification(view: &MessageView, body: &[u8]) -> Option<ServerInfo> {
@@ -183,6 +190,12 @@ pub fn identity_from_notification(view: &MessageView, body: &[u8]) -> Option<Ser
                 .or_else(|| {
                     crystalline::identity_from_log(message).then(|| ServerInfo {
                         name: crystalline::SERVER_NAME.to_string(),
+                        version: None,
+                    })
+                })
+                .or_else(|| {
+                    haxe_language_server::identity_from_log(message).then(|| ServerInfo {
+                        name: haxe_language_server::SERVER_NAME.to_string(),
                         version: None,
                     })
                 })

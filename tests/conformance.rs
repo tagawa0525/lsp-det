@@ -3737,7 +3737,10 @@ fn haxe_ignores_request_processing_progress_and_reindexes_on_startup_titles() {
     haxe_log(&mut client, "Haxe Path: haxe");
     haxe_progress(&mut client, 0, "begin", Some("Haxe: Building Cache..."));
     haxe_progress(&mut client, 0, "end", None);
-    client.wait_until_ready();
+    // Unlike the identity log alone (silent: it only places the starting state), this end
+    // is a real, notifiable readiness change, so waiting for the notification (rather than
+    // polling through a synchronization wall) is both sufficient and race-free.
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
 
     haxe_progress(
         &mut client,

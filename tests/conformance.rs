@@ -4043,3 +4043,179 @@ fn dart_holds_references_until_ready() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Real Dart analysis server integration (local only. Not part of CI — v0.1-design.md
+// chapter 6). Requires the Dart SDK on PATH (`nix develop .#servers`; `dart language-server`).
+// ---------------------------------------------------------------------------
+
+/// Caller files under `lib/` (research/dart-readiness-measurement.md 方法: a 401-file fixture,
+/// large enough that analysis takes observable time).
+const DART_FIXTURE_CALLERS: usize = 400;
+
+fn real_dart(project: &support::TempDartProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec![
+            "--".to_string(),
+            "dart".to_string(),
+            "language-server".to_string(),
+        ],
+        root: project.root.clone(),
+    }
+}
+
+/// Returns only the references to `target` (declared in `a.dart`) that point at `file`.
+fn dart_references_in(
+    client: &mut ConformanceClient,
+    a: &std::path::Path,
+    file: &std::path::Path,
+) -> Vec<Value> {
+    let wanted = support::file_uri(file);
+    let (line, character) = support::DART_TARGET_DECLARATION;
+    client
+        .references(a, line, character)
+        .into_iter()
+        .filter(|location| location["uri"] == Value::String(wanted.clone()))
+        .collect()
+}
+
+/// Identity and the guarantee declared for the tested version (3.13.0).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn dart_is_selected_by_its_real_server_info() {
+    let project = support::TempDartProject::with_many_callers("select", 1);
+    let mut client = ConformanceClient::start(&real_dart(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({
+            "coverage": {"scope": "workspace", "incomplete": {}},
+            "freshness": {"fileChanges": ["Created", "Changed", "Deleted"]}
+        }),
+        "no guarantee is declared for the tested version of real Dart: {result}"
+    );
+    client.shutdown();
+}
+
+/// 7.1: the first `references` is complete (research 走行 1: the server holds the request
+/// until the analysis it depends on finishes, so there is no empty or partial answer to
+/// observe even though the query is sent right after `didOpen`, before the mapping itself has
+/// observed the first analyzing round end). The answer is measured to arrive shortly BEFORE the
+/// `ANALYZING` end (end is a whole-server idle notification; the answer only waits on the
+/// target's own analysis), so this does not assert that readiness has already reached `ready`
+/// by the time the answer arrives -- only that the round that started does complete afterward.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn dart_spec_7_1_first_references_is_complete_through_lsp_det_with_real_dart() {
+    let project = support::TempDartProject::with_many_callers("readiness", DART_FIXTURE_CALLERS);
+    let a = project.file("lib/a.dart");
+    let mut client = ConformanceClient::start(&real_dart(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&a, "dart");
+    assert_ne!(client.server_state().readiness, Readiness::Ready);
+    let indexing = client.await_state_changed();
+    assert_eq!(
+        indexing.readiness,
+        Readiness::Indexing,
+        "did not observe the first analyzing round begin: {indexing:?}"
+    );
+
+    let (line, character) = support::DART_TARGET_DECLARATION;
+    let found = client.references(&a, line, character);
+    assert_eq!(
+        found.len(),
+        DART_FIXTURE_CALLERS,
+        "the first references was not complete: {} of {}",
+        found.len(),
+        DART_FIXTURE_CALLERS
+    );
+    // The round that was open when the answer arrived does end (its own completion, not a
+    // fixed timeout).
+    client.wait_until_ready();
+    client.shutdown();
+}
+
+/// 7.2: the result once `ready` matches the precomputed complete set (every caller file calls
+/// `target` exactly once).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn dart_spec_7_2_coverage_through_lsp_det_with_real_dart() {
+    let project = support::TempDartProject::with_many_callers("coverage", DART_FIXTURE_CALLERS);
+    let a = project.file("lib/a.dart");
+    let mut client = ConformanceClient::start(&real_dart(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&a, "dart");
+    client.wait_until_ready();
+
+    let (line, character) = support::DART_TARGET_DECLARATION;
+    let found = client.references(&a, line, character);
+    assert_eq!(
+        found.len(),
+        DART_FIXTURE_CALLERS,
+        "missed some callers while declaring ready (completeness violation): {} of {}",
+        found.len(),
+        DART_FIXTURE_CALLERS
+    );
+    client.shutdown();
+}
+
+/// 7.3 item 1: a `didChange` on an open file (`f0.dart`) that adds one more call to `target` is
+/// incorporated. The query is sent right after the notification, as the spec recommends; if it
+/// still races a request already in flight at the moment of the change, Dart answers it with
+/// -32801 ContentModified (research 走行 2/5), which `ConformanceClient::references` already
+/// retries once (tests/support/mod.rs) -- no extra retry logic is needed here.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn dart_spec_7_3_1_did_change_on_an_open_file_through_lsp_det_with_real_dart() {
+    let project =
+        support::TempDartProject::with_many_callers("freshness-didchange", DART_FIXTURE_CALLERS);
+    let a = project.file("lib/a.dart");
+    let f0 = project.file("lib/f0.dart");
+    let mut client = ConformanceClient::start(&real_dart(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&a, "dart");
+    client.did_open(&f0, "dart");
+    client.wait_until_ready();
+
+    let (line, character) = support::DART_TARGET_DECLARATION;
+    let before = client.references(&a, line, character).len();
+    client.did_change(&f0, 2, &support::dart_caller_file_with_calls(0, 2));
+    let after = client.references(&a, line, character).len();
+    assert_eq!(
+        after,
+        before + 1,
+        "an added call in an open file was not incorporated: before={before} after={after}"
+    );
+    client.shutdown();
+}
+
+/// 7.3 items 2-4: watched-file Created / Changed / Deleted of a file that is not opened, each
+/// reflected in a query from a different file (`a.dart`, the file that defines `target`). Dart
+/// does its own file watching (research: the `workspace/didChangeWatchedFiles` lsp-det sends or
+/// stands in for is answered with an "Unknown method" `window/showMessage` and otherwise
+/// ignored; `ConformanceClient::stash` keeps that notification without failing the test).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn dart_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_dart() {
+    let project = support::TempDartProject::with_many_callers("watched", DART_FIXTURE_CALLERS);
+    let a = project.file("lib/a.dart");
+    let caller = project.file("lib/f1.dart");
+    let mut client = ConformanceClient::start(&real_dart(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&a, "dart");
+    client.wait_until_ready();
+
+    watched_file_changes_are_reflected(
+        &mut client,
+        &a,
+        &caller,
+        &support::dart_caller_file_with_calls(1, 2),
+        &project.file("lib/g.dart"),
+        support::DART_G,
+        None,
+        dart_references_in,
+        true,
+    );
+    client.shutdown();
+}

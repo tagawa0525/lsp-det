@@ -47,7 +47,8 @@ const ANALYZING_TOKEN: &str = "ANALYZING";
 /// `cargo test --test conformance -- --ignored dart` against that version first (declaring a
 /// guarantee that cannot be kept violates spec 5.1).
 ///
-/// Record of versions passed: 3.13.0 (nixpkgs `dart`, flake.nix `servers`), 2026-09-06.
+/// Record of versions passed: 3.13.0 (nixpkgs `dart`, flake.nix `servers`), 2026-09-06,
+/// 3 consecutive runs.
 pub const TESTED_VERSIONS: &[&str] = &["3.13.0"];
 
 #[derive(Deserialize)]

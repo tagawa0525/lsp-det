@@ -4219,3 +4219,261 @@ fn dart_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_dart() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// jdtls / Eclipse JDT Language Server (M23, ADR 0020 decision C row for jdtls). The mapping in
+// research/jdtls-readiness-measurement.md: identified by `serverInfo.name`
+// "JDT Language Server (Standard)" (the version is `serverInfo.version`, "1.60.0-SNAPSHOT" for
+// nixpkgs 1.60.0). `language/status` (`{type, message}`) `type: "ServiceReady"` -> `ready`
+// (starting from `initializing`); `$/progress` is not mapped to readiness ("Building" is
+// compilation for diagnostics, not the index; JDT search waits for the index itself with
+// WAIT_UNTIL_READY_TO_SEARCH, so mapping progress would only delay complete results). No
+// prediction (`observe_client` is not implemented; the server itself holds requests). health:
+// `language/status` `type: "ProjectStatus"` message "OK" -> `ok`, "WARNING" -> `warning`;
+// `type: "Error"` -> `error`. Additionally, `textDocument/publishDiagnostics` on a URI that does
+// not end with ".java" (the project resource itself or a build file) with a severity-1
+// diagnostic -> `warning`, reverting to whatever the last `ProjectStatus` / `Error` reported once
+// that URI's diagnostics are empty again. `coverage: {scope: "workspace", incomplete: {}}` and
+// `freshness: {fileChanges: ["Created", "Changed", "Deleted"]}` are declared for the tested
+// version 1.60.0-SNAPSHOT (spec 8.2 item 5; the real-server tests below are the basis).
+// ---------------------------------------------------------------------------
+
+fn jdtls_client() -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_jdtls();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    (client, result)
+}
+
+/// Emits `language/status` (`{type, message}`), as the real jdtls does
+/// (research/jdtls-readiness-measurement.md).
+fn jdtls_status(client: &mut ConformanceClient, status_type: &str, message: &str) {
+    client.make_upstream_emit_notification(
+        "language/status",
+        json!({"type": status_type, "message": message}),
+    );
+}
+
+/// `textDocument/publishDiagnostics` with a single severity-1 diagnostic (or none).
+fn jdtls_diagnostics(
+    client: &mut ConformanceClient,
+    uri: &str,
+    severity_one_message: Option<&str>,
+) {
+    let diagnostics = match severity_one_message {
+        Some(message) => vec![json!({
+            "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+            "severity": 1,
+            "message": message
+        })],
+        None => vec![],
+    };
+    client.make_upstream_emit_notification(
+        "textDocument/publishDiagnostics",
+        json!({"uri": uri, "diagnostics": diagnostics}),
+    );
+}
+
+#[test]
+fn jdtls_is_selected_by_server_info_and_declares_a_guarantee_for_the_tested_version() {
+    let (mut client, result) = jdtls_client();
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({
+            "coverage": {"scope": "workspace", "incomplete": {}},
+            "freshness": {"fileChanges": ["Created", "Changed", "Deleted"]}
+        }),
+        "declared a different guarantee for the tested version 1.60.0-SNAPSHOT: {result}"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+#[test]
+fn jdtls_declares_no_guarantee_for_an_untested_version() {
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "JDT Language Server (Standard)",
+        &["--server-version", "1.59.0-SNAPSHOT"],
+    );
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for a version the conformance suite has not passed on: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn jdtls_becomes_ready_on_service_ready() {
+    let (mut client, _) = jdtls_client();
+    jdtls_status(&mut client, "ServiceReady", "ServiceReady");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn jdtls_other_status_types_do_not_move_readiness() {
+    let (mut client, _) = jdtls_client();
+    for (status_type, message) in [
+        ("Starting", "Init..."),
+        ("Started", "Ready"),
+        ("Message", "some message"),
+    ] {
+        jdtls_status(&mut client, status_type, message);
+    }
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "moved state on a status type other than ServiceReady/ProjectStatus/Error"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+#[test]
+fn jdtls_ignores_progress() {
+    let (mut client, _) = jdtls_client();
+    client.make_upstream_emit_progress(json!({
+        "token": "some-uuid",
+        "value": {"kind": "begin", "title": "Building"}
+    }));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "$/progress must not move readiness (research: the index is not what it tracks)"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+#[test]
+fn jdtls_project_status_ok_and_warning_move_health() {
+    let (mut client, _) = jdtls_client();
+    jdtls_status(&mut client, "ProjectStatus", "OK");
+    assert_eq!(client.await_state_changed().health, Health::Ok);
+    jdtls_status(&mut client, "ProjectStatus", "WARNING");
+    assert_eq!(client.await_state_changed().health, Health::Warning);
+    client.shutdown();
+}
+
+#[test]
+fn jdtls_error_status_moves_health_to_error() {
+    let (mut client, _) = jdtls_client();
+    jdtls_status(&mut client, "ProjectStatus", "OK");
+    client.await_state_changed();
+    jdtls_status(&mut client, "Error", "something went wrong");
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Error);
+    client.shutdown();
+}
+
+#[test]
+fn jdtls_non_java_diagnostics_with_severity_one_are_warning_and_revert() {
+    let (mut client, _) = jdtls_client();
+    jdtls_status(&mut client, "ProjectStatus", "OK");
+    assert_eq!(client.await_state_changed().health, Health::Ok);
+    jdtls_diagnostics(
+        &mut client,
+        "file:///fixture",
+        Some("Project 'fixture' is missing required library: 'missing.jar'"),
+    );
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Warning);
+    // Clearing that URI's diagnostics reverts to the last ProjectStatus (spec: `warning`
+    // "partly functional", not a permanent state).
+    jdtls_diagnostics(&mut client, "file:///fixture", None);
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Ok);
+    client.shutdown();
+}
+
+#[test]
+fn jdtls_java_diagnostics_are_ignored() {
+    let (mut client, _) = jdtls_client();
+    jdtls_status(&mut client, "ProjectStatus", "OK");
+    client.await_state_changed();
+    jdtls_diagnostics(
+        &mut client,
+        "file:///fixture/src/app/F0.java",
+        Some("cannot find symbol"),
+    );
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "a .java file's own diagnostics are not the project-URI health signal"
+    );
+    assert_eq!(client.server_state().health, Health::Ok);
+    client.shutdown();
+}
+
+#[test]
+fn jdtls_health_and_readiness_changes_preserve_each_other() {
+    let (mut client, _) = jdtls_client();
+    jdtls_status(&mut client, "ServiceReady", "ServiceReady");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(state.health, Health::Unknown);
+    // A health change afterward must not move readiness back.
+    jdtls_status(&mut client, "ProjectStatus", "WARNING");
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Warning);
+    assert_eq!(
+        state.readiness,
+        Readiness::Ready,
+        "health change moved readiness"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn jdtls_does_not_predict_from_document_or_watched_file_changes() {
+    let (mut client, _) = jdtls_client();
+    jdtls_status(&mut client, "ServiceReady", "ServiceReady");
+    client.await_state_changed();
+    client.did_change(
+        &std::path::PathBuf::from("/fake/src/app/F0.java"),
+        2,
+        "package app;\n",
+    );
+    client.did_change_watched_files(&[(&std::path::PathBuf::from("/fake/src/app/G.java"), 2)]);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "predicted a state change from a didChange or a watched-file change; the server itself \
+         holds requests until the index is ready, so there is nothing to predict"
+    );
+    client.shutdown();
+}
+
+/// Gate (spec chapter 9) holds this on the client's behalf because it does not declare the
+/// protocol itself; the readiness that drives the hold comes from the jdtls mapping's
+/// `language/status` tracking. `--references-depend-on-readiness` makes the fake upstream's own
+/// answer depend on ITS OWN state (default "ready"), so a non-empty answer arriving only after
+/// `ServiceReady` shows the request really was held, not merely delayed.
+#[test]
+fn jdtls_holds_references_until_service_ready() {
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "JDT Language Server (Standard)",
+        &[
+            "--server-version",
+            "1.60.0-SNAPSHOT",
+            "--references-depend-on-readiness",
+        ],
+    );
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(false);
+    let id = client.send_references();
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "forwarded references before ServiceReady"
+    );
+    jdtls_status(&mut client, "ServiceReady", "ServiceReady");
+    let response = client.await_response_to(id);
+    assert!(
+        !response["result"]
+            .as_array()
+            .expect("references answers an array")
+            .is_empty(),
+        "did not release the hold once ready: {response}"
+    );
+    client.shutdown();
+}

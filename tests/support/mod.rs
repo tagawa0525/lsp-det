@@ -157,6 +157,17 @@ impl ServerUnderTest {
         )
     }
 
+    /// A fake upstream that calls itself "JDT Language Server (Standard)" version
+    /// "1.60.0-SNAPSHOT" (as the real jdtls does in `serverInfo`) + lsp-det. lsp-det selects the
+    /// jdtls mapping and, for this version, declares the guarantee (M23,
+    /// research/jdtls-readiness-measurement.md).
+    pub fn lsp_det_with_fake_jdtls() -> Self {
+        Self::lsp_det_with_upstream(
+            "JDT Language Server (Standard)",
+            &["--server-version", "1.60.0-SNAPSHOT"],
+        )
+    }
+
     /// A fake upstream conformant to this protocol + lsp-det. The upstream side becomes the
     /// identity mapping, and the downstream side reads the upstream's state across the boundary
     /// (design 4.1).

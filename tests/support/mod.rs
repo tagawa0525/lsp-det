@@ -72,6 +72,19 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("Expert", &[])
     }
 
+    /// A fake upstream that returns no `serverInfo` and calls itself Nextflow's language server
+    /// only through `executeCommandProvider.commands` (as the real one does) + lsp-det. lsp-det
+    /// selects the Nextflow mapping (M12).
+    pub fn lsp_det_with_fake_nextflow() -> Self {
+        Self::lsp_det_with_upstream(
+            "none",
+            &[
+                "--execute-commands",
+                "nextflow.server.previewDag,nextflow.server.previewWorkspace",
+            ],
+        )
+    }
+
     /// A fake upstream that plays pyright + lsp-det. pyright returns no `serverInfo`, so what the
     /// server calls itself comes only from the startup log (ADR 0011 decision A-2). lsp-det
     /// selects the pyright mapping.
@@ -1208,6 +1221,55 @@ impl Drop for TempMixProject {
     }
 }
 
+/// A temporary Nextflow pipeline. `main.nf` includes and calls `GREET` from `modules/greet.nf`
+/// (M12, Nextflow's language server).
+pub struct TempNextflowProject {
+    pub root: PathBuf,
+}
+
+impl TempNextflowProject {
+    /// Only `nextflow.config`: nothing for the server to scan.
+    pub fn without_scripts(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-nextflow-{tag}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("modules")).expect("cannot create the temporary project");
+        std::fs::write(root.join("nextflow.config"), NF_CONFIG).unwrap();
+        TempNextflowProject { root }
+    }
+
+    pub fn with_cross_file_reference(tag: &str) -> Self {
+        let project = Self::without_scripts(tag);
+        std::fs::write(project.root.join("main.nf"), NF_MAIN).unwrap();
+        std::fs::write(project.root.join("modules/greet.nf"), NF_GREET).unwrap();
+        project
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+
+    /// `n` more scripts, each including `GREET` and calling it once.
+    pub fn with_many_calls(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        for i in 0..n {
+            std::fs::write(
+                project.root.join(format!("w_{i:03}.nf")),
+                format!("include {{ GREET }} from './modules/greet.nf'\n\nworkflow W{i} {{\n    GREET(channel.of('x'))\n}}\n"),
+            )
+            .unwrap();
+        }
+        project
+    }
+}
+
+impl Drop for TempNextflowProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// Sends SIGKILL (TerminateProcess on Windows) to the descendants of `pid` whose command line
 /// contains `needle`. Used to bring down the tsserver (a grandchild process) of a real
 /// typescript-language-server. Returns the pids that were killed.
@@ -1414,6 +1476,17 @@ pub const MIX_EXS: &str = "defmodule Fixture.MixProject do\n  use Mix.Project\n\
 pub const EX_A: &str = "defmodule A do\n  def target, do: 1\nend\n";
 /// The call is on line 2 (0-based: line 1).
 pub const EX_B_WITH_CALL: &str = "defmodule B do\n  def x, do: A.target()\nend\n";
+pub const NF_CONFIG: &str = "nextflow.enable.dsl = 2\n";
+/// The position of `GREET` in its declaration in `modules/greet.nf` (line, character).
+pub const NF_GREET_DECLARATION: (u32, u32) = (0, 8);
+pub const NF_GREET: &str = "process GREET {\n    input:\n    val name\n    output:\n    stdout\n    script:\n    \"\"\"\n    echo hello $name\n    \"\"\"\n}\n";
+/// `main.nf` includes `GREET` (line 0) and calls it (line 3).
+pub const NF_MAIN: &str =
+    "include { GREET } from './modules/greet.nf'\n\nworkflow {\n    GREET(channel.of('a'))\n}\n";
+pub const NF_MAIN_WITHOUT_CALL: &str =
+    "include { GREET } from './modules/greet.nf'\n\nworkflow {\n    channel.of('a')\n}\n";
+/// The line of the call in [`NF_MAIN`].
+pub const NF_MAIN_CALL_LINE: u64 = 3;
 pub const EX_B_WITHOUT_CALL: &str = "defmodule B do\n  def x, do: 1\nend\n";
 
 pub const SCALA_PROJECT: &str = "//> using scala 3.3.4\n";

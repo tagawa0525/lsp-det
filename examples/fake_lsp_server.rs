@@ -35,6 +35,8 @@
 //! - `--startup-log <message>`: right after startup (before reading `initialize`), sends
 //!   `message` via `window/logMessage` (type 3). Reproduces the pyright family's
 //!   "Pyright language server 1.1.412 starting" self-identification
+//! - `--execute-commands <a,b>`: the `executeCommandProvider.commands` it declares (Nextflow's
+//!   language server calls itself only through them and returns no `serverInfo`)
 //! - `--server-version <version>`: the version it calls itself in `serverInfo.version`.
 //!   Default is `1.98.0 (fake)` (within the range of versions for which the rust-analyzer
 //!   mapping passed the conformance tests). Passing `none` omits version
@@ -106,6 +108,11 @@ fn main() {
     let startup_typescript_version = flags
         .iter()
         .position(|flag| flag == "--startup-typescript-version")
+        .and_then(|i| flags.get(i + 1))
+        .cloned();
+    let execute_commands = flags
+        .iter()
+        .position(|flag| flag == "--execute-commands")
         .and_then(|i| flags.get(i + 1))
         .cloned();
     let mut progress_create_answered = false;
@@ -217,6 +224,10 @@ fn main() {
                         "experimental": experimental
                     }
                 });
+                if let Some(commands) = &execute_commands {
+                    result["capabilities"]["executeCommandProvider"] =
+                        json!({"commands": commands.split(',').collect::<Vec<_>>()});
+                }
                 if server_name != "none" {
                     result["serverInfo"] = if server_version == "none" {
                         json!({"name": server_name})

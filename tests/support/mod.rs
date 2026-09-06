@@ -130,6 +130,13 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("none", &[])
     }
 
+    /// A fake upstream that returns no `serverInfo` and calls itself Gleam only through the
+    /// `$/progress` begin title "Downloading Gleam dependencies" (as the real one does) +
+    /// lsp-det. lsp-det selects the Gleam mapping (M19).
+    pub fn lsp_det_with_fake_gleam() -> Self {
+        Self::lsp_det_with_upstream("none", &[])
+    }
+
     /// A fake upstream conformant to this protocol + lsp-det. The upstream side becomes the
     /// identity mapping, and the downstream side reads the upstream's state across the boundary
     /// (design 4.1).
@@ -1363,6 +1370,36 @@ impl Drop for TempPyreflyProject {
     }
 }
 
+/// A temporary Gleam project. `b.gleam` calls `a.target` (M19, Gleam).
+pub struct TempGleamProject {
+    pub root: PathBuf,
+}
+
+impl TempGleamProject {
+    pub fn with_cross_file_reference(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-gleam-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("cannot create the temporary project");
+        std::fs::write(root.join("gleam.toml"), GLEAM_TOML).unwrap();
+        std::fs::write(root.join("src/a.gleam"), GLEAM_A).unwrap();
+        std::fs::write(root.join("src/b.gleam"), GLEAM_B_WITH_CALL).unwrap();
+        TempGleamProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempGleamProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// Sends SIGKILL (TerminateProcess on Windows) to the descendants of `pid` whose command line
 /// contains `needle`. Used to bring down the tsserver (a grandchild process) of a real
 /// typescript-language-server. Returns the pids that were killed.
@@ -1575,6 +1612,13 @@ pub const PYREFLY_A: &str = "def target() -> int:\n    return 1\n";
 pub const PYREFLY_B: &str =
     "from pkg.a import target\n\n\ndef x() -> int:\n    return target() + 1\n";
 pub const PYREFLY_TARGET_DECLARATION: (u32, u32) = (0, 4);
+pub const GLEAM_TOML: &str =
+    "name = \"fixture\"\nversion = \"0.1.0\"\ntarget = \"erlang\"\n\n[dependencies]\n";
+/// `target` is declared on line 0 (character 7).
+pub const GLEAM_A: &str = "pub fn target() -> Int {\n  1\n}\n";
+pub const GLEAM_B_WITH_CALL: &str = "import a\n\npub fn x() -> Int {\n  a.target() + 1\n}\n";
+pub const GLEAM_B_WITH_TWO_CALLS: &str = "import a\n\npub fn x() -> Int {\n  a.target() + 1\n}\n\npub fn y() -> Int {\n  a.target()\n}\n";
+pub const GLEAM_TARGET_DECLARATION: (u32, u32) = (0, 7);
 pub const HS_CABAL: &str = "cabal-version:      2.4\nname:               fixture\nversion:            0.1.0.0\nbuild-type:         Simple\n\nlibrary\n    exposed-modules:  A, B\n    build-depends:    base\n    hs-source-dirs:   src\n    default-language: Haskell2010\n";
 pub const HS_HIE_YAML: &str = "cradle:\n  cabal:\n";
 pub const HS_HIE_YAML_BROKEN: &str = "cradle:\n  cabal:\n    component: \"lib:doesnotexist\"\n";

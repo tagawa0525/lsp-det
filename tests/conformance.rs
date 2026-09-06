@@ -2764,98 +2764,27 @@ fn real_expert(project: &support::TempMixProject) -> ServerUnderTest {
     }
 }
 
-/// Returns only the references to `target` in `lib/a.ex` that point at `file`.
-fn ex_references_in(
-    client: &mut ConformanceClient,
-    a: &std::path::Path,
-    file: &std::path::Path,
-) -> Vec<Value> {
-    let wanted = support::file_uri(file);
-    client
-        .references(a, 1, 6)
-        .into_iter()
-        .filter(|location| location["uri"] == Value::String(wanted.clone()))
-        .collect()
-}
-
 /// Via Expert. Observes the transition from initializing to ready.
 #[test]
 #[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn expert_spec_7_1_through_lsp_det_with_real_expert() {
     let project = support::TempMixProject::with_cross_file_reference("readiness");
     let mut client = ConformanceClient::start(&real_expert(&project));
-    client.initialize_with_root(true, &project.root);
+    let result = client.initialize_with_root(true, &project.root);
+    // No guarantee for Expert: after "Loading search index" a fresh project may still be
+    // about to rebuild the index, with empty answers in between and no signal
+    // (research/expert-readiness-measurement.md). 7.2 / 7.3 are therefore not run.
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee Expert's vocabulary cannot keep: {result}"
+    );
     assert_ne!(client.server_state().readiness, Readiness::Ready);
     client.wait_until_ready();
     assert_eq!(
         client.server_state().health,
         Health::Unknown,
         "Expert has no health signal"
-    );
-    client.shutdown();
-}
-
-/// Measures 7.2 coverage against real Expert.
-#[test]
-#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
-fn expert_spec_7_2_coverage_through_lsp_det_with_real_expert() {
-    let project = support::TempMixProject::with_cross_file_reference("coverage");
-    let a = project.file("lib/a.ex");
-    let b = project.file("lib/b.ex");
-    let mut client = ConformanceClient::start(&real_expert(&project));
-    client.initialize_with_root(true, &project.root);
-    client.did_open(&a, "elixir");
-    client.wait_until_ready();
-    let found = ex_references_in(&mut client, &a, &b);
-    assert!(
-        found
-            .iter()
-            .any(|location| location["range"]["start"]["line"] == 1),
-        "missed the reference in lib/b.ex while declaring ready (coverage violation): {found:#?}"
-    );
-    client.shutdown();
-}
-
-/// Measures the `workspace/symbol` cap of real Expert.
-#[test]
-#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
-fn spec_7_2_2_expert_workspace_symbol_count() {
-    let project = support::TempMixProject::with_many_symbols("limit", 300);
-    let mut client = ConformanceClient::start(&real_expert(&project));
-    client.initialize_with_root(true, &project.root);
-    client.did_open(&project.file("lib/a.ex"), "elixir");
-    client.wait_until_ready();
-    assert_eq!(
-        workspace_symbol_count_through(&mut client),
-        300,
-        "capped even though it is not listed under incomplete"
-    );
-    client.shutdown();
-}
-
-/// Measures 7.3 item 1 (didChange, cross-file) against real Expert.
-#[test]
-#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
-fn expert_spec_7_3_cross_file_freshness_through_lsp_det_with_real_expert() {
-    let project = support::TempMixProject::with_cross_file_reference("freshness");
-    let a = project.file("lib/a.ex");
-    let b = project.file("lib/b.ex");
-    let mut client = ConformanceClient::start(&real_expert(&project));
-    client.initialize_with_root(true, &project.root);
-    client.did_open(&a, "elixir");
-    client.did_open(&b, "elixir");
-    client.wait_until_ready();
-    let before = ex_references_in(&mut client, &a, &b);
-    assert!(
-        !before.is_empty(),
-        "the premise is broken: a reference from lib/b.ex should be visible"
-    );
-    client.did_change(&b, 2, support::EX_B_WITHOUT_CALL);
-    assert_eq!(client.server_state().readiness, Readiness::Ready);
-    let after = ex_references_in(&mut client, &a, &b);
-    assert!(
-        after.is_empty(),
-        "returned a reference that should have been removed while declaring ready (freshness violation): {after:#?}"
     );
     client.shutdown();
 }

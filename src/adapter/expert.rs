@@ -21,8 +21,15 @@
 //! logging that it ignored the request; the hold during `initializing` / `indexing` is what
 //! removes that lie.
 //!
-//! `coverage` / `freshness` are declared only for versions ([`TESTED_VERSIONS`]) for which
-//! conformance tests 7.2 / 7.3 were run against a real Expert and passed (spec 8.2 item 5).
+//! **No guarantee is declared for any version** (`serverStateProvider: {}`). After a build,
+//! Expert loads the persisted search index ("Loading search index") and, only if that index
+//! is empty or stale, rebuilds it ("Indexing source code") about 50 ms later; in between, a
+//! fresh project answers `references` and `workspace/symbol` with empty results. Nothing in
+//! Expert's vocabulary tells the observer at the end of the load whether a rebuild follows
+//! (the "backend reports empty / stale" log stays inside the engine), so an observer cannot
+//! promise `coverage` at `ready` without a clock. The readiness mapping still removes the
+//! 25-second stretch of empty answers before the engine is up. [`TESTED_VERSIONS`] stays
+//! empty until Expert exposes the decision (spec 8.2 item 5).
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -39,8 +46,10 @@ const INDEXING_TITLE: &str = "Indexing source code";
 const LOADING_INDEX_TITLE: &str = "Loading search index";
 
 /// Versions for which conformance tests 7.2 / 7.3 were run against a real Expert and passed.
-/// Matched by exact equality against `serverInfo.version`. Empty until the tests have passed
-/// (declaring a guarantee that cannot be kept violates spec 5.1).
+/// Empty, and it stays empty with 0.1.9: the window between "Loading search index" and a
+/// following "Indexing source code" (see the module documentation) makes 7.2 fail on a fresh
+/// project, and no signal closes it (declaring a guarantee that cannot be kept violates
+/// spec 5.1).
 pub const TESTED_VERSIONS: &[&str] = &[];
 
 #[derive(Debug, Deserialize)]

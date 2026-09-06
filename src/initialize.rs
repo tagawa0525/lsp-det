@@ -567,9 +567,10 @@ mod tests {
 
     #[test]
     fn a_non_object_capabilities_is_unrewritable() {
+        // `experimental: null` is not in this list: it counts as absent (Expert returns it).
         for body in [
             r#"{"id":1,"result":{"capabilities":"nonsense"}}"#,
-            r#"{"id":1,"result":{"capabilities":{"experimental":null}}}"#,
+            r#"{"id":1,"result":{"capabilities":{"experimental":"nonsense"}}}"#,
         ] {
             assert_eq!(
                 declare_server_state_provider(

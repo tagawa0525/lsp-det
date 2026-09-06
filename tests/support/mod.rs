@@ -862,6 +862,18 @@ impl ConformanceClient {
         self.notify("exit", json!(null));
     }
 
+    /// The subject's stderr, read to EOF after it has exited. Call after `shutdown()`; reading
+    /// against a live subject would hang. The upstream's stderr is relayed through lsp-det, so
+    /// the text contains both.
+    pub fn stderr_after_exit(&mut self) -> String {
+        let _ = self.child.wait();
+        let mut log = String::new();
+        if let Some(mut stderr) = self.stderr.take() {
+            let _ = stderr.read_to_string(&mut log);
+        }
+        log
+    }
+
     fn send(&mut self, value: Value) {
         let body = serde_json::to_vec(&value).expect("client payloads are serializable");
         if let Err(err) = framing::write_message(&mut self.stdin, &RawMessage { body }) {

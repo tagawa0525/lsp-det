@@ -4,13 +4,21 @@
 
 ## 予定
 
-- 0.4.0（ADR 0019、M8〜M20）: コーパス（済み）と devShell の分割（済み）、反例の実サーバーでの検証 10（Metals、Elixir、Kotlin、Nextflow、haskell-language-server、pyrefly、crystalline、sourcekit-lsp、Gleam、Haxe）、相方サーバーとの合成の測定（Vue）
 - 0.5.0: Dart、Sorbet、jdtls、clangd（着手時に ADR）
 - 外向きの提出は 0.5.0 の後、`docs/upstream-submissions.md` の順で。typescript-language-server の不具合修正 PR、Claude Code への報告（既存 issue 3 件へのコメントと新規 2 件）、Serena の不具合と提案、fork の 4 パッチ
 
-## 未リリース
+## 0.4.0（2026-09-06）
 
-外部レビュー（ADR 0018、2026-09-06）への対応。保留の開始と解放を理由付きで stderr に出す（決定 A-1、PR #49）。ドッグフーディング第 6 回で実害の一事例を記録（A-2）。仕様 10 章に Dart / Sorbet の行と、gopls #1200 の一次資料（A-3、A-4、PR #50）。提出メモに「上流は未試行」の前提（A-6、PR #47）。M9 Metals の写像（`coverage` あり、`freshness.fileChanges` は空。コーパスの「時間でしか終わりを言えない」を実測で覆した）。M10 Expert（Elixir）の写像（readiness のみ。保証は宣言できない）。M12 Nextflow の言語サーバーの写像（readiness のみ。走査の完了を示す信号がなく、観測者が `workspaceFolders` を歩いて走査の集合を再現する。`serverInfo` がなく版が語彙に現れないので保証は宣言しない。識別は `executeCommandProvider.commands`）。M11 Kotlin（JetBrains kotlin-lsp）は最新 release が期限切れで起動せず、次の release まで保留。M15 haskell-language-server の写像（readiness は `unknown`。`$/progress` は lsp ライブラリの 1 秒の抑制でほぼ出ず、索引中の `references` は増え続ける部分応答。health は cradle の診断から）。M13 Vue の合成の測定（決定 B-5 のとおり、横断の答えを出す tsls の接続の保留だけで完全。`docs/research/vue-composition-measurement.md`、vision に記載）。M16 pyrefly（写像なし。起動時の索引は stderr にしか出ず、"Rechecking" は開いているファイルの型検査だけ。両軸 `unknown`）。M17 crystalline の写像（readiness は起動ログ "LSP server is ready." から。lsp-det の 2 つの直し: `InitializeResult` の `experimental: null` を欠落と同じに扱う、準拠テストのクライアントがサーバーからの要求に応答する。M18 sourcekit-lsp は nixpkgs が 5.10.1 で `backgroundIndexing`（6.0 以降）を測れず保留（`docs/research/sourcekit-lsp-readiness-measurement.md`）。M19 Gleam の写像（readiness のみ。依存ダウンロードの `$/progress` はダウンロードするものがなくても `initialized` の直後に必ず begin → end するので、コーパスの「信号の不在の曖昧さ」は成り立たない。`gleam.toml` の変更でエンジンを作り直した後 `references` が空になる不具合があり、版もプロトコルに現れないので保証は宣言しない）。M20 haxe-language-server の写像（起動系の `$/progress` タイトル 3 つで readiness、`window/showMessage` と "Haxe connected!" で health。`serverInfo` がなく名乗りは `workspace/didChangeConfiguration` の後の `window/logMessage` だけ。版が語彙に現れないので保証は宣言しない）。
+外部レビュー（ADR 0018）への対応と、コーパスの反例を実サーバーで検証する ADR 0019 のバッチ。写像を 7 つ足し、2 つは「写像を書かない」が正直な答えだと確かめ、2 つは入手できる版の都合で保留にした。
+
+- **ADR 0018**（2026-09-06）: 外部レビューの採否。保留の開始と解放を理由付きで stderr に出す（A-1、PR #49）。ドッグフーディング第 6 回で実害の一事例を記録（A-2）。仕様 10 章に Dart / Sorbet の行と gopls #1200 の一次資料（A-3、A-4、PR #50）。提出メモに「上流は未試行」の前提（A-6）。信号は他の実装から推測しない（C）。外向きの提出は 0.5.0 の後（D）
+- **ADR 0019**（2026-09-06、追補で 11 言語に確定）: devShell を `default`（道具だけ）と `servers`（言語サーバー全部）に分ける（M14）。Serena の 70 サーバーの readiness の語彙をコーパスにし、全部が 4 値に写り新しい値は要らないと確かめる（M8、`docs/research/readiness-vocabulary-corpus.md`）
+- **写像を足したもの**: Metals（M9。`coverage` あり、`freshness.fileChanges` は空。「時間でしか終わりを言えない」を覆した）、Expert（M10。readiness のみ）、Nextflow の言語サーバー（M12。走査の完了を示す信号がなく、観測者が `workspaceFolders` を歩いて走査の集合を再現する）、haskell-language-server（M15。readiness は `unknown`。`$/progress` は lsp ライブラリの 1 秒の抑制でほぼ出ず、索引中の `references` は増え続ける。health は cradle の診断から）、crystalline（M17。readiness は起動ログ "LSP server is ready."）、Gleam（M19。依存ダウンロードのトークンはダウンロードするものがなくても出る）、haxe-language-server（M20。起動系の title 3 つで readiness、`window/showMessage` と "Haxe connected!" で health）。`serverInfo` のないサーバーを `InitializeResult` の `executeCommandProvider.commands` や起動時の通知で識別する経路を足した。版が語彙に現れないサーバー（Nextflow、HLS、crystalline、Gleam、Haxe）には保証を宣言しない
+- **写像を書かなかったもの**: pyrefly（M16。起動時の索引は stderr にしか出ず両軸 `unknown`）。Vue（M13。相方サーバーとの合成は決定 B-5 のとおりクライアントの責務で、横断の答えを出す tsls の接続の保留だけで完全。vision に記載）
+- **保留**: Kotlin（M11。JetBrains kotlin-lsp の最新 release が期限切れで起動しない）、sourcekit-lsp（M18。nixpkgs は 5.10.1 で `backgroundIndexing` は 6.0 以降。`libIndexStore.so` がなく索引を読めない）
+- **lsp-det の直し**: `InitializeResult` の `experimental: null` を欠落と同じに扱う。`didOpen` / `didClose` も写像に見せる。準拠テストのクライアントがサーバーからの要求に応答し、通知が来ないときは被験体の stderr を出す
+- **実測の記録**: `docs/research/` に 9 本（metals、expert、nextflow、haskell-language-server、pyrefly、crystalline、sourcekit-lsp、gleam、haxe-language-server の readiness、vue の合成）。上流への提出候補は `docs/upstream-submissions.md` に 6 サーバー分を追記（提出は 0.5.0 の後）
+- 実サーバーの結合テストは 48 件（直列で全部通過。並列では tsls の 7.3 の Changed が負荷で揺れることがある）
 
 ## 0.3.0（2026-09-06）
 

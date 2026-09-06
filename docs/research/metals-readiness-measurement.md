@@ -43,12 +43,29 @@ ADR 0019 決定 F の M9。コーパス（[readiness-vocabulary-corpus.md](readi
 
 ### 再インデックス
 
-| 引き金（`ready` 後）                                       | 信号                                                                                                                                                                                                                | 結果                                                                                            |
-| ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `C.scala` を作って Created（走行 2、2.606 秒）             | 0.145 秒後に "Compiling" begin → 初回の "Indexing" end（2.951）→ "Loading presentation compiler" → "Compiling" end / 再 begin（3.080）→ end（3.129）→ "Importing build"（3.133〜3.143）→ "Indexing"（3.144〜3.816） | 3.816 の後の `references` が `B.scala` と `C.scala` の 2 件（4.620 秒）。Created は織り込まれる |
-| `project.scala` に依存を足して Changed（走行 4、2.704 秒） | 初回の "Indexing" end（2.846）→ " Indexing complete!"（2.847。誤り）→ **0.33 秒の隙間** → "Importing build"（3.179〜3.207）→ "Indexing"（3.207〜3.929）と "Compiling"（3.215〜3.609）                               | 再取り込み中の 0.33 秒、未完了トークンは 0                                                      |
+| 引き金（`ready` 後）                                                              | 信号                                                                                                                                                                                                                | 結果                                                                                            |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `C.scala` を作って Created（走行 2、2.606 秒）                                    | 0.145 秒後に "Compiling" begin → 初回の "Indexing" end（2.951）→ "Loading presentation compiler" → "Compiling" end / 再 begin（3.080）→ end（3.129）→ "Importing build"（3.133〜3.143）→ "Indexing"（3.144〜3.816） | 3.816 の後の `references` が `B.scala` と `C.scala` の 2 件（4.620 秒）。Created は織り込まれる |
+| `B.scala`（開いていない）に参照を足して Changed（走行 6、lsp-det 越し、2.288 秒） | 0.07 秒後に "Compiling" begin → end。**取り込みの round（Importing build → Indexing）は来ない**                                                                                                                     | 走行 7（直、下記）で反映の時点を測る                                                            |
+| `project.scala` に依存を足して Changed（走行 4、2.704 秒）                        | 初回の "Indexing" end（2.846）→ " Indexing complete!"（2.847。誤り）→ **0.33 秒の隙間** → "Importing build"（3.179〜3.207）→ "Indexing"（3.207〜3.929）と "Compiling"（3.215〜3.609）                               | 再取り込み中の 0.33 秒、未完了トークンは 0                                                      |
 
-通知から最初のトークンの begin までに 0.15〜0.33 秒の隙間がある。その間の問い合わせが古い答えになるかは測っていない（7.3 の 3 の実サーバーテストが確かめる）。
+通知から最初のトークンの begin までに 0.15〜0.33 秒の隙間がある。
+
+### コンパイル後の索引の更新には信号がない（走行 7、8）
+
+開いていない `B.scala` に参照を足して Changed を送り、references を 0.5 秒（走行 7）と 0.1 秒（走行 8）ごとに問うた。
+
+| 時刻（走行 8、秒） | 出来事                                                                             |
+| ------------------ | ---------------------------------------------------------------------------------- |
+| 2.197              | `B.scala` を書き換え、Changed を送る                                               |
+| 2.284              | "Compiling" begin                                                                  |
+| 2.315              | references → **0 件**（変更前は 1 件。変更されたファイルの結果を Metals が落とす） |
+| 2.352              | "Compiling" end                                                                    |
+| 2.454              | references → 2 件（新しい答え）                                                    |
+
+"Compiling" の end の後、semanticdb の索引の更新が終わるまでに 0.1 秒の窓があり、その間の references は 0 件（空の成功応答）を返す。Metals のソース（`ForwardingMetalsBuildClient.buildTaskFinish`）では、compile の終了で診断と module status を更新してから `didCompile` で索引を更新する順で、索引の更新の完了を伝える通知はない。走行 6 では lsp-det 越しに同じ操作をし、"Compiling" の end で `ready` に戻した直後の 7.3 の 2 の実サーバーテストが 0 件を受け取って失敗した。
+
+したがって **`freshness.fileChanges` には Changed / Created / Deleted のどれも入れられない**（`fileChanges: []`。`didChange` は presentation compiler が織り込み、7.3 の 1 は通る）。先読み（Changed で `indexing`、"Compiling" の end で `ready`）は、compile の間の空応答を止める分だけ効くので残す。
 
 ### 壊れたビルド定義（走行 5）
 
@@ -60,11 +77,11 @@ ADR 0019 決定 F の M9。コーパス（[readiness-vocabulary-corpus.md](readi
 
 ## 写像（設計）
 
-- **readiness**: `initialize` 直後は `initializing`。"Importing build"、"Indexing"、"Compiling "（前方一致）、"* bspConfig"（後方一致）の begin で `indexing`。**ready の条件は「未完了トークンが 0」かつ「直近に end したトークンが "Indexing"」**。これで初回の隙間（"Indexing" がまだ一度も end していない）と、再取り込みの途中の隙間（直近の end が "Compiling" や "Importing build"）の両方で `ready` を名乗らない。"Loading presentation compiler" は readiness に写さない（1 ms で閉じるリクエスト処理相当）
-- **先読み**（ADR 0014 追補 決定 D と同じ）: クライアントの `workspace/didChangeWatchedFiles` で `.scala` / `.sc` / `.sbt` / `project.scala` / `build.sbt` / `build.mill` の Created / Changed / Deleted を見たら `indexing` にし、次の "Indexing" の end で戻す。通知から最初の begin までの 0.15〜0.33 秒の隙間を埋める
+- **readiness**: `initialize` 直後は `initializing`。"Importing build"、"Indexing"、"Compiling "（前方一致）、"* bspConfig"（後方一致）の begin で `indexing`。ready の条件は「未完了トークンが 0」に加えて、直近に end したトークンの種類で決める。**初回の取り込みは "Indexing" の end で初めて完了**とし（それまでの隙間で `ready` を名乗らない）、"Importing build" と "bspConfig" の end 単独では `ready` にしない（数 ms 後に "Indexing" が続く）。**取り込みの後は "Compiling" の end も `ready`** にする。ソースの変更は "Compiling" だけを走らせ、取り込みの round は来ない（走行 6: 直近の end が "Indexing" であることを条件にすると永久に保留し、lsp-det 越しの probe で 31 件が `shutdown` まで保留された）。"Loading presentation compiler" は readiness に写さない（1 ms で閉じるリクエスト処理相当）
+- **先読み**（ADR 0014 追補 決定 D と同じ）: クライアントの `workspace/didChangeWatchedFiles` を変更の種類で分ける。ソース（`.scala` / `.sc`）の Changed は次の "Compiling"（または "Indexing"）の end で戻す。ソースの Created / Deleted と build ファイル（`project.scala`、`*.sbt`、`build.mill` / `build.sc`）の変更はビルドを変えるので、次の "Indexing" の end でだけ戻す（走行 2: Compiling → Importing build → Indexing の後に新しい答え）。通知から最初の begin までの 0.15〜0.33 秒の隙間を埋める
 - **health**: `metals/status`（module）の `level` から。`error` → `error`（message は `tooltip` か `text`）、`warn` → `warning`、`info` → `ok`。最初の module status までは `unknown`
 - **時間は使わない**。Serena の静穏期間は要らない
-- **coverage / freshness**: 7.2 / 7.3 の実サーバーテストで決める。`didChange`（保存なし）を織り込むかは Metals の presentation compiler の挙動次第で、織り込まなければ `freshness` は宣言できない
+- **coverage / freshness**: 7.2（通過）と 7.3 の 1（通過。`didChange` は presentation compiler が織り込む）から `coverage: {scope: "workspace", incomplete: {…}}` と `freshness: {fileChanges: []}`。`workspace/symbol` の上限は 7.2 の 2 で測る。監視対象の変更は上の窓のため入れない
 
 ## コーパスへの反映
 

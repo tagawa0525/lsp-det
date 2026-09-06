@@ -52,13 +52,21 @@ ADR 0019 決定 F の M10。コーパス（[readiness-vocabulary-corpus.md](read
 
 `didOpen` を送らずに `lib/a.ex` の位置で `references` を問うと、索引の後も空配列（60 回）。問い合わせ元の文書は開いていなければならない。これは readiness ではなくリクエスト単位の挙動で、写像には関係しない（準拠テストは開いてから問う）。
 
+### 索引の読み込みと再索引の間の窓（走行 9）
+
+`lsp-det` 越しに 0.1 秒間隔で問うた。"Building" の後、Expert はまず保存された索引を読み込み（"Loading search index"、2.479 秒）、その索引が空か古ければ 52 ms 後に "Indexing source code"（2.531〜2.549 秒）を走らせる。新しい被験体では索引が空なので必ず後者が続き、**その 52 ms の間、`references` は空配列、`workspace/symbol` は 0 件**を返す。再索引が要るかはエンジン内のログ（"backend reports empty / stale"、`apps/expert/lib/expert/search/store/state.ex`）でしか分からず、クライアントには届かない（"Search index is loading for …" の `showMessage` は再索引の begin と同時）。
+
+同じ被験体を再び開く（走行 6）と "Loading search index" だけで再索引は来ない。"Loading search index" の end で `ready` にしなければ永久に保留し、`ready` にすれば新しい被験体で 52 ms の窓が空く。窓を閉じる信号がないので、**観測者は Expert に `coverage` を宣言できない**（7.2 が新しい被験体で落ちる）。readiness の写像は、エンジンの起動前の 25 秒の空応答を止める分で価値がある。
+
+なお、エンジンの起動前の `workspace/symbol` は `-32603 {:erpc, :noconnection}` のエラーで、`references` の空配列と違って嘘ではない。
+
 ## 写像（設計）
 
 - **readiness**: `initialize` 直後は `initializing`。"… Starting engine node"、"… Preparing engine"（後方一致）、"Building "（前方一致）、"Indexing source code"、"Loading search index" の begin で `indexing`。ready の条件は「未完了トークンが 0」かつ「直近に end したトークンが索引の段階（"Indexing source code" または "Loading search index"）」。エンジンの起動とビルドの間の 1 秒の隙間（直近の end が "Starting engine node"）で `ready` を名乗らない。"Finding Completion Candidates" はリクエスト処理で写さない。走行 6 で "Loading search index" を無視していたため lsp-det が `indexing` に留まり続け、実サーバーテストが 4 件とも 30 秒で失敗した
 - **先読みはしない**。監視対象の変更を Expert が取り込まないので、取り込みの完了信号がなく、先読みすると永久に保留する（ADR 0014 追補 決定 D の条件を満たさない）
 - **health**: 信号がなく `unknown`
-- **coverage / freshness**: 7.2 と 7.3 の 1 の実サーバーテストで決める。`fileChanges` は空
+- **coverage / freshness**: 宣言しない（`serverStateProvider: {}`）。上の窓を閉じる信号がなく、7.2 が新しい被験体で落ちる。`TESTED_VERSIONS` は空のまま
 
 ## コーパスへの反映
 
-Elixir の行の「ビルドが `didOpen` まで始まらない」は Serena が古い版（v0.1.0-rc.6）で見た挙動か、Serena 側の都合で、0.1.9 では `initialized` で始まる。疑問は「監視対象の変更を取り込まない」に置き換わる。
+Elixir の行の「ビルドが `didOpen` まで始まらない」は Serena が古い版（v0.1.0-rc.6）で見た挙動か、Serena 側の都合で、0.1.9 では `initialized` で始まる。疑問は「監視対象の変更を取り込まない」と「索引の読み込みの後に再索引が続くかを信号で区別できない」に置き換わる。後者は Gleam の行（信号の不在が済みか未着手か区別できない）と同じ型で、M19 の前に 1 例が取れた。

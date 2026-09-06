@@ -56,14 +56,15 @@ client ──[plain LSP]── downstream side ──[LSP + server state protoco
 
 **The upstream side** stands in for the language server. It selects a mapping by the name the server gives in `InitializeResult.serverInfo` (or, failing that, in its startup log), maps the server's vocabulary onto `ServerState`, and adds `serverStateProvider` to the `InitializeResult`. Guarantees are declared only for versions that passed conformance tests 7.2 and 7.3. If the server speaks the protocol itself, nothing is added and everything passes through.
 
-| Language server            | Readiness signal                                                                                                  | Health signal                          | Versions with guarantees                         |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ------------------------------------------------ |
-| rust-analyzer              | `quiescent` in `experimental/serverStatus`                                                                        | `health` in the same notification      | 1.98.0, 2026-08-03                               |
-| gopls                      | End of the `$/progress` "Setting up workspace"                                                                    | The "Error loading workspace" progress | 0.23.0                                           |
-| pyright / basedpyright     | File enumeration finished in `window/logMessage` (once per folder)                                                | None (`unknown`)                       | pyright 1.1.412, basedpyright 1.39.8             |
-| typescript-language-server | `$/progress` "Initializing JS/TS language features…"                                                              | The "[tsserver] Exited" log → `error`  | TypeScript 5.9.3                                 |
-| Metals                     | `$/progress` "Importing build" / "Indexing" / "Compiling …" (the initial import completes with an "Indexing" end) | `level` of `metals/status` (module)    | 1.6.8 (coverage; freshness for `didChange` only) |
-| Anything else              | None (`unknown` on both axes)                                                                                     |                                        | Not declared                                     |
+| Language server            | Readiness signal                                                                                                  | Health signal                          | Versions with guarantees                                                     |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------- | ---------------------------------------------------------------------------- |
+| rust-analyzer              | `quiescent` in `experimental/serverStatus`                                                                        | `health` in the same notification      | 1.98.0, 2026-08-03                                                           |
+| gopls                      | End of the `$/progress` "Setting up workspace"                                                                    | The "Error loading workspace" progress | 0.23.0                                                                       |
+| pyright / basedpyright     | File enumeration finished in `window/logMessage` (once per folder)                                                | None (`unknown`)                       | pyright 1.1.412, basedpyright 1.39.8                                         |
+| typescript-language-server | `$/progress` "Initializing JS/TS language features…"                                                              | The "[tsserver] Exited" log → `error`  | TypeScript 5.9.3                                                             |
+| Metals                     | `$/progress` "Importing build" / "Indexing" / "Compiling …" (the initial import completes with an "Indexing" end) | `level` of `metals/status` (module)    | 1.6.8 (coverage; freshness for `didChange` only)                             |
+| Expert (Elixir)            | `$/progress` "… Starting engine node" / "Building …" / "Indexing source code" / "Loading search index"            | None (`unknown`)                       | None: the vocabulary cannot tell a loaded index from one about to be rebuilt |
+| Anything else              | None (`unknown` on both axes)                                                                                     |                                        | Not declared                                                                 |
 
 **The downstream side** stands in for the client. If the client declares `experimental.serverState`, the state is forwarded and nothing is held. Otherwise the recommended client behavior of spec chapter 9 is performed on its behalf.
 
@@ -127,14 +128,14 @@ nix develop            # rustc, cargo, clippy, rustfmt: enough to build and run 
 nix develop .#servers  # the same plus rust-analyzer, gopls, pyright, typescript-language-server: for the real-server tests and dogfooding
 cargo build --release  # target/release/lsp-det
 cargo test             # deterministic tests with a fake language server and a fake client
-cargo test --test conformance -- --ignored   # 35 real-server tests (local only, not in CI)
+cargo test --test conformance -- --ignored   # 36 real-server tests (local only, not in CI)
 ```
 
 The tests are the spec made executable. Swapping the subject applies them to real servers and real clients.
 
 | Test                          | Spec chapter         | Subject                                                                                                                        |
 | ----------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `tests/conformance.rs`        | 7, 8.4               | The upstream side of lsp-det, against a fake upstream (`examples/fake_lsp_server.rs`) and five real servers                    |
+| `tests/conformance.rs`        | 7, 8.4               | The upstream side of lsp-det, against a fake upstream (`examples/fake_lsp_server.rs`) and six real servers                     |
 | `tests/client_conformance.rs` | 9.1                  | The downstream side of lsp-det, against a conformant fake upstream and a fake upstream calling itself rust-analyzer            |
 | `tests/process_lifetime.rs`   | Design 4.5           | lsp-det and its upstream exit when the client or lsp-det dies abruptly, on all three OSes in CI                                |
 | `tests/upstream_dev.rs`       | Changes to upstreams | Acceptance criteria for the patches on the upstream forks ([scripts/upstream/README.md](scripts/upstream/README.md), Japanese) |

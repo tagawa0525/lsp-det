@@ -4683,12 +4683,10 @@ fn sorbet_operation(client: &mut ConformanceClient, name: &str, status: &str) {
     );
 }
 
-/// Establishes Sorbet's identity with a request-tied operation. A request-tied operation is
-/// ignored by the mapping regardless of whether it reaches `interpret` at all, so it makes no
-/// difference that the very notification which establishes identity is not itself replayed
-/// through the mapping (`adapter::identity_from_notification`, `Tracker::observe_upstream`).
-/// Every operation asserted on afterward starts counting from a known, empty count of open
-/// operations.
+/// Establishes Sorbet's identity with a request-tied operation. The tracker lets the mapping
+/// read the notification that established identity too (`Tracker::observe_upstream`), and a
+/// request-tied operation is ignored by the mapping, so every operation asserted on afterward
+/// starts counting from a known, empty count of open operations.
 fn sorbet_identify(client: &mut ConformanceClient) {
     sorbet_operation(client, "References", "start");
     let _ = client.upstream_methods_seen();
@@ -4704,8 +4702,9 @@ fn sorbet_is_selected_by_its_notification_and_becomes_ready_after_the_first_roun
     assert_eq!(state.health, Health::Unknown);
 
     // The real startup sequence (research/sorbet-readiness-measurement.md): SlowPathBlocking
-    // wraps Indexing. The very first notification establishes identity and is not itself
-    // replayed through the mapping, so only the three that follow are counted.
+    // wraps Indexing. The very first notification establishes identity AND is read by the
+    // mapping as the outer start (`Tracker::observe_upstream`), so all four are counted and
+    // `ready` comes only at the outer end.
     sorbet_operation(&mut client, "SlowPathBlocking", "start");
     let _ = client.upstream_methods_seen();
     assert_eq!(
@@ -4721,14 +4720,16 @@ fn sorbet_is_selected_by_its_notification_and_becomes_ready_after_the_first_roun
         "still the first round: a nested start does not move past initializing"
     );
     sorbet_operation(&mut client, "Indexing", "end");
+    let _ = client.upstream_methods_seen();
+    assert_eq!(
+        client.server_state().readiness,
+        Readiness::Initializing,
+        "the outer SlowPathBlocking that established identity is still open"
+    );
+    sorbet_operation(&mut client, "SlowPathBlocking", "end");
     let state = client.await_state_changed();
     assert_eq!(state.readiness, Readiness::Ready);
     assert_eq!(state.health, Health::Unknown);
-    sorbet_operation(&mut client, "SlowPathBlocking", "end");
-    assert!(
-        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
-        "an end below the open count must not notify again"
-    );
     client.shutdown();
 }
 

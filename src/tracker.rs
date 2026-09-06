@@ -170,8 +170,13 @@ impl Tracker {
             // before the `initialize` response, and LSP forbids server-to-client notifications
             // (except logMessage etc.) before the response.
             let identity = adapter::identity_from_notification(view, body)?;
-            self.adopt(identity);
-            return None;
+            self.adopt(identity)?;
+            // The announcement itself can be a signal (Sorbet: the first
+            // `sorbet/showOperation` is the outer start of a nested pair). Let the mapping
+            // read it too; a mapping whose announcement is a mere log ignores it.
+            let adapter = self.adapter.as_mut()?;
+            let next = adapter.interpret(view, body)?;
+            return self.apply(next);
         };
         let next = adapter.interpret(view, body)?;
         self.apply(next)

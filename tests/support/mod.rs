@@ -66,6 +66,12 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("Metals", &[])
     }
 
+    /// A fake upstream that calls itself Expert + lsp-det. lsp-det selects the Expert mapping
+    /// (M10, ADR 0019 decision F).
+    pub fn lsp_det_with_fake_expert() -> Self {
+        Self::lsp_det_with_upstream("Expert", &[])
+    }
+
     /// A fake upstream that plays pyright + lsp-det. pyright returns no `serverInfo`, so what the
     /// server calls itself comes only from the startup log (ADR 0011 decision A-2). lsp-det
     /// selects the pyright mapping.
@@ -1126,6 +1132,51 @@ impl Drop for TempScalaProject {
     }
 }
 
+/// A temporary Mix project. `B.x` in `lib/b.ex` calls `A.target` (M10, Expert).
+pub struct TempMixProject {
+    pub root: PathBuf,
+}
+
+impl TempMixProject {
+    pub fn with_cross_file_reference(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-mix-{tag}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("lib")).expect("cannot create the temporary project");
+        std::fs::write(root.join("mix.exs"), MIX_EXS).unwrap();
+        std::fs::write(root.join("lib/a.ex"), EX_A).unwrap();
+        std::fs::write(root.join("lib/b.ex"), EX_B_WITH_CALL).unwrap();
+        TempMixProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+
+    pub fn with_many_symbols(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        for file in 0..3 {
+            let body: String = std::iter::once(format!("defmodule S{file} do\n"))
+                .chain(
+                    (0..n)
+                        .filter(|i| i % 3 == file)
+                        .map(|i| format!("  def wsymprobe{i:03}, do: {i}\n")),
+                )
+                .chain(std::iter::once("end\n".to_string()))
+                .collect();
+            std::fs::write(project.root.join(format!("lib/s{file}.ex")), body).unwrap();
+        }
+        project
+    }
+}
+
+impl Drop for TempMixProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// Sends SIGKILL (TerminateProcess on Windows) to the descendants of `pid` whose command line
 /// contains `needle`. Used to bring down the tsserver (a grandchild process) of a real
 /// typescript-language-server. Returns the pids that were killed.
@@ -1326,6 +1377,13 @@ pub const GO_B_WITHOUT_CALL: &str = "package fixture\n\nfunc Caller() {}\n";
 pub const GO_B_WITH_TWO_CALLS: &str =
     "package fixture\n\nfunc Caller() {\n\tTarget()\n\tTarget()\n}\n";
 pub const GO_C_WITH_CALL: &str = "package fixture\n\nfunc Other() {\n\tTarget()\n}\n";
+
+pub const MIX_EXS: &str = "defmodule Fixture.MixProject do\n  use Mix.Project\n\n  def project do\n    [app: :fixture, version: \"0.1.0\", elixir: \"~> 1.18\", deps: []]\n  end\nend\n";
+/// `target` is on line 2 (0-based: line 1, character 6).
+pub const EX_A: &str = "defmodule A do\n  def target, do: 1\nend\n";
+/// The call is on line 2 (0-based: line 1).
+pub const EX_B_WITH_CALL: &str = "defmodule B do\n  def x, do: A.target()\nend\n";
+pub const EX_B_WITHOUT_CALL: &str = "defmodule B do\n  def x, do: 1\nend\n";
 
 pub const SCALA_PROJECT: &str = "//> using scala 3.3.4\n";
 /// `target` is on line 2 (0-based: line 1, character 6).

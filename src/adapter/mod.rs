@@ -15,6 +15,7 @@
 //! decision D-6).
 
 pub mod crystalline;
+pub mod dart;
 pub mod expert;
 pub mod gleam;
 pub mod gopls;
@@ -109,6 +110,7 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         "rust-analyzer" => Some(Box::new(RustAnalyzerAdapter::for_version(version))),
         "gopls" => Some(Box::new(GoplsAdapter::for_version(version))),
         "metals" => Some(Box::new(metals::MetalsAdapter::for_version(version))),
+        dart::SERVER_NAME => Some(Box::new(dart::DartAdapter::for_version(version))),
         // The version is not looked at: Expert declares no guarantee for any version.
         "expert" => Some(Box::new(expert::ExpertAdapter::new())),
         // The version is not observable: Nextflow's language server declares no guarantee.

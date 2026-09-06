@@ -4005,6 +4005,11 @@ fn dart_does_not_predict_from_document_or_watched_file_changes() {
     client.shutdown();
 }
 
+/// Gate (spec chapter 9) holds this on the client's behalf because it does not declare the
+/// protocol itself; the readiness that drives the hold comes from the Dart mapping's
+/// `$/progress` tracking. `--references-depend-on-readiness` makes the fake upstream's own
+/// answer depend on ITS OWN state (default "ready"), so a non-empty answer arriving only after
+/// `end` shows the request really was held, not merely delayed.
 #[test]
 fn dart_holds_references_until_ready() {
     let server = ServerUnderTest::lsp_det_with_upstream_flags(
@@ -4016,27 +4021,25 @@ fn dart_holds_references_until_ready() {
         ],
     );
     let mut client = ConformanceClient::start(&server);
-    client.initialize(true);
+    client.initialize(false);
     let id = client.send_references();
     assert!(
         client.response_within(id, NEGATIVE_WINDOW).is_none(),
-        "answered references before the first analyzing round even started"
+        "forwarded references before the first analyzing round even started"
     );
     dart_progress(&mut client, "begin");
-    client.await_state_changed();
     assert!(
         client.response_within(id, NEGATIVE_WINDOW).is_none(),
-        "answered references while indexing"
+        "forwarded references while indexing"
     );
     dart_progress(&mut client, "end");
-    client.await_state_changed();
     let response = client.await_response_to(id);
     assert!(
         !response["result"]
             .as_array()
             .expect("references answers an array")
             .is_empty(),
-        "did not answer references once ready: {response}"
+        "did not release the hold once ready: {response}"
     );
     client.shutdown();
 }

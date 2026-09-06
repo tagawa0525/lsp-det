@@ -159,7 +159,7 @@ The spec and this README are in English and have Japanese versions alongside. Th
 | [docs/v0.1-design.md](docs/v0.1-design.md)             | The implementation scope of the proxy (upstream side, downstream side, mappings, execution model)                                                                |
 | [docs/adr/README.md](docs/adr/README.md)               | Index of design decisions, listing the ones still in force and the rejected alternatives                                                                         |
 | [docs/vision.md](docs/vision.md)                       | Long-term vision (declaration ranges and launch manifests are frozen)                                                                                            |
-| [docs/research/](docs/research/)                       | 22 investigations and measurements: how each language server signals readiness, prior proxies, and the LSP integrations of Serena, Claude Code, Zed, and VS Code |
+| [docs/research/](docs/research/)                       | 23 investigations and measurements: how each language server signals readiness, prior proxies, and the LSP integrations of Serena, Claude Code, Zed, and VS Code |
 
 ## Status
 

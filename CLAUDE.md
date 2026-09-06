@@ -10,7 +10,7 @@
 4. `docs/adr/` — 決定の経緯と却下案。成功基準と構造の根拠は ADR 0009、採用しなかった依存（tokio 等）の理由は ADR 0005
 5. `docs/vision.md` — 長期構想（宣言範囲・起動方法の宣言は凍結中）
 6. `docs/glossary.md` — 日本語と英語の対訳表。仕様・README・コードのコメントの訳語はここに合わせる
-7. `docs/research/` — 調査報告 24 本。実装中の疑問はまずここを検索（先行プロキシの落とし穴、各サーバーの readiness 挙動、Serena / CC の統合仕様が実測済み、CC 経由のドッグフーディング観測は `claude-code-dogfooding.md`）
+7. `docs/research/` — 調査報告 25 本。実装中の疑問はまずここを検索（先行プロキシの落とし穴、各サーバーの readiness 挙動、Serena / CC の統合仕様が実測済み、CC 経由のドッグフーディング観測は `claude-code-dogfooding.md`）
 
 ## 絶対の制約
 
@@ -52,7 +52,7 @@
 
 - v0.1（M1〜M4: 素通しプロキシ、上流側、下流側、gopls の写像）と v0.2（ADR 0010 の M5〜M7: pyright、typescript-language-server、Serena 統合。ADR 0012 の 3 OS 対応）は完了。マイルストーンごとの内容と日付は `CHANGELOG.md`
 - 0.3.0（ADR 0013〜0016: `coverage` への改名、`didChangeWatchedFiles` の鮮度と先読み、下流側の代行 2 つ、欠けを名指しする宣言の形）も完了。ADR 0017 の英訳 3 つとドッグフーディング第 5 回も完了
-- 外部レビュー（ADR 0018）への対応と 0.4.0（ADR 0019）を進行中。済み: 保留の開始と解放のログ、ドッグフーディング第 6 回、文書 3 件（仕様 10 章の Dart / Sorbet、gopls #1200 の証拠、提出メモの前提）。次: M14 devShell の分割 → M8 コーパス → M9〜M13 反例の検証と合成の測定 → 0.5.0（Dart、Sorbet、jdtls、clangd）→ 外向きの提出（`docs/upstream-submissions.md` の順。文面を作ってユーザーの確認をもらってから出す）
+- 外部レビュー（ADR 0018）への対応と 0.4.0（ADR 0019）を進行中。済み: 保留の開始と解放のログ、ドッグフーディング第 6 回、文書 3 件（仕様 10 章の Dart / Sorbet、gopls #1200 の証拠、提出メモの前提）。M14 devShell の分割と M8 コーパス（`docs/research/readiness-vocabulary-corpus.md`。70 サーバー全部が 4 値に写り、新しい値は要らない）も済み。次: 検証する言語の確定（コーパスの候補表を ADR 0019 の追補に）→ M9〜M13 反例の検証と合成の測定 → 0.5.0（Dart、Sorbet、jdtls、clangd）→ 外向きの提出（`docs/upstream-submissions.md` の順。文面を作ってユーザーの確認をもらってから出す）
 - 実サーバーの結合テストは `cargo test --test conformance -- --ignored`（31 件）と `cargo test --test process_lifetime -- --ignored`（4 件）。`TESTED_VERSIONS` を動かすのはこれらを通してから
 
 ドッグフーディングは `dogfood/README.md` の手順。観測結果は `docs/research/claude-code-dogfooding.md` に追記する（第 1〜3 回で、経路の成立・起動直後の横断リクエストが保留されて完全な結果になること・82 秒の保留でも CC がタイムアウトしないこと・gopls 経路・`error` の拒否の見せ方を確認済み。第 4 回で CC が送る通知の全数、第 5 回（CC 2.1.261）で `didChangeWatchedFiles` の代行が効くことと、Write の再 `didOpen` が CC 側で直ったことを確認済み。第 6 回で実害の一事例（直接では tsls と gopls の両方でエージェントが使われている関数を消しビルドが壊れる。lsp-det 経由では消さない）を記録済み）。観測項目: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007: 通常編集では往復しない）。

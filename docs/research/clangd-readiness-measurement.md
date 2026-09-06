@@ -7,7 +7,7 @@ ADR 0020 決定 C の M24。仕様 10 章の clangd の行は v0.1 から「信�
 ## 方法
 
 - nixpkgs の clang-tools 21.1.8（`serverInfo.version` は "clangd version 21.1.8 linux x86_64-unknown-linux-gnu"。`flake.nix` の `servers`）。`clangd`（`--background-index` は既定で有効）。2026-09-06
-- 被験体: `lib.h`（`int target();`）、`lib.cpp`（定義）、`f0.cpp`〜`f399.cpp`（各 30 関数と `target()` を 1 回呼ぶ関数。`#include "lib.h"` のみで標準ヘッダは使わない）、`compile_commands.json`（402 エントリ。`clang++ -c`）
+- 被験体: `lib.h`（`int target();`）、`lib.cpp`（定義）、`f0.cpp`〜`f399.cpp`（各 30 関数と `target()` を 1 回呼ぶ関数。`#include "lib.h"` のみで標準ヘッダは使わない）、`compile_commands.json`（401 エントリ。`lib.cpp` と `f0.cpp`〜`f399.cpp` に `clang++ -c`。背景索引の report の分母は 402 で、エントリ数より 1 多い）
 - 道具: scratchpad の `lsp_probe.py` と、`didChange` の後に固定の間隔で要求を送る `order_probe.py`。クライアントは `window.workDoneProgress` と `workspace.didChangeWatchedFiles.dynamicRegistration` を宣言する
 - 走行: (1) 起動して `lib.cpp` を開き `target` の `references` を送り続ける（5 ms 間隔でも）、(2) 索引の完了後に開いている `f0.cpp` に `didChange`（全文）で呼び出しを足し、0〜320 ms の間隔で要求を送る、(3) `g.cpp` を作って `didChangeWatchedFiles` Created、(4) 開いていない `f1.cpp` をディスクで書き換えて Changed、(5) `f2.cpp` を消して Deleted（(3)〜(5) は 10 秒待つ）、(6) (3) を通知なしで、(7) `compile_commands.json` なし、(8) `didOpen` なし
 - 裏付けに LLVM の `ClangdLSPServer.cpp`（`onBackgroundIndexProgress`）を読んだ（コーパスの出典と同じ）

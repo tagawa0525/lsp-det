@@ -4076,7 +4076,7 @@ fn dart_is_selected_by_its_real_server_info() {
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({
             "coverage": {"scope": "workspace", "incomplete": {}},
-            "freshness": {"fileChanges": ["Created", "Changed", "Deleted"]}
+            "freshness": {"fileChanges": []}
         }),
         "no guarantee is declared for the tested version of real Dart: {result}"
     );

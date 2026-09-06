@@ -64,7 +64,8 @@ pub fn is_dependency_progress_begin(body: &[u8]) -> bool {
     let Ok(envelope) = serde_json::from_slice::<Envelope>(body) else {
         return false;
     };
-    envelope.params.value.kind == "begin"
+    envelope.params.token == DEPENDENCY_TOKEN
+        && envelope.params.value.kind == "begin"
         && envelope.params.value.title.as_deref() == Some(DEPENDENCY_PROGRESS_TITLE)
 }
 

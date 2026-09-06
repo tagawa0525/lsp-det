@@ -112,11 +112,18 @@ mod tests {
     use super::*;
     use crate::peek::peek;
     use crate::state::{Health, Readiness};
+    use serde_json::json;
 
     fn log(message: &str) -> String {
-        format!(
-            r#"{{"jsonrpc":"2.0","method":"window/logMessage","params":{{"type":3,"message":"{message}"}}}}"#
-        )
+        json!({
+            "jsonrpc": "2.0",
+            "method": "window/logMessage",
+            "params": {
+                "type": 3,
+                "message": message
+            }
+        })
+        .to_string()
     }
 
     fn interpret(adapter: &mut CrystallineAdapter, body: &str) -> Option<ServerState> {

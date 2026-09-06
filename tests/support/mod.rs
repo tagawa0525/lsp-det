@@ -138,6 +138,14 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("none", &[])
     }
 
+    /// A fake upstream that returns no `serverInfo` and announces nothing on its own (as the
+    /// real haxe-language-server announces itself only through `window/logMessage` after
+    /// `workspace/didChangeConfiguration`, which the test drives by hand) + lsp-det. lsp-det
+    /// selects the haxe-language-server mapping by that log (M20).
+    pub fn lsp_det_with_fake_haxe_language_server() -> Self {
+        Self::lsp_det_with_upstream("none", &[])
+    }
+
     /// A fake upstream conformant to this protocol + lsp-det. The upstream side becomes the
     /// identity mapping, and the downstream side reads the upstream's state across the boundary
     /// (design 4.1).
@@ -463,6 +471,34 @@ impl ConformanceClient {
             "textDocument/didClose",
             json!({"textDocument": {"uri": file_uri(path)}}),
         );
+    }
+
+    /// `initialize` → `initialized` with `rootUri`, `workspaceFolders`, and
+    /// `initializationOptions` all specified. haxe-language-server needs `displayArguments`
+    /// alongside the root to find `build.hxml`.
+    pub fn initialize_with_root_and_initialization_options(
+        &mut self,
+        declare_server_state: bool,
+        root: &std::path::Path,
+        options: Value,
+    ) -> Value {
+        let mut capabilities = json!({"textDocument": {"hover": {}}});
+        if declare_server_state {
+            capabilities["experimental"] = json!({"serverState": true});
+        }
+        let uri = file_uri(root);
+        let result = self.request(
+            "initialize",
+            json!({
+                "processId": std::process::id(),
+                "rootUri": uri,
+                "workspaceFolders": [{"uri": uri, "name": "fixture"}],
+                "capabilities": capabilities,
+                "initializationOptions": options,
+            }),
+        );
+        self.notify("initialized", json!({}));
+        result
     }
 
     pub fn initialize_with_capabilities(&mut self, capabilities: Value) -> Value {
@@ -1401,6 +1437,65 @@ impl Drop for TempGleamProject {
     }
 }
 
+/// A temporary Haxe project for haxe-language-server. `src/B.hx` calls `A.target()`, and
+/// `src/Main.hx` calls `B.x()` (M20).
+pub struct TempHaxeProject {
+    pub root: PathBuf,
+}
+
+impl TempHaxeProject {
+    pub fn with_cross_file_reference(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-haxe-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("cannot create the temporary project");
+        std::fs::write(root.join("build.hxml"), HX_BUILD_HXML).unwrap();
+        std::fs::write(root.join("src/A.hx"), HX_A).unwrap();
+        std::fs::write(root.join("src/B.hx"), HX_B_WITH_CALL).unwrap();
+        std::fs::write(root.join("src/Main.hx"), HX_MAIN).unwrap();
+        TempHaxeProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+
+    /// `n` more classes (`C01` … ), each calling `A.target()` once, called in turn from
+    /// `src/Main.hx`.
+    pub fn with_many_calls(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        assert!(n <= 99, "class names below assume two digits");
+        for i in 1..=n {
+            std::fs::write(
+                project.root.join(format!("src/C{i:02}.hx")),
+                format!(
+                    "class C{i:02} {{\n  public static function f():Int {{\n    return A.target();\n  }}\n}}\n"
+                ),
+            )
+            .unwrap();
+        }
+        let calls: String = (1..=n)
+            .map(|i| format!("    trace(C{i:02}.f());\n"))
+            .collect();
+        std::fs::write(
+            project.root.join("src/Main.hx"),
+            format!(
+                "class Main {{\n  static function main() {{\n    trace(B.x());\n{calls}  }}\n}}\n"
+            ),
+        )
+        .unwrap();
+        project
+    }
+}
+
+impl Drop for TempHaxeProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// Sends SIGKILL (TerminateProcess on Windows) to the descendants of `pid` whose command line
 /// contains `needle`. Used to bring down the tsserver (a grandchild process) of a real
 /// typescript-language-server. Returns the pids that were killed.
@@ -1755,3 +1850,12 @@ pub const CR_A: &str = "def target : Int32\n  1\nend\n";
 pub const CR_B: &str = "require \"./a\"\n\ndef x : Int32\n  target + 1\nend\n";
 /// The call to `x` is on line 3, character 5 (0-based).
 pub const CR_FIXTURE: &str = "require \"./a\"\nrequire \"./b\"\n\nputs x\n";
+
+pub const HX_BUILD_HXML: &str = "-cp src\n-main Main\n--interp\n";
+/// `target` is declared on line 1 (0-based), character 25.
+pub const HX_A: &str =
+    "class A {\n  public static function target():Int {\n    return 1;\n  }\n}\n";
+pub const HX_B_WITH_CALL: &str =
+    "class B {\n  public static function x():Int {\n    return A.target() + 1;\n  }\n}\n";
+pub const HX_MAIN: &str = "class Main {\n  static function main() {\n    trace(B.x());\n  }\n}\n";
+pub const HX_TARGET_DECLARATION: (u32, u32) = (1, 25);

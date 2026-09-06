@@ -3641,3 +3641,228 @@ fn gleam_spec_7_3_cross_file_freshness_through_lsp_det_with_real_gleam() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// haxe-language-server (M20, ADR 0019 decision F). The mapping in
+// research/haxe-language-server-readiness-measurement.md: the server returns no `serverInfo`
+// and names itself only through a `window/logMessage` "Haxe Path: " sent after
+// `workspace/didChangeConfiguration` (which is also what starts the underlying compiler);
+// `$/progress` reuses one title format ("Haxe: " + name + "...") for both the startup work
+// ("Building Cache", "Parsing Classpaths", "Building Refactoring Cache…", concurrent) and
+// per-request work ("Collecting Diagnostics", "Performing Refactor/Rename Operation…"), and the
+// names are fixed and disjoint, so only the startup titles move readiness: `ready` needs none
+// of them open; health comes from `window/showMessage` (type 1, "Haxe version check failed" /
+// "Invalid compiler argument"), the "Haxe connected!" log, and `haxe/haxeKeepsCrashing`; no
+// guarantee (the version never appears on the protocol, and an open document's `didChange` is
+// not incorporated into other files' `references`, only a `didSave` is).
+// ---------------------------------------------------------------------------
+
+fn haxe_client(root: &std::path::Path) -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_haxe_language_server();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize_with_root(true, root);
+    (client, result)
+}
+
+/// The settings a client has to send for haxe-language-server to start its compiler
+/// (`settings.haxe` can be empty).
+fn haxe_configure(client: &mut ConformanceClient) {
+    client.notify(
+        "workspace/didChangeConfiguration",
+        json!({"settings": {"haxe": {}}}),
+    );
+}
+
+fn haxe_progress(client: &mut ConformanceClient, token: i64, kind: &str, title: Option<&str>) {
+    let mut value = json!({"kind": kind});
+    if let Some(title) = title {
+        value["title"] = json!(title);
+    }
+    client.make_upstream_emit_progress(json!({"token": token, "value": value}));
+}
+
+fn haxe_log(client: &mut ConformanceClient, message: &str) {
+    client.make_upstream_emit_log_message(4, message);
+}
+
+#[test]
+fn haxe_is_selected_by_the_haxe_path_log_and_becomes_ready_when_the_startup_tokens_end() {
+    let project = support::TempHaxeProject::with_cross_file_reference("select");
+    let (mut client, _) = haxe_client(&project.root);
+    // Nothing said yet: unknown on both axes.
+    let state = client.server_state();
+    assert_eq!(state.readiness, Readiness::Unknown);
+    assert_eq!(state.health, Health::Unknown);
+
+    haxe_log(&mut client, "Haxe Path: haxe");
+    // A round trip through lsp-det and back as a synchronization wall: by the time this
+    // response arrives, the log notification sent just before it has already been interpreted.
+    client.upstream_methods_seen();
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+
+    haxe_log(&mut client, "Haxe connected!");
+    assert_eq!(client.await_state_changed().health, Health::Ok);
+
+    haxe_progress(&mut client, 0, "begin", Some("Haxe: Building Cache..."));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "a single begin should not move readiness while already initializing"
+    );
+    haxe_progress(&mut client, 1, "begin", Some("Haxe: Parsing Classpaths..."));
+    haxe_progress(&mut client, 0, "end", None);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "claimed ready while \"Parsing Classpaths\" is still open"
+    );
+    haxe_progress(
+        &mut client,
+        2,
+        "begin",
+        Some("Haxe: Building Refactoring Cache\u{2026}..."),
+    );
+    haxe_progress(&mut client, 2, "end", None);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "claimed ready while \"Parsing Classpaths\" is still open"
+    );
+    haxe_progress(&mut client, 1, "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn haxe_ignores_request_processing_progress_and_reindexes_on_startup_titles() {
+    let project = support::TempHaxeProject::with_cross_file_reference("request-progress");
+    let (mut client, _) = haxe_client(&project.root);
+    haxe_log(&mut client, "Haxe Path: haxe");
+    haxe_progress(&mut client, 0, "begin", Some("Haxe: Building Cache..."));
+    haxe_progress(&mut client, 0, "end", None);
+    client.wait_until_ready();
+
+    haxe_progress(
+        &mut client,
+        3,
+        "begin",
+        Some("Haxe: Collecting Diagnostics..."),
+    );
+    haxe_progress(&mut client, 3, "end", None);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "moved because of request-processing progress"
+    );
+
+    haxe_progress(&mut client, 4, "begin", Some("Haxe: Building Cache..."));
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    haxe_progress(&mut client, 4, "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn haxe_maps_show_message_errors_to_error_health() {
+    let project = support::TempHaxeProject::with_cross_file_reference("health");
+    let (mut client, _) = haxe_client(&project.root);
+    haxe_log(&mut client, "Haxe Path: haxe");
+    client.upstream_methods_seen();
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+
+    client.make_upstream_emit_notification(
+        "window/showMessage",
+        json!({"type": 1, "message": "Haxe version check failed: \"/bin/sh: haxe: command not found\""}),
+    );
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Error);
+    assert_eq!(
+        state.message.as_deref(),
+        Some("Haxe version check failed: \"/bin/sh: haxe: command not found\"")
+    );
+
+    haxe_log(&mut client, "Haxe connected!");
+    assert_eq!(client.await_state_changed().health, Health::Ok);
+
+    client.make_upstream_emit_notification("haxe/haxeKeepsCrashing", json!(null));
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Error);
+    assert_eq!(state.message.as_deref(), Some("Haxe keeps crashing"));
+    client.shutdown();
+}
+
+#[test]
+fn haxe_spec_8_2_5_declares_no_guarantees() {
+    let project = support::TempHaxeProject::with_cross_file_reference("guarantees");
+    let (mut client, result) = haxe_client(&project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee haxe-language-server's vocabulary cannot keep: {result}"
+    );
+    client.shutdown();
+}
+
+// --- real haxe-language-server (local only) -------------------------------
+
+/// haxe-language-server's `server.js` (M20's `haxe-language-server` derivation in `flake.nix`,
+/// built from vshaxe's vsix). Needs `haxe` on `PATH`.
+fn real_haxe(project: &support::TempHaxeProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec![
+            "--".to_string(),
+            "haxe-language-server".to_string(),
+            "--stdio".to_string(),
+        ],
+        root: project.root.clone(),
+    }
+}
+
+/// Via the real server. `initializationOptions.displayArguments` is required (Serena sends the
+/// same) so the server finds `build.hxml`.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn haxe_spec_7_1_through_lsp_det_with_real_haxe() {
+    let project = support::TempHaxeProject::with_cross_file_reference("readiness");
+    let a = project.file("src/A.hx");
+    let mut client = ConformanceClient::start(&real_haxe(&project));
+    let result = client.initialize_with_root_and_initialization_options(
+        true,
+        &project.root,
+        json!({"displayArguments": ["build.hxml"]}),
+    );
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for real haxe-language-server: {result}"
+    );
+    haxe_configure(&mut client);
+    client.did_open(&a, "haxe");
+    client.wait_until_ready();
+    let state = poll_state_until(&mut client, |s| s.health != Health::Unknown);
+    assert_eq!(state.health, Health::Ok, "{state:?}");
+    client.shutdown();
+}
+
+/// Measures 7.2 coverage against the real server: 300 calls to `A.target()` across `C01` …
+/// `C50` plus `B.hx`'s own call.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn haxe_spec_7_2_coverage_through_lsp_det_with_real_haxe() {
+    let project = support::TempHaxeProject::with_many_calls("coverage", 50);
+    let a = project.file("src/A.hx");
+    let mut client = ConformanceClient::start(&real_haxe(&project));
+    client.initialize_with_root_and_initialization_options(
+        true,
+        &project.root,
+        json!({"displayArguments": ["build.hxml"]}),
+    );
+    haxe_configure(&mut client);
+    client.did_open(&a, "haxe");
+    client.wait_until_ready();
+    let (line, character) = support::HX_TARGET_DECLARATION;
+    let found = client.references(&a, line, character);
+    assert_eq!(
+        found.len(),
+        51,
+        "missed references while declaring ready (coverage violation): {found:#?}"
+    );
+    client.shutdown();
+}

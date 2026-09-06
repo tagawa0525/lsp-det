@@ -97,6 +97,7 @@
         gleam # M19 (ADR 0019 決定 F)。readiness は "Downloading Gleam dependencies" のトークンから
         haxe-language-server # M20 の写像
         haxe # haxe-language-server が起動するコンパイラ
+        dart # M21 の写像 (ADR 0020)。dart language-server。readiness は $/progress (token ANALYZING) から
       ];
     in
     {

@@ -146,6 +146,17 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("none", &[])
     }
 
+    /// A fake upstream that calls itself "Dart SDK LSP Analysis Server" version 3.13.0 (as the
+    /// real Dart analysis server does in `serverInfo`) + lsp-det. lsp-det selects the Dart
+    /// mapping and, for this version, declares the guarantee (M21,
+    /// research/dart-readiness-measurement.md).
+    pub fn lsp_det_with_fake_dart() -> Self {
+        Self::lsp_det_with_upstream(
+            "Dart SDK LSP Analysis Server",
+            &["--server-version", "3.13.0"],
+        )
+    }
+
     /// A fake upstream conformant to this protocol + lsp-det. The upstream side becomes the
     /// identity mapping, and the downstream side reads the upstream's state across the boundary
     /// (design 4.1).
@@ -1437,6 +1448,42 @@ impl Drop for TempGleamProject {
     }
 }
 
+/// A temporary Dart project. `lib/a.dart` declares `target`; `lib/f0.dart` .. `lib/f{n-1}.dart`
+/// each imports `a.dart`, defines 30 functions, and calls `target()` once (M21, Dart analysis
+/// server; the method section of research/dart-readiness-measurement.md). Large enough (200-400 files) that
+/// analysis takes observable time. `dart pub get` is not needed: the imports are relative only.
+pub struct TempDartProject {
+    pub root: PathBuf,
+}
+
+impl TempDartProject {
+    /// `n` caller files under `lib/`.
+    pub fn with_many_callers(tag: &str, n: usize) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-dart-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("lib")).expect("cannot create the temporary project");
+        std::fs::write(root.join("pubspec.yaml"), DART_PUBSPEC).unwrap();
+        std::fs::write(root.join("lib/a.dart"), DART_A).unwrap();
+        for i in 0..n {
+            std::fs::write(root.join(format!("lib/f{i}.dart")), dart_caller_file(i)).unwrap();
+        }
+        TempDartProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempDartProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// A temporary Haxe project for haxe-language-server. `src/B.hx` calls `A.target()`, and
 /// `src/Main.hx` calls `B.x()` (M20).
 pub struct TempHaxeProject {
@@ -1715,6 +1762,34 @@ pub const GLEAM_A: &str = "pub fn target() -> Int {\n  1\n}\n";
 pub const GLEAM_B_WITH_CALL: &str = "import a\n\npub fn x() -> Int {\n  a.target() + 1\n}\n";
 pub const GLEAM_B_WITH_TWO_CALLS: &str = "import a\n\npub fn x() -> Int {\n  a.target() + 1\n}\n\npub fn y() -> Int {\n  a.target()\n}\n";
 pub const GLEAM_TARGET_DECLARATION: (u32, u32) = (0, 7);
+pub const DART_PUBSPEC: &str = "name: fixture\nenvironment:\n  sdk: '>=3.0.0 <4.0.0'\n";
+/// `target` is declared on line 0 (character 5, right after "void ").
+pub const DART_A: &str = "void target() {}\n";
+pub const DART_TARGET_DECLARATION: (u32, u32) = (0, 5);
+/// A file that imports `a.dart` and calls `target` once. Used as a new (Created) file in the
+/// 7.3 real-server tests.
+pub const DART_G: &str = "import 'a.dart';\n\nvoid g() {\n  target();\n}\n";
+
+/// The content of `lib/f{index}.dart`: imports `a.dart`, defines 30 functions, and calls
+/// `target` once (the method section of research/dart-readiness-measurement.md).
+pub fn dart_caller_file(index: usize) -> String {
+    dart_caller_file_with_calls(index, 1)
+}
+
+/// Same as [`dart_caller_file`], but the first function calls `target` `calls` times (used by
+/// the 7.3 item 1 real-server test: a `didChange` on an open file that adds one more call).
+pub fn dart_caller_file_with_calls(index: usize, calls: usize) -> String {
+    let mut out = String::from("import 'a.dart';\n\n");
+    out.push_str(&format!("void call{index}() {{\n"));
+    for _ in 0..calls {
+        out.push_str("  target();\n");
+    }
+    out.push_str("}\n\n");
+    for i in 1..30 {
+        out.push_str(&format!("void f{index}_{i}() {{}}\n\n"));
+    }
+    out
+}
 pub const HS_CABAL: &str = "cabal-version:      2.4\nname:               fixture\nversion:            0.1.0.0\nbuild-type:         Simple\n\nlibrary\n    exposed-modules:  A, B\n    build-depends:    base\n    hs-source-dirs:   src\n    default-language: Haskell2010\n";
 pub const HS_HIE_YAML: &str = "cradle:\n  cabal:\n";
 pub const HS_HIE_YAML_BROKEN: &str = "cradle:\n  cabal:\n    component: \"lib:doesnotexist\"\n";

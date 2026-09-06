@@ -5235,3 +5235,123 @@ fn clangd_holds_references_until_ready() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Real clangd integration (local only. Not part of CI -- v0.1-design.md chapter 6). Requires
+// clangd on PATH (`nix develop .#servers`; nixpkgs `clang-tools`).
+// ---------------------------------------------------------------------------
+
+/// Caller files (the method section of research/clangd-readiness-measurement.md: a 402-file
+/// fixture, large enough that the background index takes observable time).
+const CLANGD_FIXTURE_CALLERS: usize = 400;
+
+fn real_clangd(project: &support::TempClangdProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec![
+            "--".to_string(),
+            "clangd".to_string(),
+            "--log=error".to_string(),
+        ],
+        root: project.root.clone(),
+    }
+}
+
+/// Identity and the guarantee declared for the tested version.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn clangd_is_selected_by_its_real_server_info() {
+    let project = support::TempClangdProject::with_many_callers("select", 1);
+    let mut client = ConformanceClient::start(&real_clangd(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"coverage": {"scope": "workspace", "incomplete": {}}}),
+        "no guarantee is declared for the tested version of real clangd: {result}"
+    );
+    client.shutdown();
+}
+
+/// 7.1: the first `references` is complete. Unlike Dart / jdtls, clangd itself does not hold a
+/// request until its background index is done (`clangd_without_lsp_det_answers_partial_references_while_indexing`
+/// above shows growing partial answers on this same fixture, matching the research doc's 0 ->
+/// 17 -> 117 -> 217 -> 316 -> 400). Completeness here comes entirely from lsp-det's own gate
+/// (spec chapter 9), which holds cross-file requests on behalf of a client that does not
+/// declare the protocol -- so this client declares nothing special, and the query is sent right
+/// after `didOpen` without waiting for any observed readiness.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn clangd_spec_7_1_first_references_is_complete_through_lsp_det_with_real_clangd() {
+    let project =
+        support::TempClangdProject::with_many_callers("readiness", CLANGD_FIXTURE_CALLERS);
+    let lib = project.file("lib.cpp");
+    let mut client = ConformanceClient::start(&real_clangd(&project));
+    client.initialize_with_root(false, &project.root);
+    client.did_open(&lib, "cpp");
+
+    let (line, character) = support::CLANGD_TARGET_DECLARATION;
+    let found = client.references(&lib, line, character);
+    assert_eq!(
+        found.len(),
+        CLANGD_FIXTURE_CALLERS,
+        "the first references was not complete: {} of {}",
+        found.len(),
+        CLANGD_FIXTURE_CALLERS
+    );
+    client.shutdown();
+}
+
+/// 7.2: the result once `ready` matches the precomputed complete set (every caller file calls
+/// `target` exactly once).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn clangd_spec_7_2_coverage_through_lsp_det_with_real_clangd() {
+    let project = support::TempClangdProject::with_many_callers("coverage", CLANGD_FIXTURE_CALLERS);
+    let lib = project.file("lib.cpp");
+    let mut client = ConformanceClient::start(&real_clangd(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&lib, "cpp");
+    client.wait_until_ready();
+
+    let (line, character) = support::CLANGD_TARGET_DECLARATION;
+    let found = client.references(&lib, line, character);
+    assert_eq!(
+        found.len(),
+        CLANGD_FIXTURE_CALLERS,
+        "missed some callers while declaring ready (completeness violation): {} of {}",
+        found.len(),
+        CLANGD_FIXTURE_CALLERS
+    );
+    client.shutdown();
+}
+
+/// Observation only (no lsp-det, no assertion beyond a growing sequence): talks to a real
+/// clangd directly and confirms the research doc's "silent lie" measurement (partial
+/// `references` answers while the background index is still running) still reproduces on this
+/// fixture. Not part of the conformance suite proper (7.0-7.3 are about lsp-det's behavior);
+/// kept as a standing check that the mapping's premise has not silently stopped holding.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn clangd_without_lsp_det_answers_partial_references_while_indexing() {
+    let project =
+        support::TempClangdProject::with_many_callers("silent-lie", CLANGD_FIXTURE_CALLERS);
+    let lib = project.file("lib.cpp");
+    let server = ServerUnderTest {
+        program: std::path::PathBuf::from("clangd"),
+        args: vec!["--log=error".to_string()],
+        root: project.root.clone(),
+    };
+    let mut client = ConformanceClient::start(&server);
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&lib, "cpp");
+
+    let (line, character) = support::CLANGD_TARGET_DECLARATION;
+    let first = client.references(&lib, line, character).len();
+    assert!(
+        first < CLANGD_FIXTURE_CALLERS,
+        "expected a partial (or empty) first answer while the background index is still \
+         running without lsp-det's hold, got {first} of {CLANGD_FIXTURE_CALLERS} -- the \
+         fixture may no longer take observable time to index"
+    );
+    client.shutdown();
+}

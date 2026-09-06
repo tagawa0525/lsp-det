@@ -26,6 +26,7 @@ pub mod metals;
 pub mod nextflow;
 pub mod pyright;
 pub mod rust_analyzer;
+pub mod sorbet;
 pub mod typescript_language_server;
 
 pub use gopls::{GoplsAdapter, TESTED_VERSIONS as GOPLS_TESTED_VERSIONS};
@@ -129,6 +130,8 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         haxe_language_server::SERVER_NAME => Some(Box::new(
             haxe_language_server::HaxeLanguageServerAdapter::new(),
         )),
+        // The version never appears in the protocol: no guarantee (ADR 0020 decision E).
+        sorbet::SERVER_NAME => Some(Box::new(sorbet::SorbetAdapter::new())),
         "pyright" | "basedpyright" => Some(Box::new(PyrightAdapter::for_identity(&key, version))),
         typescript_language_server::SERVER_NAME => Some(Box::new(
             TypescriptLanguageServerAdapter::for_version(version),
@@ -216,8 +219,47 @@ pub fn identity_from_notification(view: &MessageView, body: &[u8]) -> Option<Ser
             name: gleam::SERVER_NAME.to_string(),
             version: None,
         }),
+        // The notification method itself is the identity announcement: Sorbet sends
+        // `sorbet/showOperation` only when it is the one being talked to (and only once
+        // `initializationOptions.supportsOperationNotifications` was passed, which lsp-det
+        // injects for the `sorbet` / `srb` command; ADR 0020 decision D).
+        Some(sorbet::SHOW_OPERATION_METHOD) => Some(ServerInfo {
+            name: sorbet::SERVER_NAME.to_string(),
+            version: None,
+        }),
         _ => None,
     }
+}
+
+/// Upstream command basenames (the last path segment of the command lsp-det itself launched,
+/// without a `.exe` suffix) for which `initializationOptions` are injected into the client's
+/// `initialize` before it is forwarded (ADR 0020 decision D).
+///
+/// Used for injection only -- **never** for selecting a mapping, which is always by identity
+/// (`serverInfo` or a startup notification, ADR 0011). The command name is a fact lsp-det
+/// already knows (it is what it spawned), not a guess; getting it wrong only means the
+/// injection does not happen and both axes stay `unknown`, never a wrong answer.
+///
+/// Sorbet's `sorbet/showOperation` is sent only when the client passes
+/// `initializationOptions.supportsOperationNotifications: true`
+/// (research/sorbet-readiness-measurement.md). Injecting it into every upstream's
+/// `initializationOptions` unconditionally would trip a server that warns about settings it
+/// does not recognize (gopls: a type-1 `window/showMessage` "Invalid settings: … unexpected
+/// setting", measured), so the injection is scoped to the command lsp-det actually launched.
+pub const INITIALIZATION_OPTIONS_BY_COMMAND: &[(&str, &[(&str, bool)])] = &[
+    ("sorbet", &[("supportsOperationNotifications", true)]),
+    ("srb", &[("supportsOperationNotifications", true)]),
+];
+
+/// The `initializationOptions` entries to inject for an upstream launched under this command
+/// basename, if any.
+pub fn initialization_options_for_command(
+    basename: &str,
+) -> Option<&'static [(&'static str, bool)]> {
+    INITIALIZATION_OPTIONS_BY_COMMAND
+        .iter()
+        .find(|(command, _)| *command == basename)
+        .map(|(_, options)| *options)
 }
 
 #[cfg(test)]

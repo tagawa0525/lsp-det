@@ -259,6 +259,48 @@ fn set_leaf_true(object: &mut Map<String, Value>, key: &str) -> bool {
     true
 }
 
+/// Returns a new body with boolean entries added to `params.initializationOptions` of
+/// `initialize` (ADR 0020 decision D: Sorbet's `sorbet/showOperation` is opt-in through
+/// `initializationOptions.supportsOperationNotifications`). `None` if no change is needed or
+/// possible (the caller forwards the original as is).
+///
+/// Unlike [`inject_client_capabilities`], `initializationOptions` is free-form and
+/// server-defined (LSP does not standardize its shape), so this only ever touches the flat set
+/// of top-level keys the caller asks for -- no dotted-path nesting. Mirrors
+/// [`inject_client_capabilities`] otherwise: does not create `initializationOptions` if it is
+/// present but not an object (a broken or server-specific declaration is not clobbered), and
+/// does nothing to a key whose value already matches.
+pub fn inject_initialization_options(body: &[u8], options: &[(&str, bool)]) -> Option<Vec<u8>> {
+    if options.is_empty() {
+        return None;
+    }
+
+    let mut root: Value = serde_json::from_slice(body).ok()?;
+    let params = root.get_mut("params")?.as_object_mut()?;
+    let init_options = params
+        .entry("initializationOptions")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()?;
+
+    let mut changed = false;
+    for (key, value) in options {
+        changed |= set_leaf_bool(init_options, key, *value);
+    }
+    if !changed {
+        return None;
+    }
+
+    serde_json::to_vec(&root).ok()
+}
+
+fn set_leaf_bool(object: &mut Map<String, Value>, key: &str, value: bool) -> bool {
+    if object.get(key) == Some(&Value::Bool(value)) {
+        return false;
+    }
+    object.insert(key.to_string(), Value::Bool(value));
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::InitializeResultAction::*;
@@ -599,5 +641,87 @@ mod tests {
                 "should be counted as unrewritable: {body}"
             );
         }
+    }
+
+    // --- initializationOptions injection (ADR 0020 decision D) -------------------------------
+
+    fn rewrite_initialization_options(body: &str, options: &[(&str, bool)]) -> Option<Value> {
+        inject_initialization_options(body.as_bytes(), options)
+            .map(|bytes| serde_json::from_slice(&bytes).expect("rewritten body must be JSON"))
+    }
+
+    #[test]
+    fn adds_the_key_when_initialization_options_is_absent() {
+        let body = r#"{"id":1,"method":"initialize","params":{"capabilities":{}}}"#;
+        let out = rewrite_initialization_options(body, &[("supportsOperationNotifications", true)])
+            .expect("body should be rewritten");
+        assert_eq!(
+            out["params"]["initializationOptions"]["supportsOperationNotifications"],
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn keeps_the_client_own_initialization_options() {
+        let body = r#"{"id":1,"method":"initialize","params":{"capabilities":{},"initializationOptions":{"somethingElse":42}}}"#;
+        let out = rewrite_initialization_options(body, &[("supportsOperationNotifications", true)])
+            .expect("body should be rewritten");
+        assert_eq!(
+            out["params"]["initializationOptions"]["somethingElse"],
+            Value::from(42)
+        );
+        assert_eq!(
+            out["params"]["initializationOptions"]["supportsOperationNotifications"],
+            Value::Bool(true)
+        );
+    }
+
+    #[test]
+    fn does_nothing_when_the_value_is_already_true() {
+        let body = r#"{"id":1,"method":"initialize","params":{"capabilities":{},"initializationOptions":{"supportsOperationNotifications":true}}}"#;
+        assert!(
+            inject_initialization_options(
+                body.as_bytes(),
+                &[("supportsOperationNotifications", true)]
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn does_not_clobber_a_non_object_initialization_options() {
+        // Even a broken client declaration is not destroyed. Forwarded as the original.
+        let body = r#"{"id":1,"method":"initialize","params":{"capabilities":{},"initializationOptions":"nonsense"}}"#;
+        assert!(
+            inject_initialization_options(
+                body.as_bytes(),
+                &[("supportsOperationNotifications", true)]
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn does_nothing_when_no_options_are_requested() {
+        let body = r#"{"id":1,"method":"initialize","params":{"capabilities":{}}}"#;
+        assert!(inject_initialization_options(body.as_bytes(), &[]).is_none());
+    }
+
+    #[test]
+    fn leaves_a_params_less_initialize_or_malformed_json_alone() {
+        assert!(
+            inject_initialization_options(
+                br#"{"id":1,"method":"initialize"}"#,
+                &[("supportsOperationNotifications", true)]
+            )
+            .is_none()
+        );
+        assert!(
+            inject_initialization_options(
+                b"{not json",
+                &[("supportsOperationNotifications", true)]
+            )
+            .is_none()
+        );
     }
 }

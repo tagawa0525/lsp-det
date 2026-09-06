@@ -51,7 +51,7 @@ where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
-    let mut upstream_side = UpstreamSide::new();
+    let mut upstream_side = UpstreamSide::new(upstream_command_basename(command));
     let mut gate = Gate::new();
     let mut handles = process::spawn(command, args)?;
     let mut upstream_stdin = handles.stdin;
@@ -176,6 +176,24 @@ const SERVER_STATE_CLIENT_CAPABILITY: &str = "experimental.serverState";
 /// against a collision, but using `lsp-det:` as a reserved prefix avoids one in practice.
 const SELF_STATE_REQUEST_ID: &str = "lsp-det:serverState";
 
+/// The basename of the upstream command lsp-det itself was told to launch, without a
+/// directory or a `.exe` suffix (ADR 0020 decision D). `command` is exactly what the caller
+/// passed after `--` (`cli.rs`): a bare name (`"sorbet"`), or a path (`"/usr/bin/sorbet"`,
+/// `".\\sorbet.exe"`).
+fn upstream_command_basename(command: &str) -> String {
+    let base = std::path::Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(command);
+    match base
+        .strip_suffix(".exe")
+        .or_else(|| base.strip_suffix(".EXE"))
+    {
+        Some(stripped) => stripped.to_string(),
+        None => base.to_string(),
+    }
+}
+
 /// Takes the exit code, and takes an upstream that lingers down with it.
 ///
 /// There is a slight gap between closing stdout and actually exiting, so wait briefly instead
@@ -257,10 +275,14 @@ struct UpstreamSide {
     watched_files: Option<WatchedFiles>,
     /// The open documents (rewriting of duplicate `didOpen`. ADR 0015 decision B).
     documents: OpenDocuments,
+    /// The basename of the command lsp-det itself launched as the upstream (no directory, no
+    /// `.exe` suffix). Used only to decide `initializationOptions` injection (ADR 0020
+    /// decision D) -- never to select a mapping, which is always by identity.
+    upstream_command_basename: String,
 }
 
 impl UpstreamSide {
-    fn new() -> Self {
+    fn new(upstream_command_basename: String) -> Self {
         UpstreamSide {
             tracker: StateTracker::new(),
             client_declared: false,
@@ -272,6 +294,7 @@ impl UpstreamSide {
             identity_query_pending: false,
             watched_files: None,
             documents: OpenDocuments::new(),
+            upstream_command_basename,
         }
     }
 
@@ -375,11 +398,19 @@ impl UpstreamSide {
                 // for the known mappings, and the subscription declaration for this protocol.
                 let mut paths: Vec<&str> = adapter::CLIENT_CAPABILITIES_FOR_ALL_MAPPINGS.to_vec();
                 paths.push(SERVER_STATE_CLIENT_CAPABILITY);
-                let injected = initialize::inject_client_capabilities(&msg.body, &paths);
-                vec![Out::ToUpstream(match injected {
-                    Some(body) => RawMessage { body },
-                    None => msg,
-                })]
+                let mut body = initialize::inject_client_capabilities(&msg.body, &paths)
+                    .unwrap_or_else(|| msg.body.clone());
+                // ADR 0020 decision D: inject a signal opt-in scoped to the upstream command
+                // lsp-det itself launched, never used to select a mapping (selection is always
+                // by identity: serverInfo or a startup notification).
+                if let Some(options) =
+                    adapter::initialization_options_for_command(&self.upstream_command_basename)
+                    && let Some(rewritten) =
+                        initialize::inject_initialization_options(&body, options)
+                {
+                    body = rewritten;
+                }
+                vec![Out::ToUpstream(RawMessage { body })]
             }
             ClientKind::ShutdownRequest => {
                 // Answer every held request with an error, then forward the shutdown
@@ -1075,5 +1106,26 @@ mod tests {
             "proxy should kill upstream promptly on client disconnect"
         );
         assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn upstream_command_basename_strips_directory_and_exe_suffix() {
+        // `Path::file_name` splits on the platform's own separator, so only forward slashes
+        // (portable on every supported OS) are exercised here.
+        for (command, basename) in [
+            ("sorbet", "sorbet"),
+            ("/usr/bin/sorbet", "sorbet"),
+            ("./sorbet", "sorbet"),
+            ("sorbet.exe", "sorbet"),
+            ("/tools/sorbet.exe", "sorbet"),
+            ("sorbet.EXE", "sorbet"),
+            ("gopls", "gopls"),
+        ] {
+            assert_eq!(
+                upstream_command_basename(command),
+                basename,
+                "command: {command:?}"
+            );
+        }
     }
 }

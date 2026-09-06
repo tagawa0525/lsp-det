@@ -3278,3 +3278,44 @@ fn hls_real_broken_cradle_is_error_health() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// pyrefly (M16, ADR 0019 decision F). No mapping: the initial index is silent on the protocol
+// (its start and end go to stderr only), "Pyrefly: Rechecking" covers only the typecheck of
+// open files, and neither readiness nor health has a signal
+// (research/pyrefly-readiness-measurement.md). lsp-det has no mapping for "pyrefly-lsp" and
+// reports unknown on both axes (spec 8.2 item 3, 8.4 item 1).
+// ---------------------------------------------------------------------------
+
+fn real_pyrefly(project: &support::TempPyreflyProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec!["--".to_string(), "pyrefly".to_string(), "lsp".to_string()],
+        root: project.root.clone(),
+    }
+}
+
+/// Via the real server: unknown on both axes, `{}` declared, and `references` answered rather
+/// than held.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn pyrefly_real_is_unknown_on_both_axes_and_nothing_is_held() {
+    let project = support::TempPyreflyProject::with_cross_file_reference("unknown");
+    let a = project.file("pkg/a.py");
+    let mut client = ConformanceClient::start(&real_pyrefly(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for a server with no mapping: {result}"
+    );
+    let state = client.server_state();
+    assert_eq!(state.readiness, Readiness::Unknown);
+    assert_eq!(state.health, Health::Unknown);
+    client.did_open(&a, "python");
+    let (line, character) = support::PYREFLY_TARGET_DECLARATION;
+    // Answered (possibly cancelled with -32800 or incomplete, as `unknown` allows), not held.
+    let _ = client.references(&a, line, character);
+    assert_eq!(client.server_state().readiness, Readiness::Unknown);
+    client.shutdown();
+}

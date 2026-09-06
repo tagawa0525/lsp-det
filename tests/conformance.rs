@@ -3875,3 +3875,168 @@ fn haxe_spec_7_2_coverage_through_lsp_det_with_real_haxe() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Dart analysis server (M21, ADR 0020 decision C row for Dart). The mapping in
+// research/dart-readiness-measurement.md: identified by `serverInfo.name` "Dart SDK LSP
+// Analysis Server" (the version is `serverInfo.version`). `$/progress` (fixed token
+// "ANALYZING", title "Analyzing…") begin -> `indexing`, end -> `ready`, repeated on every
+// analysis round (didChange, an on-disk change, or even nothing to analyze right after
+// `initialized`), the same shape as rust-analyzer's `quiescent`. The server itself holds a
+// request until the analysis it depends on completes, so there is nothing for the observer to
+// predict from `didChange` or `workspace/didChangeWatchedFiles` (`observe_client` is not
+// implemented). No health signal. `coverage: {scope: "workspace", incomplete: {}}` and
+// `freshness: {fileChanges: ["Created", "Changed", "Deleted"]}` are declared for the tested
+// version 3.13.0 (spec 8.2 item 5; the real-server tests below are the basis).
+// ---------------------------------------------------------------------------
+
+const DART_ANALYZING_TOKEN: &str = "ANALYZING";
+
+fn dart_client() -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_dart();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    (client, result)
+}
+
+/// Emits the fixed-token analysis progress a real Dart analysis server sends
+/// (research/dart-readiness-measurement.md).
+fn dart_progress(client: &mut ConformanceClient, kind: &str) {
+    let mut value = json!({"kind": kind});
+    if kind == "begin" {
+        value["title"] = json!("Analyzing\u{2026}");
+        value["cancellable"] = json!(false);
+    }
+    client.make_upstream_emit_progress(json!({"token": DART_ANALYZING_TOKEN, "value": value}));
+}
+
+#[test]
+fn dart_is_selected_by_server_info_and_declares_a_guarantee_for_the_tested_version() {
+    let (mut client, result) = dart_client();
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({
+            "coverage": {"scope": "workspace", "incomplete": {}},
+            "freshness": {"fileChanges": ["Created", "Changed", "Deleted"]}
+        }),
+        "declared a different guarantee for the tested version 3.13.0: {result}"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+#[test]
+fn dart_declares_no_guarantee_for_an_untested_version() {
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "Dart SDK LSP Analysis Server",
+        &["--server-version", "3.12.0"],
+    );
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for a version the conformance suite has not passed on: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn dart_becomes_ready_at_the_end_of_the_first_analyzing_round() {
+    let (mut client, _) = dart_client();
+    dart_progress(&mut client, "begin");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    dart_progress(&mut client, "end");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(state.health, Health::Unknown, "Dart has no health signal");
+    client.shutdown();
+}
+
+#[test]
+fn dart_reindexes_on_every_later_round() {
+    let (mut client, _) = dart_client();
+    dart_progress(&mut client, "begin");
+    client.await_state_changed();
+    dart_progress(&mut client, "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    // A later round: a didChange, an on-disk change the server watches itself, or even nothing
+    // to analyze (research: run 6, a begin/end pair still happens).
+    dart_progress(&mut client, "begin");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    dart_progress(&mut client, "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn dart_ignores_progress_of_other_tokens() {
+    let (mut client, _) = dart_client();
+    client.make_upstream_emit_progress(json!({
+        "token": "some-other-token",
+        "value": {"kind": "begin", "title": "Something else"}
+    }));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "moved state on an unrelated progress token"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+#[test]
+fn dart_does_not_predict_from_document_or_watched_file_changes() {
+    let (mut client, _) = dart_client();
+    dart_progress(&mut client, "begin");
+    client.await_state_changed();
+    dart_progress(&mut client, "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.did_change(
+        &std::path::PathBuf::from("/fake/lib/a.dart"),
+        2,
+        "void target() {}\n",
+    );
+    client.did_change_watched_files(&[(&std::path::PathBuf::from("/fake/lib/b.dart"), 2)]);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "predicted a state change from a didChange or a watched-file change; the server itself \
+         holds requests until analysis completes, so there is nothing to predict"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn dart_holds_references_until_ready() {
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "Dart SDK LSP Analysis Server",
+        &[
+            "--server-version",
+            "3.13.0",
+            "--references-depend-on-readiness",
+        ],
+    );
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(true);
+    let id = client.send_references();
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "answered references before the first analyzing round even started"
+    );
+    dart_progress(&mut client, "begin");
+    client.await_state_changed();
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "answered references while indexing"
+    );
+    dart_progress(&mut client, "end");
+    client.await_state_changed();
+    let response = client.await_response_to(id);
+    assert!(
+        !response["result"]
+            .as_array()
+            .expect("references answers an array")
+            .is_empty(),
+        "did not answer references once ready: {response}"
+    );
+    client.shutdown();
+}

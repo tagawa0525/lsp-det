@@ -311,6 +311,47 @@ mod tests {
     }
 
     #[test]
+    fn identifies_sorbet_by_the_show_operation_method_regardless_of_its_content() {
+        use crate::peek::peek;
+        // The method alone is the identity announcement (research/sorbet-readiness-
+        // measurement.md): unlike Gleam or typescript-language-server, there is no fixed
+        // token or title to also match against.
+        for body in [
+            &br#"{"jsonrpc":"2.0","method":"sorbet/showOperation","params":{"operationName":"Indexing","description":"Indexing files...","status":"start"}}"#[..],
+            br#"{"jsonrpc":"2.0","method":"sorbet/showOperation","params":{"operationName":"References","description":"Finding all references...","status":"end"}}"#,
+        ] {
+            let view = peek(body).unwrap();
+            let identity = identity_from_notification(&view, body)
+                .expect("the showOperation notification is an identity announcement");
+            assert_eq!(identity.name, sorbet::SERVER_NAME);
+            assert_eq!(
+                identity.version, None,
+                "Sorbet's version never appears in the protocol"
+            );
+            assert!(select(&identity.name, identity.version.as_deref()).is_some());
+        }
+    }
+
+    #[test]
+    fn injects_the_operation_notifications_opt_in_only_for_sorbet_and_srb() {
+        // Command-name-scoped: injection only, never mapping selection (ADR 0020 decision D).
+        for command in ["sorbet", "srb"] {
+            assert_eq!(
+                initialization_options_for_command(command),
+                Some(&[("supportsOperationNotifications", true)][..]),
+                "command: {command:?}"
+            );
+        }
+        for command in ["sorbet-static", "not-sorbet", "gopls", ""] {
+            assert_eq!(
+                initialization_options_for_command(command),
+                None,
+                "command: {command:?}"
+            );
+        }
+    }
+
+    #[test]
     fn identifies_pyright_by_its_startup_log() {
         use crate::peek::peek;
         let body = br#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Pyright language server 1.1.412 starting"}}"#;

@@ -1337,7 +1337,7 @@ impl TempPyreflyProject {
         ));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("pkg")).expect("cannot create the temporary project");
-        std::fs::write(root.join("pyproject.toml"), PY_PYPROJECT).unwrap();
+        std::fs::write(root.join("pyproject.toml"), PYREFLY_PYPROJECT).unwrap();
         std::fs::write(root.join("pkg/__init__.py"), "").unwrap();
         std::fs::write(root.join("pkg/a.py"), PYREFLY_A).unwrap();
         std::fs::write(root.join("pkg/b.py"), PYREFLY_B).unwrap();
@@ -1561,7 +1561,7 @@ pub const MIX_EXS: &str = "defmodule Fixture.MixProject do\n  use Mix.Project\n\
 pub const EX_A: &str = "defmodule A do\n  def target, do: 1\nend\n";
 /// The call is on line 2 (0-based: line 1).
 pub const EX_B_WITH_CALL: &str = "defmodule B do\n  def x, do: A.target()\nend\n";
-pub const PY_PYPROJECT: &str = "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\n";
+pub const PYREFLY_PYPROJECT: &str = "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\n";
 /// `target` is declared on line 0 (character 4).
 pub const PYREFLY_A: &str = "def target() -> int:\n    return 1\n";
 pub const PYREFLY_B: &str =

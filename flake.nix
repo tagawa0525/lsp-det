@@ -70,6 +70,7 @@
         haskell-language-server # M15 (ADR 0019 決定 F)。readiness の信号は時間で抑制されるので写像は health だけ
         ghc # haskell-language-server と同じ版でビルドされた GHC（cradle の読み込みに要る）
         cabal-install # hie-bios の cabal cradle が呼ぶ
+        pyrefly # M16 (ADR 0019 決定 F)。起動時の索引は stderr にしか出ず、写像はない（両軸 unknown）
       ];
     in
     {

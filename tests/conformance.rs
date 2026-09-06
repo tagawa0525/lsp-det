@@ -4483,7 +4483,7 @@ fn jdtls_holds_references_until_service_ready() {
 // jdtls and a JDK on PATH (`nix develop .#servers`; `jdt-language-server`, `jdk21`).
 // ---------------------------------------------------------------------------
 
-/// Caller files under `src/app/` (research/jdtls-readiness-measurement.md 方法: a 201-file
+/// Caller files under `src/app/` (the method section of research/jdtls-readiness-measurement.md: a 201-file
 /// fixture, large enough that the index takes observable time).
 const JDTLS_FIXTURE_CALLERS: usize = 200;
 

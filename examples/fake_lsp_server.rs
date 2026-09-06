@@ -9,6 +9,8 @@
 //!
 //! - `$/fake/emitServerStatus` (notification): emits the params as is as the params of
 //!   `experimental/serverStatus`
+//! - `$/fake/emitNotification` (notification): emits `params.params` as the params of the
+//!   notification `params.method` (any server-specific vocabulary)
 //! - `$/fake/emitProgress` (notification): emits the params as is as the params of
 //!   `$/progress` (reproduces gopls's "Setting up workspace" etc.)
 //! - `$/fake/report` (request): returns the list of methods received so far and the params
@@ -240,6 +242,24 @@ fn main() {
                     id,
                     json!({"health": fake_health, "readiness": fake_readiness, "message": "answered by upstream"}),
                 );
+            }
+            "$/fake/emitNotification" => {
+                // Any server-to-client notification: `{method, params}` (reproduces server-specific
+                // vocabularies such as Metals's `metals/status`). A missing or non-string method
+                // is a mistake on the test side; say so instead of emitting an invalid message.
+                match params["method"].as_str() {
+                    Some(method) => send(
+                        &mut stdout,
+                        json!({
+                            "jsonrpc": "2.0",
+                            "method": method,
+                            "params": params.get("params").cloned().unwrap_or(Value::Null)
+                        }),
+                    ),
+                    None => eprintln!(
+                        "fake-lsp-server: $/fake/emitNotification needs a string `method`: {params}"
+                    ),
+                }
             }
             "$/fake/emitProgress" => {
                 send(

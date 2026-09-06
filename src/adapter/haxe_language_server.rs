@@ -13,7 +13,8 @@
 //!   and the names are fixed and disjoint: the startup titles are "Haxe: Building Cache...",
 //!   "Haxe: Parsing Classpaths...", and "Haxe: Building Refactoring Cache…..." (they run
 //!   concurrently); the per-request titles ("Haxe: Collecting Diagnostics...", "Haxe:
-//!   Performing Refactor Operation…....." and "…Rename Operation…....") are ignored. A begin of
+//!   Performing Refactor Operation…..." and "Haxe: Performing Rename Operation…...") are
+//!   ignored. A begin of
 //!   a startup title moves an already-`ready` server to `indexing`; an end that leaves no
 //!   startup token open moves to `ready`. A request answered while a startup token is open is
 //!   not a lie: it is queued by the compiler (`haxe --wait`) and answered in full only once the

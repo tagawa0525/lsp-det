@@ -3838,6 +3838,11 @@ fn haxe_spec_7_1_through_lsp_det_with_real_haxe() {
     );
     haxe_configure(&mut client);
     client.did_open(&a, "haxe");
+    // Identification (the "Haxe Path: " log) is silent and only follows
+    // `workspace/didChangeConfiguration` after the real compiler actually starts, unlike the
+    // fake upstream tests where a synchronization wall stands in for that delay.
+    // `wait_until_ready` requires readiness to already be observable, so poll past that first.
+    poll_state_until(&mut client, |s| s.readiness != Readiness::Unknown);
     client.wait_until_ready();
     let state = poll_state_until(&mut client, |s| s.health != Health::Unknown);
     assert_eq!(state.health, Health::Ok, "{state:?}");
@@ -3859,6 +3864,7 @@ fn haxe_spec_7_2_coverage_through_lsp_det_with_real_haxe() {
     );
     haxe_configure(&mut client);
     client.did_open(&a, "haxe");
+    poll_state_until(&mut client, |s| s.readiness != Readiness::Unknown);
     client.wait_until_ready();
     let (line, character) = support::HX_TARGET_DECLARATION;
     let found = client.references(&a, line, character);

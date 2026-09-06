@@ -32,7 +32,7 @@
 
 ## 開発環境
 
-- `flake.nix` が Rust ツールチェーン・rust-analyzer・go・gopls を固定する（nixpkgs はシステム構成と同じ rev）。`nix develop` か direnv（`.envrc` は `use flake` + `PATH_add target/release`。グローバルの gitignore に負けるので `git add -f` で追跡している）で入る
+- `flake.nix` の `default` はビルドの道具だけ、`servers` は言語サーバー全部（rust-analyzer・gopls・pyright・basedpyright・typescript-language-server。版の固定はここ。nixpkgs はシステム構成と同じ rev）。実サーバーの結合テストとドッグフーディングは `nix develop .#servers` か direnv（`.envrc` は `use flake .#servers` + `PATH_add target/release`。グローバルの gitignore に負けるので `git add -f` で追跡している）で入る
 - 対応 OS は Linux・macOS・Windows（ADR 0012）。プロセス寿命の追従は `src/process/{linux,macos,windows}.rs` に分かれている。他 OS のコンパイルは `scripts/check-targets.sh`（rustup の stable でクロスターゲットの `cargo check`）で push の前に確かめ、挙動は GitHub Actions の CI（`.github/workflows/ci.yml`、3 OS で `cargo test`）が確かめる。`v*` のタグで `.github/workflows/release.yml` が各 OS のバイナリを Release に添付する
 - 言語サーバーの版は保証の宣言に直結する（`src/adapter/*/TESTED_VERSIONS`）。`flake.lock` を更新して版が変わったら `cargo test --test conformance -- --ignored` を通してから一覧を動かす
 - ドッグフーディングは `dogfood/README.md`（`cargo build --release` → `claude --plugin-dir dogfood/claude-plugin`）。Serena は `dogfood/serena/README.md`

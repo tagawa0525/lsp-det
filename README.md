@@ -122,7 +122,8 @@ Linux, macOS, and Windows. If the client dies without closing the pipe, lsp-det 
 The only dependencies are `serde`, `serde_json`, `thiserror`, and `libc`. There is no async runtime.
 
 ```bash
-nix develop            # pins rustc, rust-analyzer, gopls, pyright, and typescript-language-server
+nix develop            # rustc, cargo, clippy, rustfmt: enough to build and run the deterministic tests
+nix develop .#servers  # the same plus rust-analyzer, gopls, pyright, typescript-language-server: for the real-server tests and dogfooding
 cargo build --release  # target/release/lsp-det
 cargo test             # deterministic tests with a fake language server and a fake client
 cargo test --test conformance -- --ignored   # 31 real-server tests (local only, not in CI)

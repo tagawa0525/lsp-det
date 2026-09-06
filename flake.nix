@@ -6,7 +6,7 @@
   # flake.lock を更新して言語サーバーの版が変わったら、実サーバーの結合テスト
   # （cargo test --test conformance -- --ignored）を通してから TESTED_VERSIONS を
   # 動かすこと。守れない保証の宣言は仕様 5.1 違反である。
-  description = "lsp-det の開発環境（Rust ツールチェーン + rust-analyzer、go + gopls）";
+  description = "lsp-det の開発環境。default はビルドの道具だけ、servers は言語サーバー全部（準拠テストの実サーバー結合とドッグフーディング用）";
 
   inputs = {
     # システム構成（~/nix/nixfiles）と同じ rev
@@ -18,24 +18,32 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+      # lsp-det をビルドし決定的なテスト（偽上流・偽クライアント）を回す道具。
+      # 軽く使う人はこれだけでよい。言語サーバーは自分の環境のものを使う。
+      tools = with pkgs; [
+        rustc
+        cargo
+        clippy
+        rustfmt
+      ];
+      # 準拠テストの実サーバー結合（cargo test --test conformance -- --ignored）と
+      # ドッグフーディングに使う言語サーバー。版の固定はここ（ADR 0019 決定 D）。
+      servers = with pkgs; [
+        rust-analyzer # `rust-analyzer 2026-08-03` と名乗る（rustup 版とは別ビルド）
+        go
+        gopls
+        pyright # M5 の写像。serverInfo を返さないので、名乗りと版は起動時の window/logMessage から読む (ADR 0011)
+        basedpyright # pyright の通知名を継承。写像を共有する
+        nodejs # typescript-language-server の実行環境
+        pnpm # 上流 (pyright、typescript-language-server) をソースからビルドするとき (scripts/upstream/)
+        typescript # tsserver 本体 (typescript-language-server が --tsserver-path なしで探す)
+        typescript-language-server # M6 の写像
+      ];
     in
     {
-      devShells.${system}.default = pkgs.mkShell {
-        packages = with pkgs; [
-          rustc
-          cargo
-          clippy
-          rustfmt
-          rust-analyzer # `rust-analyzer 2026-08-03` と名乗る（rustup 版とは別ビルド）
-          go
-          gopls
-          pyright # M5 の写像。serverInfo を返さないので、名乗りと版は起動時の window/logMessage から読む (ADR 0011)
-          basedpyright # pyright の通知名を継承。写像を共有する
-          nodejs # typescript-language-server の実行環境
-          pnpm # 上流 (pyright、typescript-language-server) をソースからビルドするとき (scripts/upstream/)
-          typescript # tsserver 本体 (typescript-language-server が --tsserver-path なしで探す)
-          typescript-language-server # M6 の写像
-        ];
+      devShells.${system} = {
+        default = pkgs.mkShell { packages = tools; };
+        servers = pkgs.mkShell { packages = tools ++ servers; };
       };
     };
 }

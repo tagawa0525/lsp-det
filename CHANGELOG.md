@@ -4,7 +4,7 @@
 
 ## 予定
 
-- 0.4.0（ADR 0019、M8〜M14）: Serena 30 言語のコーパス、反例の実サーバーでの検証（Metals、Elixir、Kotlin、Nextflow から）、相方サーバーとの合成の測定、devShell の分割
+- 0.4.0（ADR 0019、M8〜M20）: コーパス（済み）と devShell の分割（済み）、反例の実サーバーでの検証 10（Metals、Elixir、Kotlin、Nextflow、haskell-language-server、pyrefly、crystalline、sourcekit-lsp、Gleam、Haxe）、相方サーバーとの合成の測定（Vue）
 - 0.5.0: Dart、Sorbet、jdtls、clangd（着手時に ADR）
 - 外向きの提出は 0.5.0 の後、`docs/upstream-submissions.md` の順で。typescript-language-server の不具合修正 PR、Claude Code への報告（既存 issue 3 件へのコメントと新規 2 件）、Serena の不具合と提案、fork の 4 パッチ
 

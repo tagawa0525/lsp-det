@@ -147,10 +147,10 @@ interface ClientCapabilities {
 
 The two are **independent** and unordered. Real servers exist in all four quadrants:
 
-|                 | freshness                                        | no freshness                                                 |
-| --------------- | ------------------------------------------------ | ------------------------------------------------------------ |
-| **coverage**    | Snapshot model plus a full index (rust-analyzer) | Full index but asynchronous processing (the tsserver family) |
-| **no coverage** | Per-request snapshot but no full index (clangd)  | No guarantees                                                |
+|                 | freshness                                                                      | no freshness                                                 |
+| --------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------ |
+| **coverage**    | Snapshot model plus a full index (rust-analyzer)                               | Full index but asynchronous processing (the tsserver family) |
+| **no coverage** | Per-request snapshot but no full index (clangd without a compilation database) | No guarantees                                                |
 
 An implementation declares only the guarantees it can keep. Declaring a guarantee it cannot keep is a violation of this protocol. The same holds for the numbers in `incomplete` and the kinds in `fileChanges`: a value that has not been verified must not be written.
 

@@ -4065,21 +4065,6 @@ fn real_dart(project: &support::TempDartProject) -> ServerUnderTest {
     }
 }
 
-/// Returns only the references to `target` (declared in `a.dart`) that point at `file`.
-fn dart_references_in(
-    client: &mut ConformanceClient,
-    a: &std::path::Path,
-    file: &std::path::Path,
-) -> Vec<Value> {
-    let wanted = support::file_uri(file);
-    let (line, character) = support::DART_TARGET_DECLARATION;
-    client
-        .references(a, line, character)
-        .into_iter()
-        .filter(|location| location["uri"] == Value::String(wanted.clone()))
-        .collect()
-}
-
 /// Identity and the guarantee declared for the tested version (3.13.0).
 #[test]
 #[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]

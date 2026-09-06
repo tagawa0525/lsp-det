@@ -21,6 +21,13 @@
 //!   in for (ADR 0015): it does its own file watching and answers the notification with a
 //!   `window/showMessage` (type 1) "Unknown method workspace/didChangeWatchedFiles"
 //!   (docs/upstream-submissions.md has a proposal to accept it silently)
+//! - **freshness for `didChange` only** (`fileChanges: []`): an on-disk change is picked up
+//!   by the server's own watcher asynchronously, so a query sent right after the
+//!   notification can reach the server before the watcher does and be answered from the old
+//!   index, with no signal in that window (the `ANALYZING` begin comes only once the watcher
+//!   has noticed). Measured once in the full serial real-server run (7.3 item 3 failed), never
+//!   in isolation. A `didChange` is applied in message order before the request that follows
+//!   it, so that path holds
 //! - **health**: no signal. `unknown` (spec 8.2 item 3)
 //!
 //! `coverage` / `freshness` are declared only for versions ([`TESTED_VERSIONS`]) for which
@@ -31,7 +38,7 @@ use serde::Deserialize;
 
 use super::Mapping;
 use crate::peek::MessageView;
-use crate::state::{ALL_FILE_CHANGES, Readiness, ServerState, ServerStateProvider};
+use crate::state::{Readiness, ServerState, ServerStateProvider};
 
 /// The name Dart calls itself in `InitializeResult.serverInfo.name`, already lowercased for the
 /// case-insensitive comparison [`super::select`] does.
@@ -98,12 +105,12 @@ impl Mapping for DartAdapter {
 
     /// The guarantee to declare (spec chapter 5). Declared only for [`TESTED_VERSIONS`] (spec
     /// 8.2 item 5): the server holds a request until the analysis it depends on completes
-    /// (verified by conformance tests 7.1 / 7.2 against a real server), and incorporates
-    /// on-disk changes through its own file watching even though the
-    /// `workspace/didChangeWatchedFiles` stand-in (ADR 0015) is not read (verified by 7.3).
+    /// (verified by conformance tests 7.1 / 7.2 against a real server), and applies a
+    /// `didChange` before the request that follows it (7.3 item 1). On-disk changes are not
+    /// guaranteed (`fileChanges: []`; see the module documentation).
     fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
-            ServerStateProvider::workspace(&[], &ALL_FILE_CHANGES)
+            ServerStateProvider::workspace(&[], &[])
         } else {
             ServerStateProvider::notifications_only()
         }

@@ -14,6 +14,7 @@
 //! vocabulary, so the downstream side only ever sees spec values (ADR 0009
 //! decision D-6).
 
+pub mod crystalline;
 pub mod expert;
 pub mod gopls;
 pub mod haskell_language_server;
@@ -114,6 +115,8 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         haskell_language_server::SERVER_NAME => Some(Box::new(
             haskell_language_server::HaskellLanguageServerAdapter::new(),
         )),
+        // The version is not observable: crystalline declares no guarantee for any version.
+        crystalline::SERVER_NAME => Some(Box::new(crystalline::CrystallineAdapter::new())),
         "pyright" | "basedpyright" => Some(Box::new(PyrightAdapter::for_identity(&key, version))),
         typescript_language_server::SERVER_NAME => Some(Box::new(
             TypescriptLanguageServerAdapter::for_version(version),
@@ -151,7 +154,8 @@ pub fn identity_from_initialize_result(body: &[u8]) -> Option<ServerInfo> {
 ///
 /// Reads the identity announcement an upstream sends on its own at startup from an
 /// upstream-to-client notification. That is pyright's `window/logMessage` ("Pyright language
-/// server 1.1.412 starting") and typescript-language-server's own `$/typescriptVersion`.
+/// server 1.1.412 starting"), typescript-language-server's own `$/typescriptVersion`, and
+/// crystalline's `window/logMessage` ("\"[workspace] Found projects:…", version never observable).
 /// `None` if it is not an identity announcement. No generic recognition mechanism is built
 /// (a mapping that needs one adds its own recognition).
 pub fn identity_from_notification(view: &MessageView, body: &[u8]) -> Option<ServerInfo> {
@@ -172,6 +176,12 @@ pub fn identity_from_notification(view: &MessageView, body: &[u8]) -> Option<Ser
             let message = &envelope.params.message;
             pyright::startup_identity(message)
                 .or_else(|| typescript_language_server::startup_identity(message))
+                .or_else(|| {
+                    crystalline::identity_from_log(message).then(|| ServerInfo {
+                        name: crystalline::SERVER_NAME.to_string(),
+                        version: None,
+                    })
+                })
         }
         Some("$/typescriptVersion") => {
             #[derive(serde::Deserialize)]

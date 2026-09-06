@@ -21,6 +21,7 @@ pub mod gleam;
 pub mod gopls;
 pub mod haskell_language_server;
 pub mod haxe_language_server;
+pub mod jdtls;
 pub mod metals;
 pub mod nextflow;
 pub mod pyright;
@@ -111,6 +112,7 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         "gopls" => Some(Box::new(GoplsAdapter::for_version(version))),
         "metals" => Some(Box::new(metals::MetalsAdapter::for_version(version))),
         dart::SERVER_NAME => Some(Box::new(dart::DartAdapter::for_version(version))),
+        jdtls::SERVER_NAME => Some(Box::new(jdtls::JdtlsAdapter::for_version(version))),
         // The version is not looked at: Expert declares no guarantee for any version.
         "expert" => Some(Box::new(expert::ExpertAdapter::new())),
         // The version is not observable: Nextflow's language server declares no guarantee.

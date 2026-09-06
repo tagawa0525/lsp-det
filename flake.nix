@@ -98,6 +98,7 @@
         haxe-language-server # M20 の写像
         haxe # haxe-language-server が起動するコンパイラ
         dart # M21 の写像 (ADR 0020)。dart language-server。readiness は $/progress (token ANALYZING) から
+        jdt-language-server # M23 の写像 (ADR 0020)。jdtls -data <dir>。readiness は language/status の ServiceReady から
       ];
     in
     {

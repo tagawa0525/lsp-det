@@ -1234,6 +1234,8 @@ impl TempNextflowProject {
             "lsp-det-conformance-nextflow-{tag}-{}",
             std::process::id()
         ));
+        // A leftover of a run that died before its `Drop` would be counted by the scan.
+        let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("modules")).expect("cannot create the temporary project");
         std::fs::write(root.join("nextflow.config"), NF_CONFIG).unwrap();
         TempNextflowProject { root }

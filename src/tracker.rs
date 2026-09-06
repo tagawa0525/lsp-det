@@ -170,8 +170,13 @@ impl Tracker {
             // before the `initialize` response, and LSP forbids server-to-client notifications
             // (except logMessage etc.) before the response.
             let identity = adapter::identity_from_notification(view, body)?;
-            self.adopt(identity);
-            return None;
+            self.adopt(identity)?;
+            // The announcement itself can be a signal (Sorbet: the first
+            // `sorbet/showOperation` is the outer start of a nested pair). Let the mapping
+            // read it too; a mapping whose announcement is a mere log ignores it.
+            let adapter = self.adapter.as_mut()?;
+            let next = adapter.interpret(view, body)?;
+            return self.apply(next);
         };
         let next = adapter.interpret(view, body)?;
         self.apply(next)
@@ -517,5 +522,35 @@ mod tests {
         let mut tracker = without_adapter();
         assert!(observe(&mut tracker, &status("ok", true)).is_none());
         assert_eq!(tracker.state(), &ServerState::unobserved());
+    }
+
+    #[test]
+    fn the_notification_that_selected_the_mapping_is_also_read_by_it() {
+        // Sorbet's identity is its first `sorbet/showOperation`, and that very notification is
+        // a readiness signal (the outer `SlowPathBlocking` start of a nested pair). Measured
+        // startup order: SlowPathBlocking start, Indexing start, Indexing end, SlowPathBlocking
+        // end. If the tracker swallowed the identity message, the mapping would count only the
+        // inner pair and declare `ready` at the inner end, while the server is still
+        // typechecking.
+        fn operation(name: &str, status: &str) -> String {
+            format!(
+                r#"{{"jsonrpc":"2.0","method":"sorbet/showOperation","params":{{"operationName":"{name}","description":"...","status":"{status}"}}}}"#
+            )
+        }
+        let mut tracker = Tracker::new();
+        assert!(
+            observe(&mut tracker, &operation("SlowPathBlocking", "start")).is_none(),
+            "the selection does not notify"
+        );
+        assert_eq!(tracker.identity().map(|i| i.name.as_str()), Some("sorbet"));
+        assert!(observe(&mut tracker, &operation("Indexing", "start")).is_none());
+        assert!(
+            observe(&mut tracker, &operation("Indexing", "end")).is_none(),
+            "the outer operation is still open: not ready yet"
+        );
+        assert_eq!(tracker.state().readiness, Readiness::Initializing);
+        let ready = observe(&mut tracker, &operation("SlowPathBlocking", "end"))
+            .expect("ready when the outer operation ends");
+        assert_eq!(ready.readiness, Readiness::Ready);
     }
 }

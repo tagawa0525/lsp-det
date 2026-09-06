@@ -168,6 +168,33 @@ impl ServerUnderTest {
         )
     }
 
+    /// A fake upstream that returns no `serverInfo` and announces nothing on its own (as the
+    /// real Sorbet's only identity announcement is the `sorbet/showOperation` notification
+    /// itself, which a test emits on demand) + lsp-det. lsp-det selects the Sorbet mapping by
+    /// that notification's method (M22).
+    pub fn lsp_det_with_fake_sorbet() -> Self {
+        Self::lsp_det_with_upstream("none", &[])
+    }
+
+    /// Same fake upstream as [`Self::lsp_det_with_fake_sorbet`], but launched from a copy of
+    /// the fake binary named `command_basename` (plus the platform's executable suffix). Used
+    /// to check ADR 0020 decision D's `initializationOptions` injection, which is scoped to the
+    /// basename of the command lsp-det itself launched -- something [`Self::lsp_det_with_upstream`]
+    /// cannot vary, since it always launches the fake binary under its own build name.
+    pub fn lsp_det_with_fake_upstream_named(command_basename: &str) -> Self {
+        let program = upstream_binary_named(command_basename);
+        ServerUnderTest {
+            program: lsp_det_binary(),
+            args: vec![
+                "--".to_string(),
+                program.to_string_lossy().into_owned(),
+                "--server-name".to_string(),
+                "none".to_string(),
+            ],
+            root: repo_root(),
+        }
+    }
+
     /// A fake upstream conformant to this protocol + lsp-det. The upstream side becomes the
     /// identity mapping, and the downstream side reads the upstream's state across the boundary
     /// (design 4.1).
@@ -222,6 +249,38 @@ pub fn fake_upstream_binary() -> PathBuf {
 
 pub fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// A counter making every call's destination directory unique, so concurrent tests copying to
+/// the same `name` (e.g. two tests both naming their copy "sorbet") never race on the same file.
+static UPSTREAM_BINARY_COPY_COUNTER: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Copies the fake upstream binary to a fresh temp file whose basename is `name` (plus the
+/// platform's executable suffix). ADR 0020 decision D's `initializationOptions` injection is
+/// scoped to the basename of the command lsp-det itself launched, and
+/// [`ServerUnderTest::lsp_det_with_upstream`] always launches the fake binary under its own
+/// build name (`fake_lsp_server`), so exercising the injection needs a copy under the command
+/// name the decision cares about (`sorbet`, `srb`, or a name it must NOT trigger for).
+pub fn upstream_binary_named(name: &str) -> PathBuf {
+    let n = UPSTREAM_BINARY_COPY_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "lsp-det-conformance-upstream-bin-{}-{n}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("cannot create the temporary binary directory");
+    let dest = dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    std::fs::copy(fake_upstream_binary(), &dest).expect("cannot copy the fake upstream binary");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&dest)
+            .expect("the copy should exist")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&dest, perms).expect("cannot make the copy executable");
+    }
+    dest
 }
 
 /// `target/<profile>/examples/pseudo_client` (the pseudo client used only by the process
@@ -982,6 +1041,12 @@ impl ConformanceClient {
         self.upstream_report()["initializeParams"]["capabilities"].clone()
     }
 
+    /// The `initializationOptions` the fake upstream received in `initialize` (ADR 0020
+    /// decision D's injection lands here).
+    pub fn upstream_initialization_options(&mut self) -> Value {
+        self.upstream_report()["initializeParams"]["initializationOptions"].clone()
+    }
+
     /// Whether the `window/workDoneProgress/create` the fake upstream sent was answered.
     pub fn upstream_progress_create_answered(&mut self) -> bool {
         self.upstream_report()["progressCreateAnswered"] == json!(true)
@@ -1546,6 +1611,44 @@ impl Drop for TempJdtlsProject {
     }
 }
 
+/// A temporary Sorbet project. `sorbet/config` points Sorbet at `.` (Sorbet reads it as
+/// positional args, one per line: `--dir` then `.`). `lib/a.rb` declares `Lib.target`;
+/// `lib/f0.rb` .. `lib/f{n-1}.rb` each define a class with about 30 methods, one of which calls
+/// `Lib.target` once (M22, Sorbet; the method section of research/sorbet-readiness-measurement.md).
+/// Sorbet resolves names across the whole scanned directory, so callers need no `require`.
+pub struct TempSorbetProject {
+    pub root: PathBuf,
+}
+
+impl TempSorbetProject {
+    /// `n` caller files under `lib/`.
+    pub fn with_many_callers(tag: &str, n: usize) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-sorbet-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sorbet")).expect("cannot create the temporary project");
+        std::fs::create_dir_all(root.join("lib")).expect("cannot create the temporary project");
+        std::fs::write(root.join("sorbet/config"), SORBET_CONFIG).unwrap();
+        std::fs::write(root.join("lib/a.rb"), SORBET_A).unwrap();
+        for i in 0..n {
+            std::fs::write(root.join(format!("lib/f{i}.rb")), sorbet_caller_file(i)).unwrap();
+        }
+        TempSorbetProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempSorbetProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// A temporary Haxe project for haxe-language-server. `src/B.hx` calls `A.target()`, and
 /// `src/Main.hx` calls `B.x()` (M20).
 pub struct TempHaxeProject {
@@ -1886,6 +1989,39 @@ pub fn jdtls_caller_file_with_calls(index: usize, calls: usize) -> String {
     out
 }
 
+/// Sorbet reads `sorbet/config` as one positional argument per line (`--dir` then `.`).
+pub const SORBET_CONFIG: &str = "--dir\n.\n";
+/// `target` is declared on line 2 (character 11, right after "  def self.").
+pub const SORBET_A: &str = "# typed: true\nmodule Lib\n  def self.target\n    1\n  end\nend\n";
+pub const SORBET_TARGET_DECLARATION: (u32, u32) = (2, 11);
+/// A file that calls `Lib.target` once. Would be used as a new (Created) file for 7.3 items
+/// 2-4, which M22 does not exercise (they need watchman with a pre-existing `watch-project`,
+/// which the test environment does not run; see the real-server tests).
+pub const SORBET_G: &str = "# typed: true\nclass G\n  def call\n    Lib.target\n  end\nend\n";
+
+/// The content of `lib/f{index}.rb`: a class with about 30 methods, one of which calls
+/// `Lib.target` once (the method section of research/sorbet-readiness-measurement.md). Sorbet
+/// resolves `Lib` across the whole scanned directory, so no `require` is needed.
+pub fn sorbet_caller_file(index: usize) -> String {
+    sorbet_caller_file_with_calls(index, 1)
+}
+
+/// Same as [`sorbet_caller_file`], but the first method calls `Lib.target` `calls` times (used
+/// by the 7.3 item 1 real-server test: a `didChange` on an open file that adds one more call).
+pub fn sorbet_caller_file_with_calls(index: usize, calls: usize) -> String {
+    let mut out = String::from("# typed: true\n");
+    out.push_str(&format!("class F{index}\n"));
+    out.push_str("  def call\n");
+    for _ in 0..calls {
+        out.push_str("    Lib.target\n");
+    }
+    out.push_str("  end\n\n");
+    for i in 1..30 {
+        out.push_str(&format!("  def f{index}_{i}; end\n"));
+    }
+    out.push_str("end\n");
+    out
+}
 pub const HS_CABAL: &str = "cabal-version:      2.4\nname:               fixture\nversion:            0.1.0.0\nbuild-type:         Simple\n\nlibrary\n    exposed-modules:  A, B\n    build-depends:    base\n    hs-source-dirs:   src\n    default-language: Haskell2010\n";
 pub const HS_HIE_YAML: &str = "cradle:\n  cabal:\n";
 pub const HS_HIE_YAML_BROKEN: &str = "cradle:\n  cabal:\n    component: \"lib:doesnotexist\"\n";

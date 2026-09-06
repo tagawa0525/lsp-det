@@ -46,7 +46,7 @@ health の信号はない。
 | `g.dart` を作って `didChangeWatchedFiles` Created（走行 3、5）    | `window/showMessage` type 1 "Unknown method workspace/didChangeWatchedFiles"。作成の時点で処理中だった要求は **`-32801 ContentModified`**（作成の 16 ms 後）。0.13 秒後に begin → end。作成の後に送った要求は end まで待たされて **401 件** |
 | 同じ作成を通知しない（走行 4）                                    | 同じ。サーバー自身の監視が拾う（処理中の要求は `-32801`、その後 begin → end、次の要求は 401 件）                                                                                                                                            |
 
-`didChangeWatchedFiles` の通知はサーバーに読まれない（README のとおり）が、7.3 の 2〜4 の保証「通知の後に `ready` で発行した問い合わせが変更を反映する」は、サーバー自身の監視と要求の待たせで成り立つ。通知はエラーの `showMessage` を生むだけで、取り込みには効かない。
+`didChangeWatchedFiles` の通知はサーバーに読まれない（README のとおり）。取り込みはサーバー自身の監視で、上の走行では通知の後の問い合わせがどれも新しい答えだったが、監視は通知と因果関係がなく非同期なので、問い合わせが監視より先に届く窓がある。実サーバーの結合テスト 66 件を直列で回したとき、7.3 の 3（Created）で新しいファイルの参照が返らずに 1 度落ちた（単独では 5 回とも通る）。その窓に信号はない（`ANALYZING` の begin は監視が拾った後にしか来ない）。したがって 7.3 の 2〜4 は保証できない。通知はエラーの `showMessage` を生むだけで、取り込みには効かない。
 
 `-32801` は LSP が「内容が変わったのでやり直せ」と定めたエラーで、無言の嘘ではない。lsp-det はそのまま転送する。
 
@@ -56,7 +56,7 @@ health の信号はない。
 - **readiness**: `initializing` から、`ANALYZING` の begin で `indexing`、end で `ready`。以後の begin（`didChange`、ディスク上の変更、`didOpen`）で `indexing`、end で `ready`。rust-analyzer の `quiescent` と同じ形。解析するものがなくても対が来るので、`initializing` に留まることはない
 - **先読み**: しない。サーバーが要求を待たせるので、`didChange` の直後に `ready` のまま転送しても古い答えは返らない（ADR 0014 追補の決定 D の条件は満たすが、要らない）
 - **health**: 信号がなく `unknown`
-- **coverage / freshness**: 7.1〜7.3 を通した版（3.13.0）に `coverage: {scope: "workspace", incomplete: {}}` と `freshness: {fileChanges: ["Created", "Changed", "Deleted"]}` を宣言する。取り込みの機構はサーバー自身の監視だが、保証の文言（通知の後の問い合わせが反映する）は成り立つ
+- **coverage / freshness**: 7.1、7.2、7.3 の 1 を通した版（3.13.0）に `coverage: {scope: "workspace", incomplete: {}}` と `freshness: {fileChanges: []}` を宣言する。`didChange` はメッセージの順に適用されてから後続の要求が処理されるので成り立つ。ディスク上の変更（7.3 の 2〜4）は上のとおり窓があり宣言しない。実サーバーの結合テストは 7.1、7.2、7.3 の 1 を当てる
 - **`didChangeWatchedFiles` の代行（ADR 0015）との関係**: lsp-det が代行で送る通知にも "Unknown method" の `showMessage`（type 1）が返る。取り込みには効かず、クライアントにエラーの通知が見えるだけ。代行を「上流が登録したときだけ」に絞るかは ADR 0015 の見直しで、本 M では変えない
 - **上流に求めること**（`docs/upstream-submissions.md` の候補）: `workspace/didChangeWatchedFiles` を黙って無視する（クライアントが送るのは LSP では登録の後だが、登録しないサーバーに送るクライアントは珍しくなく、type 1 の `showMessage` はエラーとして見える）
 

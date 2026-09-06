@@ -478,6 +478,21 @@ mod tests {
         );
     }
 
+    /// Expert returns `"experimental": null` (measured with 0.1.9). LSP treats an absent and a
+    /// null optional field alike, so null is replaced by an object, not refused.
+    #[test]
+    fn treats_an_explicit_null_experimental_as_absent() {
+        let out = declared(
+            r#"{"id":1,"result":{"capabilities":{"hoverProvider":true,"experimental":null}}}"#,
+            &ServerStateProvider::notifications_only(),
+        );
+        assert_eq!(
+            out["result"]["capabilities"]["experimental"]["serverStateProvider"],
+            serde_json::json!({})
+        );
+        assert_eq!(out["result"]["capabilities"]["hoverProvider"], true);
+    }
+
     #[test]
     fn a_bare_true_is_not_a_declaration() {
         // A declaration is always an object (ADR 0016). `true` is not a declaration and is

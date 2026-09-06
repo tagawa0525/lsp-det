@@ -48,6 +48,27 @@
           }
         } "$@"
       '';
+      # haxe-language-server は単体の release も npm もないので vshaxe の VS Code 拡張（Open VSX の vsix）から取る (ADR 0019 決定 F、M20)。
+      # node で server/bin/server.js を動かす。haxe が PATH に要る。serverInfo を返さないので版は語彙に現れない。
+      haxe-language-server = pkgs.stdenv.mkDerivation {
+        pname = "haxe-language-server";
+        version = "2.34.2";
+        src = pkgs.fetchurl {
+          url = "https://open-vsx.org/api/nadako/vshaxe/2.34.2/file/nadako.vshaxe-2.34.2.vsix";
+          hash = "sha256-EE14Xj97V6fz3r9SDZdR9+er86fnjSA9saj/PcfKMOI=";
+        };
+        nativeBuildInputs = [ pkgs.unzip ];
+        unpackPhase = "unzip -q $src";
+        installPhase = ''
+          mkdir -p $out/share/haxe-language-server $out/bin
+          cp -r extension/server $out/share/haxe-language-server/
+          cat > $out/bin/haxe-language-server <<EOF
+          #!${pkgs.runtimeShell}
+          exec ${pkgs.nodejs}/bin/node $out/share/haxe-language-server/server/bin/server.js "\$@"
+          EOF
+          chmod +x $out/bin/haxe-language-server
+        '';
+      };
       # 準拠テストの実サーバー結合（cargo test --test conformance -- --ignored）と
       # ドッグフーディングに使う言語サーバー。版の固定はここ（ADR 0019 決定 D）。
       servers = with pkgs; [
@@ -74,6 +95,8 @@
         crystalline # M17 (ADR 0019 決定 F)。readiness は起動ログ "LSP server is ready." から
         crystal # crystalline がコンパイルに使う
         gleam # M19 (ADR 0019 決定 F)。readiness は "Downloading Gleam dependencies" のトークンから
+        haxe-language-server # M20 の写像
+        haxe # haxe-language-server が起動するコンパイラ
       ];
     in
     {

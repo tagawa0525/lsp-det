@@ -177,7 +177,7 @@ const SERVER_STATE_CLIENT_CAPABILITY: &str = "experimental.serverState";
 const SELF_STATE_REQUEST_ID: &str = "lsp-det:serverState";
 
 /// The basename of the upstream command lsp-det itself was told to launch, without a
-/// directory or a `.exe` suffix (ADR 0020 decision D). `command` is exactly what the caller
+/// directory or a `.exe` suffix, in lowercase (ADR 0020 decision D). `command` is exactly what the caller
 /// passed after `--` (`cli.rs`): a bare name (`"sorbet"`), or a path (`"/usr/bin/sorbet"`,
 /// `".\\sorbet.exe"`).
 fn upstream_command_basename(command: &str) -> String {
@@ -185,12 +185,12 @@ fn upstream_command_basename(command: &str) -> String {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(command);
-    match base
-        .strip_suffix(".exe")
-        .or_else(|| base.strip_suffix(".EXE"))
-    {
+    // Windows file names are case-insensitive (`Sorbet.Exe`), so compare in lowercase; the
+    // command table (`adapter::INITIALIZATION_OPTIONS_BY_COMMAND`) is lowercase.
+    let lower = base.to_ascii_lowercase();
+    match lower.strip_suffix(".exe") {
         Some(stripped) => stripped.to_string(),
-        None => base.to_string(),
+        None => lower,
     }
 }
 
@@ -1119,6 +1119,8 @@ mod tests {
             ("sorbet.exe", "sorbet"),
             ("/tools/sorbet.exe", "sorbet"),
             ("sorbet.EXE", "sorbet"),
+            ("Sorbet.Exe", "sorbet"),
+            ("SRB", "srb"),
             ("gopls", "gopls"),
         ] {
             assert_eq!(

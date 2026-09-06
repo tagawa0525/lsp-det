@@ -25,6 +25,15 @@ pub enum RequestId {
     String(String),
 }
 
+impl std::fmt::Display for RequestId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RequestId::Number(n) => write!(f, "{n}"),
+            RequestId::String(s) => write!(f, "{s:?}"),
+        }
+    }
+}
+
 /// The minimal information peeked from a message. Borrows the body's lifetime.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 pub struct MessageView<'a> {

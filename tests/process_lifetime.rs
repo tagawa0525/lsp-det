@@ -22,14 +22,20 @@ use serde_json::json;
 const EXIT_WINDOW: Duration = Duration::from_secs(10);
 
 /// Reads stderr lines on a separate thread, and extracts the pid from the first line containing
-/// `needle`.
+/// `needle`. On a timeout the lines seen so far are part of the failure, so that a process that
+/// died or printed something else (a panic of lsp-det, an OS error) can be told from one that
+/// never started.
 fn pid_from_stderr(lines: &Receiver<String>, needle: &str) -> u32 {
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    let mut seen = Vec::new();
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        let line = lines
-            .recv_timeout(remaining)
-            .unwrap_or_else(|_| panic!("no line containing {needle:?} arrives on stderr"));
+        let line = lines.recv_timeout(remaining).unwrap_or_else(|err| {
+            panic!(
+                "no line containing {needle:?} arrives on stderr ({err:?}); lines so far: {seen:#?}"
+            )
+        });
+        seen.push(line.clone());
         if let Some(rest) = line.split(needle).nth(1) {
             return rest
                 .trim()

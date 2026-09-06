@@ -4477,3 +4477,167 @@ fn jdtls_holds_references_until_service_ready() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Real jdtls integration (local only. Not part of CI — v0.1-design.md chapter 6). Requires
+// jdtls and a JDK on PATH (`nix develop .#servers`; `jdt-language-server`, `jdk21`).
+// ---------------------------------------------------------------------------
+
+/// Caller files under `src/app/` (research/jdtls-readiness-measurement.md 方法: a 201-file
+/// fixture, large enough that the index takes observable time).
+const JDTLS_FIXTURE_CALLERS: usize = 200;
+
+fn real_jdtls(project: &support::TempJdtlsProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec![
+            "--".to_string(),
+            "jdtls".to_string(),
+            "-data".to_string(),
+            project.data_dir.to_string_lossy().into_owned(),
+        ],
+        root: project.root.clone(),
+    }
+}
+
+/// Returns only the references to `target` (declared in `Lib.java`) that point at `file`.
+fn jdtls_references_in(
+    client: &mut ConformanceClient,
+    lib: &std::path::Path,
+    file: &std::path::Path,
+) -> Vec<Value> {
+    let wanted = support::file_uri(file);
+    let (line, character) = support::JDTLS_TARGET_DECLARATION;
+    client
+        .references(lib, line, character)
+        .into_iter()
+        .filter(|location| location["uri"] == Value::String(wanted.clone()))
+        .collect()
+}
+
+/// Identity and the guarantee declared for the tested version (1.60.0-SNAPSHOT).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn jdtls_is_selected_by_its_real_server_info() {
+    let project = support::TempJdtlsProject::with_many_callers("select", 1);
+    let mut client = ConformanceClient::start(&real_jdtls(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({
+            "coverage": {"scope": "workspace", "incomplete": {}},
+            "freshness": {"fileChanges": ["Created", "Changed", "Deleted"]}
+        }),
+        "no guarantee is declared for the tested version of real jdtls: {result}"
+    );
+    client.shutdown();
+}
+
+/// 7.1: the first `references` is complete. The server holds the request until the index it
+/// depends on is ready (JDT's search runs with `WAIT_UNTIL_READY_TO_SEARCH`; research: a
+/// `references` sent at 1.04s, before `ServiceReady` at 1.12s, answers only once the search can
+/// run, and the answer is already complete). This mapping has no intermediate `indexing`
+/// readiness (only `ServiceReady` moves it), so unlike the Dart mapping there is no "begin" to
+/// observe first; the query is simply sent right after `didOpen`.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn jdtls_spec_7_1_first_references_is_complete_through_lsp_det_with_real_jdtls() {
+    let project = support::TempJdtlsProject::with_many_callers("readiness", JDTLS_FIXTURE_CALLERS);
+    let lib = project.file("src/app/Lib.java");
+    let mut client = ConformanceClient::start(&real_jdtls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&lib, "java");
+    assert_ne!(client.server_state().readiness, Readiness::Ready);
+
+    let (line, character) = support::JDTLS_TARGET_DECLARATION;
+    let found = client.references(&lib, line, character);
+    assert_eq!(
+        found.len(),
+        JDTLS_FIXTURE_CALLERS,
+        "the first references was not complete: {} of {}",
+        found.len(),
+        JDTLS_FIXTURE_CALLERS
+    );
+    client.wait_until_ready();
+    client.shutdown();
+}
+
+/// 7.2: the result once `ready` matches the precomputed complete set (every caller file calls
+/// `target` exactly once).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn jdtls_spec_7_2_coverage_through_lsp_det_with_real_jdtls() {
+    let project = support::TempJdtlsProject::with_many_callers("coverage", JDTLS_FIXTURE_CALLERS);
+    let lib = project.file("src/app/Lib.java");
+    let mut client = ConformanceClient::start(&real_jdtls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&lib, "java");
+    client.wait_until_ready();
+
+    let (line, character) = support::JDTLS_TARGET_DECLARATION;
+    let found = client.references(&lib, line, character);
+    assert_eq!(
+        found.len(),
+        JDTLS_FIXTURE_CALLERS,
+        "missed some callers while declaring ready (completeness violation): {} of {}",
+        found.len(),
+        JDTLS_FIXTURE_CALLERS
+    );
+    client.shutdown();
+}
+
+/// 7.3 item 1: a `didChange` on an open file (`F0.java`) that adds one more call to
+/// `Lib.target()` is incorporated.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn jdtls_spec_7_3_1_did_change_on_an_open_file_through_lsp_det_with_real_jdtls() {
+    let project =
+        support::TempJdtlsProject::with_many_callers("freshness-didchange", JDTLS_FIXTURE_CALLERS);
+    let lib = project.file("src/app/Lib.java");
+    let f0 = project.file("src/app/F0.java");
+    let mut client = ConformanceClient::start(&real_jdtls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&lib, "java");
+    client.did_open(&f0, "java");
+    client.wait_until_ready();
+
+    let (line, character) = support::JDTLS_TARGET_DECLARATION;
+    let before = client.references(&lib, line, character).len();
+    client.did_change(&f0, 2, &support::jdtls_caller_file_with_calls(0, 2));
+    let after = client.references(&lib, line, character).len();
+    assert_eq!(
+        after,
+        before + 1,
+        "an added call in an open file was not incorporated: before={before} after={after}"
+    );
+    client.shutdown();
+}
+
+/// 7.3 items 2-4: watched-file Created / Changed / Deleted of a file that is not opened, each
+/// reflected in a query from a different file (`Lib.java`, the file that defines `target`).
+/// jdtls registers `workspace/didChangeWatchedFiles` for `**/*.java` (research); the test client
+/// sends the notification itself (`client_notifies: true`).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn jdtls_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_jdtls() {
+    let project = support::TempJdtlsProject::with_many_callers("watched", JDTLS_FIXTURE_CALLERS);
+    let lib = project.file("src/app/Lib.java");
+    let caller = project.file("src/app/F1.java");
+    let mut client = ConformanceClient::start(&real_jdtls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&lib, "java");
+    client.wait_until_ready();
+
+    watched_file_changes_are_reflected(
+        &mut client,
+        &lib,
+        &caller,
+        &support::jdtls_caller_file_with_calls(1, 2),
+        &project.file("src/app/G.java"),
+        support::JDTLS_G,
+        None,
+        jdtls_references_in,
+        true,
+    );
+    client.shutdown();
+}

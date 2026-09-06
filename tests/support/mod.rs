@@ -1495,6 +1495,60 @@ impl Drop for TempDartProject {
     }
 }
 
+/// A temporary Eclipse-described Java project for jdtls. `.project` / `.classpath` (Eclipse's
+/// project description; no Maven or Gradle, no network) declare a `src` source root and a JRE
+/// container (M23, the method section of research/jdtls-readiness-measurement.md: a bare folder
+/// works too as jdtls's "invisible project", but the source root is then guessed wrong and every
+/// file gets a "declared package does not match" diagnostic). `src/app/Lib.java` declares
+/// `target`; `src/app/F0.java` .. `src/app/F{n-1}.java` each define about 30 methods and one
+/// `use()` that calls `Lib.target()` once. `data_dir` is a fresh sibling directory for jdtls's
+/// own workspace metadata (`jdtls -data <data_dir>`; it is not part of the Eclipse project
+/// itself and must be writable).
+pub struct TempJdtlsProject {
+    pub root: PathBuf,
+    pub data_dir: PathBuf,
+}
+
+impl TempJdtlsProject {
+    /// `n` caller files under `src/app/`.
+    pub fn with_many_callers(tag: &str, n: usize) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-jdtls-{tag}-{}",
+            std::process::id()
+        ));
+        let data_dir = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-jdtls-{tag}-{}-data",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&data_dir);
+        std::fs::create_dir_all(root.join("src/app")).expect("cannot create the temporary project");
+        std::fs::create_dir_all(&data_dir).expect("cannot create jdtls's data directory");
+        std::fs::write(root.join(".project"), JDTLS_PROJECT).unwrap();
+        std::fs::write(root.join(".classpath"), JDTLS_CLASSPATH).unwrap();
+        std::fs::write(root.join("src/app/Lib.java"), JDTLS_LIB).unwrap();
+        for i in 0..n {
+            std::fs::write(
+                root.join(format!("src/app/F{i}.java")),
+                jdtls_caller_file(i),
+            )
+            .unwrap();
+        }
+        TempJdtlsProject { root, data_dir }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempJdtlsProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+        let _ = std::fs::remove_dir_all(&self.data_dir);
+    }
+}
+
 /// A temporary Haxe project for haxe-language-server. `src/B.hx` calls `A.target()`, and
 /// `src/Main.hx` calls `B.x()` (M20).
 pub struct TempHaxeProject {
@@ -1801,6 +1855,40 @@ pub fn dart_caller_file_with_calls(index: usize, calls: usize) -> String {
     }
     out
 }
+/// The Eclipse project description: a `javanature` project built by `javabuilder` (M23, the
+/// method section of research/jdtls-readiness-measurement.md).
+pub const JDTLS_PROJECT: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<projectDescription>\n\t<name>fixture</name>\n\t<comment></comment>\n\t<projects>\n\t</projects>\n\t<buildSpec>\n\t\t<buildCommand>\n\t\t\t<name>org.eclipse.jdt.core.javabuilder</name>\n\t\t\t<arguments>\n\t\t\t</arguments>\n\t\t</buildCommand>\n\t</buildSpec>\n\t<natures>\n\t\t<nature>org.eclipse.jdt.core.javanature</nature>\n\t</natures>\n</projectDescription>\n";
+/// A `src` source root and a JRE container, output to `bin` (no Maven or Gradle, no network).
+pub const JDTLS_CLASSPATH: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<classpath>\n\t<classpathentry kind=\"src\" path=\"src\"/>\n\t<classpathentry kind=\"con\" path=\"org.eclipse.jdt.launching.JRE_CONTAINER\"/>\n\t<classpathentry kind=\"output\" path=\"bin\"/>\n</classpath>\n";
+pub const JDTLS_LIB: &str = "package app;\n\npublic class Lib {\n    public static int target() {\n        return 1;\n    }\n}\n";
+/// `target` is declared on line 3 (character 22, right after "    public static int ").
+pub const JDTLS_TARGET_DECLARATION: (u32, u32) = (3, 22);
+/// A file that calls `Lib.target()` once from a new class `G`. Used as a new (Created) file in
+/// the 7.3 real-server tests.
+pub const JDTLS_G: &str =
+    "package app;\n\npublic class G {\n    public void g() {\n        Lib.target();\n    }\n}\n";
+
+/// The content of `src/app/F{index}.java`: about 30 methods, one of them (`use`) calling
+/// `Lib.target()` once (the method section of research/jdtls-readiness-measurement.md).
+pub fn jdtls_caller_file(index: usize) -> String {
+    jdtls_caller_file_with_calls(index, 1)
+}
+
+/// Same as [`jdtls_caller_file`], but `use()` calls `Lib.target()` `calls` times (used by the
+/// 7.3 item 1 real-server test: a `didChange` on an open file that adds one more call).
+pub fn jdtls_caller_file_with_calls(index: usize, calls: usize) -> String {
+    let mut out = format!("package app;\n\npublic class F{index} {{\n    public void use() {{\n");
+    for _ in 0..calls {
+        out.push_str("        Lib.target();\n");
+    }
+    out.push_str("    }\n\n");
+    for i in 1..30 {
+        out.push_str(&format!("    public void m{i}() {{}}\n\n"));
+    }
+    out.push_str("}\n");
+    out
+}
+
 pub const HS_CABAL: &str = "cabal-version:      2.4\nname:               fixture\nversion:            0.1.0.0\nbuild-type:         Simple\n\nlibrary\n    exposed-modules:  A, B\n    build-depends:    base\n    hs-source-dirs:   src\n    default-language: Haskell2010\n";
 pub const HS_HIE_YAML: &str = "cradle:\n  cabal:\n";
 pub const HS_HIE_YAML_BROKEN: &str = "cradle:\n  cabal:\n    component: \"lib:doesnotexist\"\n";

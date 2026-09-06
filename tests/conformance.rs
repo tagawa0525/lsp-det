@@ -4910,3 +4910,143 @@ fn sorbet_does_not_inject_for_an_upstream_command_with_a_different_name() {
     );
     client.shutdown();
 }
+// --- real Sorbet (local only) ---------------------------------------------
+
+/// Caller files under `lib/` (the method section of research/sorbet-readiness-measurement.md).
+const SORBET_FIXTURE_CALLERS: usize = 600;
+/// The count `textDocument/references` on `Lib.target` answers with, even with
+/// `includeDeclaration: false`: real Sorbet returns the `def self.target` site itself
+/// regardless of the flag (measured), on top of the one call in each of the caller files.
+const SORBET_EXPECTED_REFERENCES: usize = SORBET_FIXTURE_CALLERS + 1;
+
+fn real_sorbet(project: &support::TempSorbetProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec![
+            "--".to_string(),
+            // No directory argument: `sorbet/config` supplies it, and passing one too makes
+            // Sorbet exit with "requires a single input directory" (measured).
+            "sorbet".to_string(),
+            "--lsp".to_string(),
+            "--disable-watchman".to_string(),
+        ],
+        root: project.root.clone(),
+    }
+}
+
+/// Identity/selection and the guarantee declared (always none, ADR 0020 decision E: the
+/// version never appears in the protocol). The test client does not pass
+/// `initializationOptions` itself, so `sorbet/showOperation` -- and therefore identity and
+/// every readiness notification -- only appears because lsp-det injects the opt-in for the
+/// `sorbet` command it launched (ADR 0020 decision D). `sorbet` is the real binary's own
+/// basename, so this is also the decision D injection exercised end to end.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn sorbet_is_selected_by_its_real_notifications() {
+    let project = support::TempSorbetProject::with_many_callers("select", 1);
+    let mut client = ConformanceClient::start(&real_sorbet(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "no guarantee can be declared for a server whose version never appears in the protocol: \
+         {result}"
+    );
+    // Sorbet identifies itself only through `sorbet/showOperation` sent after `initialized`
+    // (research/sorbet-readiness-measurement.md), an unavoidable round trip a bare
+    // `experimental/serverState` request can race ahead of.
+    poll_state_until(&mut client, |s| s.readiness != Readiness::Unknown);
+    client.wait_until_ready();
+    client.shutdown();
+}
+
+/// 7.1: the first `references` from `a.rb`, sent right after `ready`, is complete (research:
+/// Sorbet holds a cross-file request until Idle, so there is no empty or partial answer to
+/// observe even sent right after `ready` is first reached).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn sorbet_spec_7_1_first_references_is_complete_through_lsp_det_with_real_sorbet() {
+    let project =
+        support::TempSorbetProject::with_many_callers("readiness", SORBET_FIXTURE_CALLERS);
+    let a = project.file("lib/a.rb");
+    let mut client = ConformanceClient::start(&real_sorbet(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&a, "ruby");
+    // See sorbet_is_selected_by_its_real_notifications: identification is a round trip a bare
+    // state request can race ahead of.
+    poll_state_until(&mut client, |s| s.readiness != Readiness::Unknown);
+    client.wait_until_ready();
+
+    let (line, character) = support::SORBET_TARGET_DECLARATION;
+    let found = client.references(&a, line, character);
+    assert_eq!(
+        found.len(),
+        SORBET_EXPECTED_REFERENCES,
+        "the first references was not complete: {} of {}",
+        found.len(),
+        SORBET_EXPECTED_REFERENCES
+    );
+    client.shutdown();
+}
+
+/// 7.2: the result once `ready` matches the precomputed complete set (every caller file calls
+/// `Lib.target` exactly once).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn sorbet_spec_7_2_coverage_through_lsp_det_with_real_sorbet() {
+    let project = support::TempSorbetProject::with_many_callers("coverage", SORBET_FIXTURE_CALLERS);
+    let a = project.file("lib/a.rb");
+    let mut client = ConformanceClient::start(&real_sorbet(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&a, "ruby");
+    // See sorbet_is_selected_by_its_real_notifications: identification is a round trip a bare
+    // state request can race ahead of.
+    poll_state_until(&mut client, |s| s.readiness != Readiness::Unknown);
+    client.wait_until_ready();
+
+    let (line, character) = support::SORBET_TARGET_DECLARATION;
+    let found = client.references(&a, line, character);
+    assert_eq!(
+        found.len(),
+        SORBET_EXPECTED_REFERENCES,
+        "missed some callers while declaring ready (completeness violation): {} of {}",
+        found.len(),
+        SORBET_EXPECTED_REFERENCES
+    );
+    client.shutdown();
+}
+
+/// 7.3 item 1: a `didChange` on an open caller file that adds one more call to `Lib.target` is
+/// incorporated. Items 2-4 (watched-file Created / Changed / Deleted) need watchman with a
+/// pre-existing `watch-project` on this root: Sorbet's own `subscribe` never issues one
+/// (research), and the test environment does not run a watchman daemon that has already
+/// watched the temporary project root, so they are not exercised here.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn sorbet_spec_7_3_1_did_change_on_an_open_file_through_lsp_det_with_real_sorbet() {
+    let project = support::TempSorbetProject::with_many_callers(
+        "freshness-didchange",
+        SORBET_FIXTURE_CALLERS,
+    );
+    let a = project.file("lib/a.rb");
+    let f0 = project.file("lib/f0.rb");
+    let mut client = ConformanceClient::start(&real_sorbet(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&a, "ruby");
+    client.did_open(&f0, "ruby");
+    // See sorbet_is_selected_by_its_real_notifications: identification is a round trip a bare
+    // state request can race ahead of.
+    poll_state_until(&mut client, |s| s.readiness != Readiness::Unknown);
+    client.wait_until_ready();
+
+    let (line, character) = support::SORBET_TARGET_DECLARATION;
+    let before = client.references(&a, line, character).len();
+    client.did_change(&f0, 2, &support::sorbet_caller_file_with_calls(0, 2));
+    let after = client.references(&a, line, character).len();
+    assert_eq!(
+        after,
+        before + 1,
+        "an added call in an open file was not incorporated: before={before} after={after}"
+    );
+    client.shutdown();
+}

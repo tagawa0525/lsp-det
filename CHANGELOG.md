@@ -10,7 +10,7 @@
 
 ## 未リリース
 
-外部レビュー（ADR 0018、2026-09-06）への対応。保留の開始と解放を理由付きで stderr に出す（決定 A-1、PR #49）。ドッグフーディング第 6 回で実害の一事例を記録（A-2）。仕様 10 章に Dart / Sorbet の行と、gopls #1200 の一次資料（A-3、A-4、PR #50）。提出メモに「上流は未試行」の前提（A-6、PR #47）。M9 Metals の写像（`coverage` あり、`freshness.fileChanges` は空。コーパスの「時間でしか終わりを言えない」を実測で覆した）。M10 Expert（Elixir）の写像（readiness のみ。保証は宣言できない）。M12 Nextflow の言語サーバーの写像（readiness のみ。走査の完了を示す信号がなく、観測者が `workspaceFolders` を歩いて走査の集合を再現する。`serverInfo` がなく版が語彙に現れないので保証は宣言しない。識別は `executeCommandProvider.commands`）。M11 Kotlin（JetBrains kotlin-lsp）は最新 release が期限切れで起動せず、次の release まで保留。lsp-det の 2 つの直し: `InitializeResult` の `experimental: null` を欠落と同じに扱う、準拠テストのクライアントがサーバーからの要求に応答する。
+外部レビュー（ADR 0018、2026-09-06）への対応。保留の開始と解放を理由付きで stderr に出す（決定 A-1、PR #49）。ドッグフーディング第 6 回で実害の一事例を記録（A-2）。仕様 10 章に Dart / Sorbet の行と、gopls #1200 の一次資料（A-3、A-4、PR #50）。提出メモに「上流は未試行」の前提（A-6、PR #47）。M9 Metals の写像（`coverage` あり、`freshness.fileChanges` は空。コーパスの「時間でしか終わりを言えない」を実測で覆した）。M10 Expert（Elixir）の写像（readiness のみ。保証は宣言できない）。M12 Nextflow の言語サーバーの写像（readiness のみ。走査の完了を示す信号がなく、観測者が `workspaceFolders` を歩いて走査の集合を再現する。`serverInfo` がなく版が語彙に現れないので保証は宣言しない。識別は `executeCommandProvider.commands`）。M11 Kotlin（JetBrains kotlin-lsp）は最新 release が期限切れで起動せず、次の release まで保留。M15 haskell-language-server の写像（readiness は `unknown`。`$/progress` は lsp ライブラリの 1 秒の抑制でほぼ出ず、索引中の `references` は増え続ける部分応答。health は cradle の診断から）。lsp-det の 2 つの直し: `InitializeResult` の `experimental: null` を欠落と同じに扱う、準拠テストのクライアントがサーバーからの要求に応答する。
 
 ## 0.3.0（2026-09-06）
 

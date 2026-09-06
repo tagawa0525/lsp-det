@@ -35,7 +35,7 @@ ADR 0019 決定 F の M10。コーパス（[readiness-vocabulary-corpus.md](read
 | 27.410〜27.421 | "Indexing source code" begin → end                                                                                                                |
 | 28.339         | `references` が初めて `b.ex` の 1 件を返す                                                                                                        |
 
-ウォームキャッシュ（走行 3、4）ではエンジンの起動が 1.4 秒、隙間は 1.0 秒（1.4 → 2.4 秒）、"Indexing source code" の end が 2.6 秒。
+ウォームキャッシュ（走行 3、4）ではエンジンの起動が 1.4 秒、隙間は 1.0 秒（1.4 → 2.4 秒）、"Indexing source code" の end が 2.6 秒。同じ被験体を再び開くと（走行 6、lsp-det 越し）、"Building" の後は "Loading search index"（保存された索引の読み込み）だけで **"Indexing source code" は来ない**。索引の完了は 2 つの title のどちらかの end。
 
 **エンジンの初期化前の要求に、ログで「無視した」と言いながら空配列の成功応答を返す。** 空応答の嘘の最も分かりやすい例で、`initializing` の間の保留が直接効く。
 
@@ -54,7 +54,7 @@ ADR 0019 決定 F の M10。コーパス（[readiness-vocabulary-corpus.md](read
 
 ## 写像（設計）
 
-- **readiness**: `initialize` 直後は `initializing`。"… Starting engine node"、"… Preparing engine"（後方一致）、"Building "（前方一致）、"Indexing source code" の begin で `indexing`。ready の条件は「未完了トークンが 0」かつ「直近に end したトークンが "Indexing source code"」。エンジンの起動とビルドの間の 1 秒の隙間（直近の end が "Starting engine node"）で `ready` を名乗らない。"Finding Completion Candidates" と "Loading search index" はリクエスト処理で写さない
+- **readiness**: `initialize` 直後は `initializing`。"… Starting engine node"、"… Preparing engine"（後方一致）、"Building "（前方一致）、"Indexing source code"、"Loading search index" の begin で `indexing`。ready の条件は「未完了トークンが 0」かつ「直近に end したトークンが索引の段階（"Indexing source code" または "Loading search index"）」。エンジンの起動とビルドの間の 1 秒の隙間（直近の end が "Starting engine node"）で `ready` を名乗らない。"Finding Completion Candidates" はリクエスト処理で写さない。走行 6 で "Loading search index" を無視していたため lsp-det が `indexing` に留まり続け、実サーバーテストが 4 件とも 30 秒で失敗した
 - **先読みはしない**。監視対象の変更を Expert が取り込まないので、取り込みの完了信号がなく、先読みすると永久に保留する（ADR 0014 追補 決定 D の条件を満たさない）
 - **health**: 信号がなく `unknown`
 - **coverage / freshness**: 7.2 と 7.3 の 1 の実サーバーテストで決める。`fileChanges` は空

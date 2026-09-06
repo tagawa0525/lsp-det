@@ -2630,9 +2630,10 @@ fn spec_7_2_2_metals_workspace_symbol_count() {
 // Expert (Elixir. M10, ADR 0019 decision F). The mapping in research/expert-readiness-measurement.md:
 // readiness from the `$/progress` titles of the engine start and the build ("… Starting engine
 // node", "… Preparing engine", "Building …", "Indexing source code"); ready only when no token is
-// open AND the last token that ended was "Indexing source code" (the 1-second gap between the
-// engine start and the build is not ready); no prediction (watched-file changes are not
-// incorporated by Expert); no health signal.
+// open AND the last token that ended was an index phase ("Indexing source code", or "Loading
+// search index" on a warm start; the 1-second gap between the engine start and the build is
+// not ready); no prediction (watched-file changes are not incorporated by Expert); no health
+// signal.
 // ---------------------------------------------------------------------------
 
 fn expert_client(declare_server_state: bool) -> (ConformanceClient, Value) {
@@ -2688,14 +2689,24 @@ fn expert_ignores_request_processing_progress() {
     client.await_state_changed();
     expert_progress(&mut client, 4, "end", None);
     assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
-    for title in ["Finding Completion Candidates", "Loading search index"] {
-        expert_progress(&mut client, 9, "begin", Some(title));
-        expert_progress(&mut client, 9, "end", None);
-    }
+    expert_progress(
+        &mut client,
+        9,
+        "begin",
+        Some("Finding Completion Candidates"),
+    );
+    expert_progress(&mut client, 9, "end", None);
     assert!(
         client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
         "moved because of request-processing progress"
     );
+    // A persisted index loaded on a warm start completes a round like a fresh one.
+    expert_progress(&mut client, 10, "begin", Some("Building fixture"));
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    expert_progress(&mut client, 10, "end", None);
+    expert_progress(&mut client, 11, "begin", Some("Loading search index"));
+    expert_progress(&mut client, 11, "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
     client.shutdown();
 }
 

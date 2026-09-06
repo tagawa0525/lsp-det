@@ -5,11 +5,13 @@
 //! titles of the engine start and the build (measured with Expert 0.1.9):
 //!
 //! - **readiness**: a begin of "… Starting engine node", "… Preparing engine" (the project
-//!   name is prefixed), "Building …", or "Indexing source code" means `indexing`. `ready` needs
-//!   no token of those titles open AND the last token that ended was "Indexing source code":
-//!   every build ends with one, and the measured 1-second gap between the engine start and the
-//!   build (no token open, `references` answered with `[]`) is not ready. "Finding Completion
-//!   Candidates" and "Loading search index" are request processing and are not looked at
+//!   name is prefixed), "Building …", "Indexing source code", or "Loading search index" means
+//!   `indexing`. `ready` needs no token of those titles open AND the last token that ended was
+//!   one of the two index phases: a build is followed by "Indexing source code" (a fresh index)
+//!   or by "Loading search index" (a persisted index of the same project; measured, no
+//!   "Indexing source code" follows it on a warm start). The measured 1-second gap between the
+//!   engine start and the build (no token open, `references` answered with `[]`) is not ready.
+//!   "Finding Completion Candidates" is request processing and is not looked at
 //! - **no prediction**: Expert registers `**/*.{ex,exs}` for `workspace/didChangeWatchedFiles`
 //!   but neither a Created nor a Changed leads to a build (measured), so there is no completion
 //!   signal to predict against (ADR 0014 addendum decision D)
@@ -34,6 +36,7 @@ const ENGINE_NODE_SUFFIX: &str = "Starting engine node";
 const ENGINE_PREPARE_SUFFIX: &str = "Preparing engine";
 const BUILDING_PREFIX: &str = "Building ";
 const INDEXING_TITLE: &str = "Indexing source code";
+const LOADING_INDEX_TITLE: &str = "Loading search index";
 
 /// Versions for which conformance tests 7.2 / 7.3 were run against a real Expert and passed.
 /// Matched by exact equality against `serverInfo.version`. Empty until the tests have passed
@@ -53,7 +56,7 @@ struct ProgressValue {
     title: Option<String>,
 }
 
-/// The kinds of token the startup consists of. Only "Indexing source code" closes a round.
+/// The kinds of token the startup consists of. Only an index phase closes a round.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
     Engine,
@@ -62,7 +65,7 @@ enum Phase {
 }
 
 fn phase_of(title: &str) -> Option<Phase> {
-    if title == INDEXING_TITLE {
+    if title == INDEXING_TITLE || title == LOADING_INDEX_TITLE {
         Some(Phase::Indexing)
     } else if title.starts_with(BUILDING_PREFIX) {
         Some(Phase::Building)
@@ -78,7 +81,8 @@ pub struct ExpertAdapter {
     state: ServerState,
     /// Open tokens of the startup phases.
     open: Vec<(Value, Phase)>,
-    /// The last token that ended was "Indexing source code".
+    /// The last token that ended was an index phase ("Indexing source code" or "Loading search
+    /// index").
     last_ended_indexing: bool,
 }
 
@@ -223,10 +227,31 @@ mod tests {
     #[test]
     fn request_processing_titles_are_ignored() {
         let mut m = ExpertAdapter::new();
-        for title in ["Finding Completion Candidates", "Loading search index"] {
-            assert!(feed(&mut m, &progress(9, "begin", Some(title))).is_none());
-            assert!(feed(&mut m, &progress(9, "end", None)).is_none());
-        }
+        assert!(
+            feed(
+                &mut m,
+                &progress(9, "begin", Some("Finding Completion Candidates"))
+            )
+            .is_none()
+        );
+        assert!(feed(&mut m, &progress(9, "end", None)).is_none());
+    }
+
+    #[test]
+    fn a_loaded_index_completes_a_round_like_a_fresh_one() {
+        // Measured on a warm start: "Building" then "Loading search index" with no
+        // "Indexing source code" after it.
+        let mut m = ExpertAdapter::new();
+        feed(&mut m, &progress(3, "begin", Some("Building fixture")));
+        assert_eq!(
+            readiness_after(&mut m, &progress(3, "end", None)),
+            Readiness::Indexing
+        );
+        feed(&mut m, &progress(6, "begin", Some("Loading search index")));
+        assert_eq!(
+            readiness_after(&mut m, &progress(6, "end", None)),
+            Readiness::Ready
+        );
     }
 
     #[test]

@@ -14,6 +14,7 @@
 //! vocabulary, so the downstream side only ever sees spec values (ADR 0009
 //! decision D-6).
 
+pub mod clangd;
 pub mod crystalline;
 pub mod dart;
 pub mod expert;
@@ -114,6 +115,7 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         "metals" => Some(Box::new(metals::MetalsAdapter::for_version(version))),
         dart::SERVER_NAME => Some(Box::new(dart::DartAdapter::for_version(version))),
         jdtls::SERVER_NAME => Some(Box::new(jdtls::JdtlsAdapter::for_version(version))),
+        clangd::SERVER_NAME => Some(Box::new(clangd::ClangdAdapter::for_version(version))),
         // The version is not looked at: Expert declares no guarantee for any version.
         "expert" => Some(Box::new(expert::ExpertAdapter::new())),
         // The version is not observable: Nextflow's language server declares no guarantee.
@@ -385,12 +387,21 @@ mod tests {
     #[test]
     fn selects_rust_analyzer_by_its_server_info_name() {
         assert!(select("rust-analyzer", None).is_some());
-        for unknown in ["fake-lsp-server", "", "clangd", "rust-analyzer-proxy"] {
+        for unknown in ["fake-lsp-server", "", "ccls", "rust-analyzer-proxy"] {
             assert!(
                 select(unknown, None).is_none(),
                 "not a known name: {unknown:?}"
             );
         }
+    }
+
+    #[test]
+    fn selects_clangd_by_its_server_info_name_case_insensitively() {
+        assert!(select("clangd", None).is_some());
+        assert!(
+            select("Clangd", None).is_some(),
+            "case-insensitive comparison"
+        );
     }
 
     #[test]

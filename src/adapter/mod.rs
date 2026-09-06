@@ -16,6 +16,7 @@
 
 pub mod crystalline;
 pub mod expert;
+pub mod gleam;
 pub mod gopls;
 pub mod haskell_language_server;
 pub mod metals;
@@ -117,6 +118,8 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         )),
         // The version is not observable: crystalline declares no guarantee for any version.
         crystalline::SERVER_NAME => Some(Box::new(crystalline::CrystallineAdapter::new())),
+        // The version is not observable: Gleam declares no guarantee for any version.
+        gleam::SERVER_NAME => Some(Box::new(gleam::GleamAdapter::new())),
         "pyright" | "basedpyright" => Some(Box::new(PyrightAdapter::for_identity(&key, version))),
         typescript_language_server::SERVER_NAME => Some(Box::new(
             TypescriptLanguageServerAdapter::for_version(version),
@@ -155,7 +158,8 @@ pub fn identity_from_initialize_result(body: &[u8]) -> Option<ServerInfo> {
 /// Reads the identity announcement an upstream sends on its own at startup from an
 /// upstream-to-client notification. That is pyright's `window/logMessage` ("Pyright language
 /// server 1.1.412 starting"), typescript-language-server's own `$/typescriptVersion`, and
-/// crystalline's `window/logMessage` ("\"[workspace] Found projects:…", version never observable).
+/// crystalline's `window/logMessage` ("\"[workspace] Found projects:…", version never observable),
+/// and Gleam's `$/progress` begin of the dependency download ("Downloading Gleam dependencies").
 /// `None` if it is not an identity announcement. No generic recognition mechanism is built
 /// (a mapping that needs one adds its own recognition).
 pub fn identity_from_notification(view: &MessageView, body: &[u8]) -> Option<ServerInfo> {
@@ -191,6 +195,10 @@ pub fn identity_from_notification(view: &MessageView, body: &[u8]) -> Option<Ser
             let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
             typescript_language_server::identity_from_typescript_version(&envelope.params)
         }
+        Some("$/progress") if gleam::is_dependency_progress_begin(body) => Some(ServerInfo {
+            name: gleam::SERVER_NAME.to_string(),
+            version: None,
+        }),
         _ => None,
     }
 }

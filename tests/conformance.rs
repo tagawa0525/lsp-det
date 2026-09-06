@@ -3468,3 +3468,176 @@ fn crystalline_real_becomes_ready_from_the_startup_log_and_answers_definition() 
     assert_eq!(locations[0]["range"]["start"]["line"], json!(2));
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Gleam (M19, ADR 0019 decision F). The mapping in
+// research/gleam-readiness-measurement.md: no `serverInfo`, identified by the `$/progress`
+// begin title "Downloading Gleam dependencies" (token `"downloading-dependencies"`), which is
+// sent right after `initialized` even when there is nothing to download (measured 12 ms); begin
+// → `indexing` after the first round (or stays `initializing` the first time), end → `ready`.
+// `didChange` and watched-file changes are not incorporated by the mapping (a `didChange` is
+// synchronous inside request processing; a watched-file Changed recreates the engine but breaks
+// `references` instead of completing it, so it is not predicted). No health signal. No
+// guarantee is declared (`{}`): the version never appears in the protocol.
+// ---------------------------------------------------------------------------
+
+const GLEAM_DEPENDENCY_TOKEN: &str = "downloading-dependencies";
+const GLEAM_DEPENDENCY_TITLE: &str = "Downloading Gleam dependencies";
+
+fn gleam_client(root: &std::path::Path) -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_gleam();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize_with_root(true, root);
+    (client, result)
+}
+
+/// Emits the fixed-token dependency-download progress a real Gleam sends
+/// (research/gleam-readiness-measurement.md).
+fn gleam_dependency_progress(client: &mut ConformanceClient, kind: &str) {
+    let mut value = json!({"kind": kind});
+    if kind == "begin" {
+        value["title"] = json!(GLEAM_DEPENDENCY_TITLE);
+        value["cancellable"] = json!(false);
+    }
+    client.make_upstream_emit_progress(json!({"token": GLEAM_DEPENDENCY_TOKEN, "value": value}));
+}
+
+#[test]
+fn gleam_is_selected_by_the_dependency_progress_and_becomes_ready_at_its_end() {
+    let project = support::TempGleamProject::with_cross_file_reference("select");
+    let (mut client, _) = gleam_client(&project.root);
+    // Both axes unknown before the upstream calls itself anything.
+    let state = client.server_state();
+    assert_eq!(state.readiness, Readiness::Unknown);
+    assert_eq!(state.health, Health::Unknown);
+    gleam_dependency_progress(&mut client, "begin");
+    // Selecting a mapping is not itself a notified change: use a round trip through the fake
+    // upstream as a synchronization barrier before reading the state by request.
+    let _ = client.upstream_methods_seen();
+    assert_eq!(
+        client.server_state().readiness,
+        Readiness::Initializing,
+        "a first begin does not move past the mapping's starting state"
+    );
+    gleam_dependency_progress(&mut client, "end");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(state.health, Health::Unknown);
+    client.shutdown();
+}
+
+#[test]
+fn gleam_reindexes_when_the_engine_is_recreated() {
+    let project = support::TempGleamProject::with_cross_file_reference("reindex");
+    let (mut client, _) = gleam_client(&project.root);
+    gleam_dependency_progress(&mut client, "begin");
+    let _ = client.upstream_methods_seen();
+    gleam_dependency_progress(&mut client, "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    // The engine is recreated (a `gleam.toml` change) and downloads dependencies again.
+    gleam_dependency_progress(&mut client, "begin");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    gleam_dependency_progress(&mut client, "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn gleam_does_not_predict_from_document_or_watched_file_changes() {
+    let project = support::TempGleamProject::with_cross_file_reference("no-predict");
+    let (mut client, _) = gleam_client(&project.root);
+    gleam_dependency_progress(&mut client, "begin");
+    let _ = client.upstream_methods_seen();
+    gleam_dependency_progress(&mut client, "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    let a = project.file("src/a.gleam");
+    client.did_change(&a, 2, support::GLEAM_A);
+    let gleam_toml = project.file("gleam.toml");
+    client.did_change_watched_files(&[(&gleam_toml, 2)]);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "predicted a state change from a didChange or a watched-file change"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn gleam_spec_8_2_5_declares_no_guarantees() {
+    let project = support::TempGleamProject::with_cross_file_reference("guarantees");
+    let (mut client, result) = gleam_client(&project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee Gleam's vocabulary cannot keep: {result}"
+    );
+    client.shutdown();
+}
+
+// --- real Gleam (local only) -----------------------------------------------
+
+fn real_gleam(project: &support::TempGleamProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec!["--".to_string(), "gleam".to_string(), "lsp".to_string()],
+        root: project.root.clone(),
+    }
+}
+
+/// Via the real server: no guarantee is declared, `ready` is reached, and health stays
+/// `unknown` (no signal).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn gleam_spec_7_1_through_lsp_det_with_real_gleam() {
+    let project = support::TempGleamProject::with_cross_file_reference("readiness");
+    let a = project.file("src/a.gleam");
+    let mut client = ConformanceClient::start(&real_gleam(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for a server whose version never appears in the protocol: {result}"
+    );
+    client.did_open(&a, "gleam");
+    let (line, character) = support::GLEAM_TARGET_DECLARATION;
+    // The real Gleam identifies itself only through a `$/progress` sent after `initialized`
+    // (research/gleam-readiness-measurement.md), an unavoidable round trip that a bare
+    // `experimental/serverState` request can race ahead of. The first `references` cannot:
+    // Gleam answers no request before the token ends and compiles synchronously inside request
+    // handling (measured), so waiting on its response synchronizes this test past that gap.
+    let _ = client.references(&a, line, character);
+    client.wait_until_ready();
+    assert_eq!(
+        client.server_state().health,
+        Health::Unknown,
+        "Gleam has no health signal"
+    );
+    client.shutdown();
+}
+
+/// Via the real server: a `didChange` on an open file that adds a cross-file call is
+/// incorporated into `references` (spec 7.3 item 1). Gleam may include the declaration itself
+/// in the result, so the check is on the count increasing rather than on the exact set.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn gleam_spec_7_3_cross_file_freshness_through_lsp_det_with_real_gleam() {
+    let project = support::TempGleamProject::with_cross_file_reference("freshness");
+    let a = project.file("src/a.gleam");
+    let b = project.file("src/b.gleam");
+    let mut client = ConformanceClient::start(&real_gleam(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&a, "gleam");
+    client.did_open(&b, "gleam");
+    let (line, character) = support::GLEAM_TARGET_DECLARATION;
+    // The first `references` synchronizes past the async gap between `initialized` and the
+    // dependency-download progress (see gleam_spec_7_1_through_lsp_det_with_real_gleam).
+    let before = client.references(&a, line, character).len();
+    client.wait_until_ready();
+    client.did_change(&b, 2, support::GLEAM_B_WITH_TWO_CALLS);
+    let after = client.references(&a, line, character).len();
+    assert_eq!(
+        after,
+        before + 1,
+        "the added call in b.gleam was not incorporated into references"
+    );
+    client.shutdown();
+}

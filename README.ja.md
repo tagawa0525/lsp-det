@@ -67,6 +67,7 @@ interface ServerState {
 | haskell-language-server    | 読めるものがない。`$/progress` は 1 秒より長いセッションにしか出ず一部しか覆わない。索引中の `references` は増え続ける。`unknown`                                                    | `source: "cradle"` の error の診断 → `error` | なし。readiness を観測しない                                     |
 | pyrefly                    | なし。起動時の索引は stderr にしか出ず、"Pyrefly: Rechecking" は開いているファイルだけ。`unknown`                                                                                    | なし（`unknown`）                            | なし。写像なし                                                   |
 | crystalline                | `window/logMessage` "LSP server is ready."（"[workspace] Found projects:" で写像を選ぶ）。`$/progress` は要求ごとのコンパイルで読まない                                              | なし（`unknown`）                            | なし。版が語彙に現れない（`serverInfo` がない）                  |
+| Gleam                      | `$/progress` "Downloading Gleam dependencies"（ダウンロードするものがなくても `initialized` の直後に出る）                                                                           | なし（`unknown`）                            | なし。版がプロトコルのどこにも現れない                           |
 | その他                     | なし（両軸 `unknown`）                                                                                                                                                               |                                              | 宣言しない                                                       |
 
 **下流側**はクライアントを代行する。クライアントが `experimental.serverState` を宣言していれば状態を転送するだけで待たない。宣言していなければ、仕様 9 章の推奨挙動を代わりに実行する。

@@ -4,7 +4,7 @@
 
 ## 予定
 
-- 0.5.0: Dart、Sorbet、jdtls、clangd（着手時に ADR）
+- 0.5.0: Dart、Sorbet、jdtls、clangd（ADR 0020）
 - 外向きの提出は 0.5.0 の後、`docs/upstream-submissions.md` の順で。typescript-language-server の不具合修正 PR、Claude Code への報告（既存 issue 3 件へのコメントと新規 2 件）、Serena の不具合と提案、fork の 4 パッチ
 
 ## 0.4.0（2026-09-06）

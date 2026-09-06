@@ -245,15 +245,21 @@ fn main() {
             }
             "$/fake/emitNotification" => {
                 // Any server-to-client notification: `{method, params}` (reproduces server-specific
-                // vocabularies such as Metals's `metals/status`).
-                send(
-                    &mut stdout,
-                    json!({
-                        "jsonrpc": "2.0",
-                        "method": params["method"],
-                        "params": params["params"]
-                    }),
-                );
+                // vocabularies such as Metals's `metals/status`). A missing or non-string method
+                // is a mistake on the test side; say so instead of emitting an invalid message.
+                match params["method"].as_str() {
+                    Some(method) => send(
+                        &mut stdout,
+                        json!({
+                            "jsonrpc": "2.0",
+                            "method": method,
+                            "params": params.get("params").cloned().unwrap_or(Value::Null)
+                        }),
+                    ),
+                    None => eprintln!(
+                        "fake-lsp-server: $/fake/emitNotification needs a string `method`: {params}"
+                    ),
+                }
             }
             "$/fake/emitProgress" => {
                 send(

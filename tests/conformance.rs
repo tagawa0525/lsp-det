@@ -4049,7 +4049,7 @@ fn dart_holds_references_until_ready() {
 // chapter 6). Requires the Dart SDK on PATH (`nix develop .#servers`; `dart language-server`).
 // ---------------------------------------------------------------------------
 
-/// Caller files under `lib/` (research/dart-readiness-measurement.md 方法: a 401-file fixture,
+/// Caller files under `lib/` (the method section of research/dart-readiness-measurement.md: a 401-file fixture,
 /// large enough that analysis takes observable time).
 const DART_FIXTURE_CALLERS: usize = 400;
 
@@ -4098,7 +4098,7 @@ fn dart_is_selected_by_its_real_server_info() {
     client.shutdown();
 }
 
-/// 7.1: the first `references` is complete (research 走行 1: the server holds the request
+/// 7.1: the first `references` is complete (research doc, run 1: the server holds the request
 /// until the analysis it depends on finishes, so there is no empty or partial answer to
 /// observe even though the query is sent right after `didOpen`, before the mapping itself has
 /// observed the first analyzing round end). The answer is measured to arrive shortly BEFORE the
@@ -4163,7 +4163,7 @@ fn dart_spec_7_2_coverage_through_lsp_det_with_real_dart() {
 /// 7.3 item 1: a `didChange` on an open file (`f0.dart`) that adds one more call to `target` is
 /// incorporated. The query is sent right after the notification, as the spec recommends; if it
 /// still races a request already in flight at the moment of the change, Dart answers it with
-/// -32801 ContentModified (research 走行 2/5), which `ConformanceClient::references` already
+/// -32801 ContentModified (research doc, runs 2 and 5), which `ConformanceClient::references` already
 /// retries once (tests/support/mod.rs) -- no extra retry logic is needed here.
 #[test]
 #[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]

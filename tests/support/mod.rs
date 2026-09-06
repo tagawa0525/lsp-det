@@ -1449,8 +1449,8 @@ impl Drop for TempGleamProject {
 }
 
 /// A temporary Dart project. `lib/a.dart` declares `target`; `lib/f0.dart` .. `lib/f{n-1}.dart`
-/// each `import 'a.dart'`, define 30 functions, and call `target()` once (M21, Dart analysis
-/// server; research/dart-readiness-measurement.md 方法). Large enough (200-400 files) that
+/// each imports `a.dart`, defines 30 functions, and calls `target()` once (M21, Dart analysis
+/// server; the method section of research/dart-readiness-measurement.md). Large enough (200-400 files) that
 /// analysis takes observable time. `dart pub get` is not needed: the imports are relative only.
 pub struct TempDartProject {
     pub root: PathBuf,
@@ -1771,7 +1771,7 @@ pub const DART_TARGET_DECLARATION: (u32, u32) = (0, 5);
 pub const DART_G: &str = "import 'a.dart';\n\nvoid g() {\n  target();\n}\n";
 
 /// The content of `lib/f{index}.dart`: imports `a.dart`, defines 30 functions, and calls
-/// `target` once (research/dart-readiness-measurement.md 方法).
+/// `target` once (the method section of research/dart-readiness-measurement.md).
 pub fn dart_caller_file(index: usize) -> String {
     dart_caller_file_with_calls(index, 1)
 }

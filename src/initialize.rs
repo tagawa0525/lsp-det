@@ -152,11 +152,15 @@ pub fn declare_server_state_provider(
     else {
         return Unrewritable;
     };
-    let Some(experimental) = capabilities
+    // An explicit `null` (Expert returns `"experimental": null`) is the same as an absent
+    // optional field in LSP, so it is replaced by an object rather than refused.
+    let experimental_slot = capabilities
         .entry("experimental")
-        .or_insert_with(|| Value::Object(Map::new()))
-        .as_object_mut()
-    else {
+        .or_insert_with(|| Value::Object(Map::new()));
+    if experimental_slot.is_null() {
+        *experimental_slot = Value::Object(Map::new());
+    }
+    let Some(experimental) = experimental_slot.as_object_mut() else {
         return Unrewritable;
     };
 
@@ -478,6 +482,21 @@ mod tests {
         );
     }
 
+    /// Expert returns `"experimental": null` (measured with 0.1.9). LSP treats an absent and a
+    /// null optional field alike, so null is replaced by an object, not refused.
+    #[test]
+    fn treats_an_explicit_null_experimental_as_absent() {
+        let out = declared(
+            r#"{"id":1,"result":{"capabilities":{"hoverProvider":true,"experimental":null}}}"#,
+            &ServerStateProvider::notifications_only(),
+        );
+        assert_eq!(
+            out["result"]["capabilities"]["experimental"]["serverStateProvider"],
+            serde_json::json!({})
+        );
+        assert_eq!(out["result"]["capabilities"]["hoverProvider"], true);
+    }
+
     #[test]
     fn a_bare_true_is_not_a_declaration() {
         // A declaration is always an object (ADR 0016). `true` is not a declaration and is
@@ -548,9 +567,10 @@ mod tests {
 
     #[test]
     fn a_non_object_capabilities_is_unrewritable() {
+        // `experimental: null` is not in this list: it counts as absent (Expert returns it).
         for body in [
             r#"{"id":1,"result":{"capabilities":"nonsense"}}"#,
-            r#"{"id":1,"result":{"capabilities":{"experimental":null}}}"#,
+            r#"{"id":1,"result":{"capabilities":{"experimental":"nonsense"}}}"#,
         ] {
             assert_eq!(
                 declare_server_state_provider(

@@ -66,6 +66,12 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("Metals", &[])
     }
 
+    /// A fake upstream that calls itself Expert + lsp-det. lsp-det selects the Expert mapping
+    /// (M10, ADR 0019 decision F).
+    pub fn lsp_det_with_fake_expert() -> Self {
+        Self::lsp_det_with_upstream("Expert", &[])
+    }
+
     /// A fake upstream that plays pyright + lsp-det. pyright returns no `serverInfo`, so what the
     /// server calls itself comes only from the startup log (ADR 0011 decision A-2). lsp-det
     /// selects the pyright mapping.
@@ -631,11 +637,25 @@ impl ConformanceClient {
 
     /// Waits for the next `experimental/serverStateChanged` (spec 4.2).
     pub fn await_state_changed(&mut self) -> ServerState {
-        let params = self
-            .await_notification("experimental/serverStateChanged")
-            .unwrap_or_else(|| panic!("experimental/serverStateChanged did not arrive"));
+        let Some(params) = self.await_notification("experimental/serverStateChanged") else {
+            self.fail_with_stderr("experimental/serverStateChanged did not arrive");
+        };
         serde_json::from_value(params.clone())
             .unwrap_or_else(|err| panic!("cannot read as ServerState ({err}): {params}"))
+    }
+
+    /// Ends the test with the subject's stderr attached (lsp-det's state transitions and
+    /// holds, and the upstream's own output), so that a wait that never ends can be read.
+    /// Kills the subject first: reading stderr to EOF against a live subject would hang.
+    fn fail_with_stderr(&mut self, what: &str) -> ! {
+        let status = self.child.try_wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let mut log = String::new();
+        if let Some(mut stderr) = self.stderr.take() {
+            let _ = stderr.read_to_string(&mut log);
+        }
+        panic!("{what} (the subject's status: {status:?})\nthe subject's stderr:\n{log}");
     }
 
     /// Waits for the given notification and returns its params. `None` if it does not arrive in
@@ -928,8 +948,25 @@ impl ConformanceClient {
     }
 
     fn stash(&mut self, message: Value) {
-        // Keep notifications, responses to other ids, and server-initiated requests alike.
-        // Checking holding requires picking up a "response that arrives later".
+        // A server-initiated request is answered right away, as a real client does. Expert
+        // sends `client/registerCapability` before starting its engine and waits for the
+        // response; a client that never answers never sees the engine start. The answer is
+        // `null` (an empty `workspace/configuration`, an accepted registration, no action
+        // picked for `window/showMessageRequest`). It is not kept: nothing inspects it.
+        if message.get("method").is_some()
+            && let Some(id) = message.get("id").cloned()
+        {
+            let result = if message["method"] == "workspace/configuration" {
+                let n = message["params"]["items"].as_array().map_or(0, Vec::len);
+                Value::Array(vec![Value::Null; n])
+            } else {
+                Value::Null
+            };
+            self.send(json!({"jsonrpc": "2.0", "id": id, "result": result}));
+            return;
+        }
+        // Keep notifications and responses to other ids alike. Checking holding requires
+        // picking up a "response that arrives later".
         self.pending_notifications.push(message);
     }
 
@@ -1121,6 +1158,51 @@ impl TempScalaProject {
 }
 
 impl Drop for TempScalaProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// A temporary Mix project. `B.x` in `lib/b.ex` calls `A.target` (M10, Expert).
+pub struct TempMixProject {
+    pub root: PathBuf,
+}
+
+impl TempMixProject {
+    pub fn with_cross_file_reference(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-mix-{tag}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(root.join("lib")).expect("cannot create the temporary project");
+        std::fs::write(root.join("mix.exs"), MIX_EXS).unwrap();
+        std::fs::write(root.join("lib/a.ex"), EX_A).unwrap();
+        std::fs::write(root.join("lib/b.ex"), EX_B_WITH_CALL).unwrap();
+        TempMixProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+
+    pub fn with_many_symbols(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        for file in 0..3 {
+            let body: String = std::iter::once(format!("defmodule S{file} do\n"))
+                .chain(
+                    (0..n)
+                        .filter(|i| i % 3 == file)
+                        .map(|i| format!("  def wsymprobe{i:03}, do: {i}\n")),
+                )
+                .chain(std::iter::once("end\n".to_string()))
+                .collect();
+            std::fs::write(project.root.join(format!("lib/s{file}.ex")), body).unwrap();
+        }
+        project
+    }
+}
+
+impl Drop for TempMixProject {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
     }
@@ -1326,6 +1408,13 @@ pub const GO_B_WITHOUT_CALL: &str = "package fixture\n\nfunc Caller() {}\n";
 pub const GO_B_WITH_TWO_CALLS: &str =
     "package fixture\n\nfunc Caller() {\n\tTarget()\n\tTarget()\n}\n";
 pub const GO_C_WITH_CALL: &str = "package fixture\n\nfunc Other() {\n\tTarget()\n}\n";
+
+pub const MIX_EXS: &str = "defmodule Fixture.MixProject do\n  use Mix.Project\n\n  def project do\n    [app: :fixture, version: \"0.1.0\", elixir: \"~> 1.18\", deps: []]\n  end\nend\n";
+/// `target` is on line 2 (0-based: line 1, character 6).
+pub const EX_A: &str = "defmodule A do\n  def target, do: 1\nend\n";
+/// The call is on line 2 (0-based: line 1).
+pub const EX_B_WITH_CALL: &str = "defmodule B do\n  def x, do: A.target()\nend\n";
+pub const EX_B_WITHOUT_CALL: &str = "defmodule B do\n  def x, do: 1\nend\n";
 
 pub const SCALA_PROJECT: &str = "//> using scala 3.3.4\n";
 /// `target` is on line 2 (0-based: line 1, character 6).

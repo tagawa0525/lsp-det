@@ -2625,3 +2625,166 @@ fn spec_7_2_2_metals_workspace_symbol_count() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Expert (Elixir. M10, ADR 0019 decision F). The mapping in research/expert-readiness-measurement.md:
+// readiness from the `$/progress` titles of the engine start and the build ("… Starting engine
+// node", "… Preparing engine", "Building …", "Indexing source code"); ready only when no token is
+// open AND the last token that ended was an index phase ("Indexing source code", or "Loading
+// search index" on a warm start; the 1-second gap between the engine start and the build is
+// not ready); no prediction (watched-file changes are not incorporated by Expert); no health
+// signal.
+// ---------------------------------------------------------------------------
+
+fn expert_client(declare_server_state: bool) -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_expert();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(declare_server_state);
+    (client, result)
+}
+
+fn expert_progress(client: &mut ConformanceClient, token: i64, kind: &str, title: Option<&str>) {
+    let mut value = json!({"kind": kind});
+    if let Some(title) = title {
+        value["title"] = json!(title);
+    }
+    client.make_upstream_emit_progress(json!({"token": token, "value": value}));
+}
+
+#[test]
+fn expert_is_selected_and_moves_readiness_with_the_engine_start_and_the_build() {
+    let (mut client, _) = expert_client(true);
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    expert_progress(
+        &mut client,
+        1,
+        "begin",
+        Some("[fixture] Starting engine node"),
+    );
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    expert_progress(&mut client, 2, "begin", Some("[fixture] Preparing engine"));
+    expert_progress(&mut client, 2, "end", None);
+    expert_progress(&mut client, 1, "end", None);
+    // The measured gap: engine up, build not started, no token open.
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "claimed ready in the gap between the engine start and the build"
+    );
+    expert_progress(&mut client, 3, "begin", Some("Building fixture"));
+    expert_progress(&mut client, 3, "end", None);
+    expert_progress(&mut client, 4, "begin", Some("Indexing source code"));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "moved while still building"
+    );
+    expert_progress(&mut client, 4, "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn expert_ignores_request_processing_progress() {
+    let (mut client, _) = expert_client(true);
+    expert_progress(&mut client, 4, "begin", Some("Indexing source code"));
+    client.await_state_changed();
+    expert_progress(&mut client, 4, "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    expert_progress(
+        &mut client,
+        9,
+        "begin",
+        Some("Finding Completion Candidates"),
+    );
+    expert_progress(&mut client, 9, "end", None);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "moved because of request-processing progress"
+    );
+    // A persisted index loaded on a warm start completes a round like a fresh one.
+    expert_progress(&mut client, 10, "begin", Some("Building fixture"));
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    expert_progress(&mut client, 10, "end", None);
+    expert_progress(&mut client, 11, "begin", Some("Loading search index"));
+    expert_progress(&mut client, 11, "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn expert_reindexes_on_a_new_build_and_does_not_predict_from_watched_files() {
+    let (mut client, _) = expert_client(true);
+    expert_progress(&mut client, 4, "begin", Some("Indexing source code"));
+    client.await_state_changed();
+    expert_progress(&mut client, 4, "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    // Expert does not incorporate watched-file changes, so there is no completion signal to
+    // predict against (ADR 0014 addendum decision D).
+    let root = support::repo_root();
+    client.did_change_watched_files(&[(&root.join("lib/c.ex"), 1)]);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "predicted indexing although Expert does not react to watched files"
+    );
+    expert_progress(&mut client, 5, "begin", Some("Building fixture"));
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    expert_progress(&mut client, 5, "end", None);
+    expert_progress(&mut client, 6, "begin", Some("Indexing source code"));
+    expert_progress(&mut client, 6, "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    assert_eq!(
+        client.server_state().health,
+        Health::Unknown,
+        "Expert has no health signal"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn expert_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
+    let (mut client, result) = expert_client(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for the fake Expert's untested version: {result}"
+    );
+    client.shutdown();
+}
+
+// --- real Expert (local only) ---------------------------------------------
+
+fn real_expert(project: &support::TempMixProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec![
+            "--".to_string(),
+            "expert".to_string(),
+            "--stdio".to_string(),
+        ],
+        root: project.root.clone(),
+    }
+}
+
+/// Via Expert. Observes the transition from initializing to ready.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn expert_spec_7_1_through_lsp_det_with_real_expert() {
+    let project = support::TempMixProject::with_cross_file_reference("readiness");
+    let mut client = ConformanceClient::start(&real_expert(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    // No guarantee for Expert: after "Loading search index" a fresh project may still be
+    // about to rebuild the index, with empty answers in between and no signal
+    // (research/expert-readiness-measurement.md). 7.2 / 7.3 are therefore not run.
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee Expert's vocabulary cannot keep: {result}"
+    );
+    assert_ne!(client.server_state().readiness, Readiness::Ready);
+    client.wait_until_ready();
+    assert_eq!(
+        client.server_state().health,
+        Health::Unknown,
+        "Expert has no health signal"
+    );
+    client.shutdown();
+}

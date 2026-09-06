@@ -55,14 +55,15 @@ interface ServerState {
 
 **上流側**は言語サーバーを代行する。上流が `InitializeResult.serverInfo`（なければ起動時のログ）で名乗る名前で写像を選び、上流の語彙を `ServerState` に写し、`serverStateProvider` を `InitializeResult` に足す。保証は準拠テスト 7.2 / 7.3 を通した版にだけ宣言する。上流が自らプロトコルを話していれば何も足さず、そのまま通す。
 
-| 言語サーバー               | readiness の信号                                                                                            | health の信号                         | 保証を宣言する版                                 |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------ |
-| rust-analyzer              | `experimental/serverStatus` の `quiescent`                                                                  | 同 `health`                           | 1.98.0、2026-08-03                               |
-| gopls                      | `$/progress` "Setting up workspace" の終了                                                                  | "Error loading workspace" の progress | 0.23.0                                           |
-| pyright / basedpyright     | `window/logMessage` のファイル列挙完了（フォルダ数ぶん待つ）                                                | なし（`unknown`）                     | pyright 1.1.412、basedpyright 1.39.8             |
-| typescript-language-server | `$/progress` "Initializing JS/TS language features…"                                                        | "[tsserver] Exited" のログ → `error`  | TypeScript 5.9.3                                 |
-| Metals                     | `$/progress` の "Importing build" / "Indexing" / "Compiling …"（初回の取り込みは "Indexing" の end で完了） | `metals/status`（module）の `level`   | 1.6.8（coverage。freshness は `didChange` のみ） |
-| その他                     | なし（両軸 `unknown`）                                                                                      |                                       | 宣言しない                                       |
+| 言語サーバー               | readiness の信号                                                                                            | health の信号                         | 保証を宣言する版                                                 |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------- |
+| rust-analyzer              | `experimental/serverStatus` の `quiescent`                                                                  | 同 `health`                           | 1.98.0、2026-08-03                                               |
+| gopls                      | `$/progress` "Setting up workspace" の終了                                                                  | "Error loading workspace" の progress | 0.23.0                                                           |
+| pyright / basedpyright     | `window/logMessage` のファイル列挙完了（フォルダ数ぶん待つ）                                                | なし（`unknown`）                     | pyright 1.1.412、basedpyright 1.39.8                             |
+| typescript-language-server | `$/progress` "Initializing JS/TS language features…"                                                        | "[tsserver] Exited" のログ → `error`  | TypeScript 5.9.3                                                 |
+| Metals                     | `$/progress` の "Importing build" / "Indexing" / "Compiling …"（初回の取り込みは "Indexing" の end で完了） | `metals/status`（module）の `level`   | 1.6.8（coverage。freshness は `didChange` のみ）                 |
+| Expert（Elixir）           | `$/progress` の "… Starting engine node" / "Building …" / "Indexing source code" / "Loading search index"   | なし（`unknown`）                     | なし。読み込んだ索引がこれから作り直されるかを語彙で区別できない |
+| その他                     | なし（両軸 `unknown`）                                                                                      |                                       | 宣言しない                                                       |
 
 **下流側**はクライアントを代行する。クライアントが `experimental.serverState` を宣言していれば状態を転送するだけで待たない。宣言していなければ、仕様 9 章の推奨挙動を代わりに実行する。
 
@@ -126,7 +127,7 @@ nix develop            # rustc、cargo、clippy、rustfmt。ビルドと決定�
 nix develop .#servers  # これに rust-analyzer、gopls、pyright、typescript-language-server を足したもの。実サーバーのテストとドッグフーディング用
 cargo build --release  # target/release/lsp-det
 cargo test             # 偽の言語サーバー・偽のクライアントによる決定的なテスト
-cargo test --test conformance -- --ignored   # 実サーバー結合 35 件（ローカルのみ、CI では回さない）
+cargo test --test conformance -- --ignored   # 実サーバー結合 36 件（ローカルのみ、CI では回さない）
 ```
 
 テストは仕様をそのまま実行可能にしたもので、被験者を差し替えれば実サーバー・実クライアントにも当たる。

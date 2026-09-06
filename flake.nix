@@ -26,6 +26,18 @@
         clippy
         rustfmt
       ];
+      # Expert (Elixir) は nixpkgs にないので release の静的バイナリを取る (ADR 0019 決定 F、M10)。
+      # 起動には erl と elixir が PATH に要る。初回起動時に ~/.cache/expert にエンジンをビルドする。
+      expert = pkgs.stdenv.mkDerivation {
+        pname = "expert";
+        version = "0.1.9";
+        src = pkgs.fetchurl {
+          url = "https://github.com/elixir-lang/expert/releases/download/v0.1.9/expert_linux_amd64";
+          hash = "sha256-99WQW8PwmxKNSUHHdpYz8tEIvmN/Io7kMentE30sVWM=";
+        };
+        dontUnpack = true;
+        installPhase = "install -Dm755 $src $out/bin/expert";
+      };
       # 準拠テストの実サーバー結合（cargo test --test conformance -- --ignored）と
       # ドッグフーディングに使う言語サーバー。版の固定はここ（ADR 0019 決定 D）。
       servers = with pkgs; [
@@ -41,6 +53,9 @@
         metals # M9 の写像 (ADR 0019 決定 F)。scala-cli のプロジェクトを BSP で取り込む
         scala-cli # Metals のビルドツール兼 BSP サーバー
         jdk21 # Metals と scala-cli の実行環境
+        elixir # Expert が起動時に探す (M10)
+        erlang # 同上
+        expert # M10 の写像
       ];
     in
     {

@@ -130,9 +130,10 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("none", &[])
     }
 
-    /// A fake upstream that returns no `serverInfo` and calls itself Gleam only through the
-    /// `$/progress` begin title "Downloading Gleam dependencies" (as the real one does) +
-    /// lsp-det. lsp-det selects the Gleam mapping (M19).
+    /// A fake upstream that returns no `serverInfo`. Like the real Gleam it is known only by the
+    /// `$/progress` begin (token "downloading-dependencies", title "Downloading Gleam
+    /// dependencies"), which a test emits on demand; the fake announces nothing by itself
+    /// (M19, ADR 0019 decision F).
     pub fn lsp_det_with_fake_gleam() -> Self {
         Self::lsp_det_with_upstream("none", &[])
     }

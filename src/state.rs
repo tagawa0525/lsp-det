@@ -128,6 +128,25 @@ impl ServerStateProvider {
             }),
         }
     }
+
+    /// `coverage` based on the index of the whole workspace (with the list of methods that cap,
+    /// if any), with no `freshness` claim at all -- for a server whose completeness at `ready`
+    /// the observer can vouch for but whose incorporation of later changes it cannot (no signal
+    /// marks a `didChange`'s completion, or on-disk changes are never incorporated). Unlike
+    /// [`Self::workspace`] with an empty `file_changes`, this omits the `freshness` key from
+    /// the wire format entirely rather than claiming an empty list of incorporated kinds.
+    pub fn coverage_only(incomplete: &[(&str, u64)]) -> Self {
+        ServerStateProvider {
+            coverage: Some(Coverage {
+                scope: CoverageScope::Workspace,
+                incomplete: incomplete
+                    .iter()
+                    .map(|(method, limit)| (method.to_string(), *limit))
+                    .collect(),
+            }),
+            freshness: None,
+        }
+    }
 }
 
 impl ServerState {
@@ -319,6 +338,35 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&both).unwrap(),
             r#"{"coverage":{"scope":"workspace","incomplete":{"workspace/symbol":128}},"freshness":{"fileChanges":["Created","Changed","Deleted"]}}"#
+        );
+    }
+
+    #[test]
+    fn coverage_only_omits_the_freshness_key_entirely() {
+        // clangd (M24): coverage can be vouched for, but no signal marks a didChange's
+        // completion and on-disk changes are never incorporated, so this must not even claim
+        // an empty freshness (unlike ServerStateProvider::workspace(&[], &[])).
+        let json = serde_json::to_string(&ServerStateProvider::coverage_only(&[])).unwrap();
+        assert_eq!(
+            json,
+            r#"{"coverage":{"scope":"workspace","incomplete":{}}}"#
+        );
+        assert!(
+            !json.contains("freshness"),
+            "coverage_only must not declare a freshness key: {json}"
+        );
+    }
+
+    #[test]
+    fn coverage_only_can_still_carry_a_cap() {
+        let json = serde_json::to_string(&ServerStateProvider::coverage_only(&[(
+            "workspace/symbol",
+            100,
+        )]))
+        .unwrap();
+        assert_eq!(
+            json,
+            r#"{"coverage":{"scope":"workspace","incomplete":{"workspace/symbol":100}}}"#
         );
     }
 }

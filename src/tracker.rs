@@ -457,7 +457,7 @@ mod tests {
         // from initializing nor from ok.
         let mut tracker = Tracker::new();
         assert!(tracker.select_mapping(None).is_none());
-        assert!(tracker.select_mapping(Some(&info("clangd"))).is_none());
+        assert!(tracker.select_mapping(Some(&info("ccls"))).is_none());
         assert_eq!(tracker.state(), &ServerState::unobserved());
         assert!(!tracker.observes_upstream());
     }

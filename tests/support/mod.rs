@@ -195,6 +195,14 @@ impl ServerUnderTest {
         }
     }
 
+    /// A fake upstream that calls itself "clangd" version "clangd version 21.1.8 linux
+    /// x86_64-unknown-linux-gnu" (as the real clangd does in `serverInfo`) + lsp-det. lsp-det
+    /// selects the clangd mapping and, for this version, declares the guarantee (M24,
+    /// research/clangd-readiness-measurement.md).
+    pub fn lsp_det_with_fake_clangd() -> Self {
+        Self::lsp_det_with_upstream("clangd", &["--server-version", CLANGD_TESTED_VERSION])
+    }
+
     /// A fake upstream conformant to this protocol + lsp-det. The upstream side becomes the
     /// identity mapping, and the downstream side reads the upstream's state across the boundary
     /// (design 4.1).
@@ -1649,6 +1657,73 @@ impl Drop for TempSorbetProject {
     }
 }
 
+/// A temporary C++ project for clangd with a `compile_commands.json` compilation database (M24,
+/// the method section of research/clangd-readiness-measurement.md; without a database the
+/// background index never starts at all). `lib.h` declares `target`; `lib.cpp` defines it and
+/// is the file the 7.1 / 7.2 tests query. `f0.cpp` .. `f{n-1}.cpp` each `#include "lib.h"`,
+/// define about 30 functions, and one `useN()` that calls `target()` once; no standard headers
+/// are used (the fixture is self-contained, no system include paths are needed). Every `.cpp`
+/// file (`lib.cpp` and every `fN.cpp`) gets one entry in `compile_commands.json`.
+pub struct TempClangdProject {
+    pub root: PathBuf,
+}
+
+impl TempClangdProject {
+    /// `n` caller files.
+    pub fn with_many_callers(tag: &str, n: usize) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-clangd-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("cannot create the temporary project");
+        std::fs::write(root.join("lib.h"), CLANGD_LIB_H).unwrap();
+        std::fs::write(root.join("lib.cpp"), CLANGD_LIB_CPP).unwrap();
+        let mut sources = vec!["lib.cpp".to_string()];
+        for i in 0..n {
+            let name = format!("f{i}.cpp");
+            std::fs::write(root.join(&name), clangd_caller_file(i)).unwrap();
+            sources.push(name);
+        }
+        std::fs::write(
+            root.join("compile_commands.json"),
+            clangd_compile_commands(&root, &sources),
+        )
+        .unwrap();
+        TempClangdProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempClangdProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// The `compile_commands.json` content for the given `.cpp` file names under `root`: one entry
+/// each, absolute paths. Built with `serde_json` so paths (backslashes on Windows included) are
+/// escaped correctly rather than by hand (the method section of
+/// research/clangd-readiness-measurement.md).
+fn clangd_compile_commands(root: &std::path::Path, sources: &[String]) -> String {
+    let entries: Vec<Value> = sources
+        .iter()
+        .map(|name| {
+            let file = root.join(name).to_string_lossy().into_owned();
+            let object = format!("{}.o", name.trim_end_matches(".cpp"));
+            json!({
+                "directory": root.to_string_lossy(),
+                "file": file,
+                "command": format!("clang++ -c {file} -o {object}"),
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&entries).unwrap()
+}
+
 /// A temporary Haxe project for haxe-language-server. `src/B.hx` calls `A.target()`, and
 /// `src/Main.hx` calls `B.x()` (M20).
 pub struct TempHaxeProject {
@@ -2022,6 +2097,38 @@ pub fn sorbet_caller_file_with_calls(index: usize, calls: usize) -> String {
     out.push_str("end\n");
     out
 }
+/// The `serverInfo.version` of the tested clangd build (nixpkgs `clang-tools` 21.1.8, linux
+/// x86_64; M24, research/clangd-readiness-measurement.md). The platform is part of the string.
+pub const CLANGD_TESTED_VERSION: &str = "clangd version 21.1.8 linux x86_64-unknown-linux-gnu";
+pub const CLANGD_LIB_H: &str = "#pragma once\nint target();\n";
+pub const CLANGD_LIB_CPP: &str = "#include \"lib.h\"\n\nint target() {\n  return 1;\n}\n";
+/// `target`'s definition is on line 2 (0-based: line 2, character 4, right after "int ").
+pub const CLANGD_TARGET_DECLARATION: (u32, u32) = (2, 4);
+/// A file that includes `lib.h` and calls `target()` once from a new function `g`. Not used by
+/// any conformance test in this suite (no `freshness` is declared for clangd, so 7.3 is not
+/// applicable), kept for parity with the other fixtures' `_G` constant.
+pub const CLANGD_G: &str = "#include \"lib.h\"\n\nint g() {\n  return target();\n}\n";
+
+/// The content of `f{index}.cpp`: `#include "lib.h"`, about 30 functions, one of them
+/// (`useN`) calling `target()` once (the method section of
+/// research/clangd-readiness-measurement.md; no standard headers).
+pub fn clangd_caller_file(index: usize) -> String {
+    clangd_caller_file_with_calls(index, 1)
+}
+
+/// Same as [`clangd_caller_file`], but `useN()` calls `target()` `calls` times.
+pub fn clangd_caller_file_with_calls(index: usize, calls: usize) -> String {
+    let mut out = format!("#include \"lib.h\"\n\nint use{index}() {{\n");
+    for _ in 0..calls {
+        out.push_str("  target();\n");
+    }
+    out.push_str("  return 0;\n}\n\n");
+    for i in 1..30 {
+        out.push_str(&format!("void f{index}_{i}() {{}}\n\n"));
+    }
+    out
+}
+
 pub const HS_CABAL: &str = "cabal-version:      2.4\nname:               fixture\nversion:            0.1.0.0\nbuild-type:         Simple\n\nlibrary\n    exposed-modules:  A, B\n    build-depends:    base\n    hs-source-dirs:   src\n    default-language: Haskell2010\n";
 pub const HS_HIE_YAML: &str = "cradle:\n  cabal:\n";
 pub const HS_HIE_YAML_BROKEN: &str = "cradle:\n  cabal:\n    component: \"lib:doesnotexist\"\n";

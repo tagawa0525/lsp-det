@@ -5051,3 +5051,307 @@ fn sorbet_spec_7_3_1_did_change_on_an_open_file_through_lsp_det_with_real_sorbet
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// clangd (M24, ADR 0020 decision C row for clangd). The mapping in
+// research/clangd-readiness-measurement.md: identified by `serverInfo.name` "clangd"
+// (case-insensitive; the version is the whole `serverInfo.version` string). `$/progress`
+// (fixed token "backgroundIndexProgress", title "indexing") begin -> `indexing`, `report`
+// ignored, end -> `ready`, repeated whenever the background index queue goes from empty to
+// non-empty again. Without a compilation database the token never arrives at all, so this
+// mapping's starting `initializing` never moves (decision (a), ADR 0020 addendum). No health
+// signal. `coverage: {scope: "workspace", incomplete: {}}` only -- no `freshness` -- is
+// declared for the tested version (spec 8.2 item 5; the real-server tests below are the
+// basis).
+// ---------------------------------------------------------------------------
+
+const CLANGD_BACKGROUND_INDEX_TOKEN: &str = "backgroundIndexProgress";
+
+fn clangd_client() -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_clangd();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    (client, result)
+}
+
+/// Emits the fixed-token background-index progress a real clangd sends
+/// (research/clangd-readiness-measurement.md).
+fn clangd_progress(client: &mut ConformanceClient, kind: &str) {
+    let mut value = json!({"kind": kind});
+    if kind == "begin" {
+        value["title"] = json!("indexing");
+    }
+    client.make_upstream_emit_progress(
+        json!({"token": CLANGD_BACKGROUND_INDEX_TOKEN, "value": value}),
+    );
+}
+
+#[test]
+fn clangd_is_selected_by_server_info_and_declares_a_guarantee_for_the_tested_version() {
+    let (mut client, result) = clangd_client();
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"coverage": {"scope": "workspace", "incomplete": {}}}),
+        "declared a different guarantee for the tested version: {result}"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+#[test]
+fn clangd_declares_no_guarantee_for_an_untested_version() {
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "clangd",
+        &[
+            "--server-version",
+            "clangd version 20.1.0 linux x86_64-unknown-linux-gnu",
+        ],
+    );
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for a version the conformance suite has not passed on: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn clangd_becomes_ready_at_the_end_of_the_first_indexing_round() {
+    let (mut client, _) = clangd_client();
+    clangd_progress(&mut client, "begin");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    clangd_progress(&mut client, "end");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(state.health, Health::Unknown, "clangd has no health signal");
+    client.shutdown();
+}
+
+#[test]
+fn clangd_report_is_ignored() {
+    let (mut client, _) = clangd_client();
+    clangd_progress(&mut client, "begin");
+    client.await_state_changed();
+    client.make_upstream_emit_progress(json!({
+        "token": CLANGD_BACKGROUND_INDEX_TOKEN,
+        "value": {"kind": "report", "message": "117/402"}
+    }));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "moved state on a report"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Indexing);
+    client.shutdown();
+}
+
+#[test]
+fn clangd_reindexes_on_every_later_round() {
+    let (mut client, _) = clangd_client();
+    clangd_progress(&mut client, "begin");
+    client.await_state_changed();
+    clangd_progress(&mut client, "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    // A later round: the background index queue went from empty to non-empty again.
+    clangd_progress(&mut client, "begin");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    clangd_progress(&mut client, "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn clangd_ignores_progress_of_other_tokens() {
+    let (mut client, _) = clangd_client();
+    client.make_upstream_emit_progress(json!({
+        "token": "some-other-token",
+        "value": {"kind": "begin", "title": "Something else"}
+    }));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "moved state on an unrelated progress token"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+#[test]
+fn clangd_does_not_predict_from_document_or_watched_file_changes() {
+    let (mut client, _) = clangd_client();
+    clangd_progress(&mut client, "begin");
+    client.await_state_changed();
+    clangd_progress(&mut client, "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.did_change(
+        &std::path::PathBuf::from("/fake/f0.cpp"),
+        2,
+        "int use0() { return target(); }\n",
+    );
+    client.did_change_watched_files(&[(&std::path::PathBuf::from("/fake/f1.cpp"), 2)]);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "predicted a state change from a didChange or a watched-file change; neither a \
+         didChange's completion nor an on-disk change has a signal (research doc, runs 2-6)"
+    );
+    client.shutdown();
+}
+
+/// Gate (spec chapter 9) holds this on the client's behalf because it does not declare the
+/// protocol itself; the readiness that drives the hold comes from the clangd mapping's
+/// `$/progress` tracking. `--references-depend-on-readiness` makes the fake upstream's own
+/// answer depend on ITS OWN state (default "ready"), so a non-empty answer arriving only after
+/// `end` shows the request really was held, not merely delayed.
+#[test]
+fn clangd_holds_references_until_ready() {
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "clangd",
+        &[
+            "--server-version",
+            support::CLANGD_TESTED_VERSION,
+            "--references-depend-on-readiness",
+        ],
+    );
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(false);
+    let id = client.send_references();
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "forwarded references before the first indexing round even started"
+    );
+    clangd_progress(&mut client, "begin");
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "forwarded references while indexing"
+    );
+    clangd_progress(&mut client, "end");
+    let response = client.await_response_to(id);
+    assert!(
+        !response["result"]
+            .as_array()
+            .expect("references answers an array")
+            .is_empty(),
+        "did not release the hold once ready: {response}"
+    );
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Real clangd integration (local only. Not part of CI -- v0.1-design.md chapter 6). Requires
+// clangd on PATH (`nix develop .#servers`; nixpkgs `clang-tools`).
+// ---------------------------------------------------------------------------
+
+/// Caller files (the method section of research/clangd-readiness-measurement.md: a 402-file
+/// fixture, large enough that the background index takes observable time).
+const CLANGD_FIXTURE_CALLERS: usize = 400;
+
+fn real_clangd(project: &support::TempClangdProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec![
+            "--".to_string(),
+            "clangd".to_string(),
+            "--log=error".to_string(),
+        ],
+        root: project.root.clone(),
+    }
+}
+
+/// Identity and the guarantee declared for the tested version.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn clangd_is_selected_by_its_real_server_info() {
+    let project = support::TempClangdProject::with_many_callers("select", 1);
+    let mut client = ConformanceClient::start(&real_clangd(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"coverage": {"scope": "workspace", "incomplete": {}}}),
+        "no guarantee is declared for the tested version of real clangd: {result}"
+    );
+    client.shutdown();
+}
+
+/// 7.1: the first `references` is complete. Unlike Dart / jdtls, clangd itself does not hold a
+/// request until its background index is done (`clangd_without_lsp_det_answers_partial_references_while_indexing`
+/// above shows growing partial answers on this same fixture, matching the research doc's 0 ->
+/// 17 -> 117 -> 217 -> 316 -> 400). Completeness here comes entirely from lsp-det's own gate
+/// (spec chapter 9), which holds cross-file requests on behalf of a client that does not
+/// declare the protocol -- so this client declares nothing special, and the query is sent right
+/// after `didOpen` without waiting for any observed readiness.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn clangd_spec_7_1_first_references_is_complete_through_lsp_det_with_real_clangd() {
+    let project =
+        support::TempClangdProject::with_many_callers("readiness", CLANGD_FIXTURE_CALLERS);
+    let lib = project.file("lib.cpp");
+    let mut client = ConformanceClient::start(&real_clangd(&project));
+    client.initialize_with_root(false, &project.root);
+    client.did_open(&lib, "cpp");
+
+    let (line, character) = support::CLANGD_TARGET_DECLARATION;
+    let found = client.references(&lib, line, character);
+    assert_eq!(
+        found.len(),
+        CLANGD_FIXTURE_CALLERS,
+        "the first references was not complete: {} of {}",
+        found.len(),
+        CLANGD_FIXTURE_CALLERS
+    );
+    client.shutdown();
+}
+
+/// 7.2: the result once `ready` matches the precomputed complete set (every caller file calls
+/// `target` exactly once).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn clangd_spec_7_2_coverage_through_lsp_det_with_real_clangd() {
+    let project = support::TempClangdProject::with_many_callers("coverage", CLANGD_FIXTURE_CALLERS);
+    let lib = project.file("lib.cpp");
+    let mut client = ConformanceClient::start(&real_clangd(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&lib, "cpp");
+    client.wait_until_ready();
+
+    let (line, character) = support::CLANGD_TARGET_DECLARATION;
+    let found = client.references(&lib, line, character);
+    assert_eq!(
+        found.len(),
+        CLANGD_FIXTURE_CALLERS,
+        "missed some callers while declaring ready (completeness violation): {} of {}",
+        found.len(),
+        CLANGD_FIXTURE_CALLERS
+    );
+    client.shutdown();
+}
+
+/// Observation only (no lsp-det, no assertion beyond a growing sequence): talks to a real
+/// clangd directly and confirms the research doc's "silent lie" measurement (partial
+/// `references` answers while the background index is still running) still reproduces on this
+/// fixture. Not part of the conformance suite proper (7.0-7.3 are about lsp-det's behavior);
+/// kept as a standing check that the mapping's premise has not silently stopped holding.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn clangd_without_lsp_det_answers_partial_references_while_indexing() {
+    let project =
+        support::TempClangdProject::with_many_callers("silent-lie", CLANGD_FIXTURE_CALLERS);
+    let lib = project.file("lib.cpp");
+    let server = ServerUnderTest {
+        program: std::path::PathBuf::from("clangd"),
+        args: vec!["--log=error".to_string()],
+        root: project.root.clone(),
+    };
+    let mut client = ConformanceClient::start(&server);
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&lib, "cpp");
+
+    let (line, character) = support::CLANGD_TARGET_DECLARATION;
+    let first = client.references(&lib, line, character).len();
+    assert!(
+        first < CLANGD_FIXTURE_CALLERS,
+        "expected a partial (or empty) first answer while the background index is still \
+         running without lsp-det's hold, got {first} of {CLANGD_FIXTURE_CALLERS} -- the \
+         fixture may no longer take observable time to index"
+    );
+    client.shutdown();
+}

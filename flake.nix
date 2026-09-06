@@ -38,6 +38,9 @@
         pnpm # 上流 (pyright、typescript-language-server) をソースからビルドするとき (scripts/upstream/)
         typescript # tsserver 本体 (typescript-language-server が --tsserver-path なしで探す)
         typescript-language-server # M6 の写像
+        metals # M9 の写像 (ADR 0019 決定 F)。scala-cli のプロジェクトを BSP で取り込む
+        scala-cli # Metals のビルドツール兼 BSP サーバー
+        jdk21 # Metals と scala-cli の実行環境
       ];
     in
     {

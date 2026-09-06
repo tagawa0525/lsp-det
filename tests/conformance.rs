@@ -2293,3 +2293,303 @@ fn stand_in_spec_7_3_2_changed_file_through_lsp_det_with_real_server() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Metals (M9, ADR 0019 decision F). The mapping in research/metals-readiness-measurement.md:
+// readiness from the `$/progress` titles of the build import ("… bspConfig", "Importing build",
+// "Indexing", "Compiling …"), ready only when no token is open AND the last token that ended
+// was "Indexing" (the gaps between tokens are not ready); a watched-file change on a Scala
+// source or build file predicts indexing until the next "Indexing" end; health from the `level`
+// of `metals/status` with `statusType: "module"`.
+// ---------------------------------------------------------------------------
+
+fn metals_client(declare_server_state: bool) -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_metals();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(declare_server_state);
+    (client, result)
+}
+
+fn metals_progress(client: &mut ConformanceClient, token: &str, kind: &str, title: Option<&str>) {
+    let mut value = json!({"kind": kind});
+    if let Some(title) = title {
+        value["title"] = json!(title);
+    }
+    client.make_upstream_emit_progress(json!({"token": token, "value": value}));
+}
+
+fn metals_module_status(client: &mut ConformanceClient, level: &str, text: &str, tooltip: &str) {
+    client.make_upstream_emit_notification(
+        "metals/status",
+        json!({"text": text, "level": level, "show": true, "tooltip": tooltip, "statusType": "module"}),
+    );
+}
+
+#[test]
+fn metals_is_selected_and_moves_readiness_with_the_import_progress() {
+    let (mut client, _) = metals_client(true);
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    metals_progress(&mut client, "i", "begin", Some("Importing build"));
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    metals_progress(&mut client, "i", "end", None);
+    metals_progress(&mut client, "x", "begin", Some("Indexing"));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "moved while still indexing"
+    );
+    metals_progress(&mut client, "x", "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn metals_does_not_claim_ready_in_the_gap_before_the_first_indexing_end() {
+    // Measured: "scala-cli bspConfig" ends 10 seconds before "Importing build" begins, with no
+    // token open in between (research/metals-readiness-measurement.md).
+    let (mut client, _) = metals_client(true);
+    metals_progress(&mut client, "b", "begin", Some("scala-cli bspConfig"));
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    metals_progress(&mut client, "b", "end", None);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "claimed ready in the gap between bspConfig and Importing build"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Indexing);
+    client.shutdown();
+}
+
+#[test]
+fn metals_stays_indexing_until_the_last_ended_token_is_indexing() {
+    // Measured after a Created file: Compiling ends after Indexing, then Importing build and
+    // Indexing run again; the fresh answer came only after the final Indexing end.
+    let (mut client, _) = metals_client(true);
+    metals_progress(&mut client, "x1", "begin", Some("Indexing"));
+    client.await_state_changed();
+    metals_progress(
+        &mut client,
+        "c",
+        "begin",
+        Some("Compiling fixture_309b29d35b"),
+    );
+    metals_progress(&mut client, "x1", "end", None);
+    metals_progress(&mut client, "c", "end", None);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "claimed ready when the last ended token was Compiling"
+    );
+    metals_progress(&mut client, "i", "begin", Some("Importing build"));
+    metals_progress(&mut client, "i", "end", None);
+    metals_progress(&mut client, "x2", "begin", Some("Indexing"));
+    metals_progress(&mut client, "x2", "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn metals_ignores_presentation_compiler_progress_and_metals_status_bar_text() {
+    let (mut client, _) = metals_client(true);
+    metals_progress(&mut client, "x", "begin", Some("Indexing"));
+    client.await_state_changed();
+    metals_progress(&mut client, "x", "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    metals_progress(
+        &mut client,
+        "p",
+        "begin",
+        Some("Loading presentation compiler"),
+    );
+    metals_progress(&mut client, "p", "end", None);
+    client.make_upstream_emit_notification(
+        "metals/status",
+        json!({"text": " Indexing complete!", "level": "info", "show": true, "statusType": "metals"}),
+    );
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "moved because of the presentation compiler or the status bar text"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn metals_health_comes_from_the_level_of_the_module_status() {
+    // Measured with a broken build definition: the import progress runs as usual, then
+    // `metals/status {level: "error", text: "no target", tooltip: "No build target for file found."}`
+    // and every references answer is empty.
+    let (mut client, _) = metals_client(true);
+    assert_eq!(client.server_state().health, Health::Unknown);
+    metals_module_status(&mut client, "info", "importing...", "");
+    assert_eq!(client.await_state_changed().health, Health::Ok);
+    metals_module_status(
+        &mut client,
+        "error",
+        "no target",
+        "No build target for file found.",
+    );
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Error);
+    assert!(
+        state
+            .message
+            .as_deref()
+            .is_some_and(|m| m.contains("No build target")),
+        "the reason is not attached: {state:?}"
+    );
+    metals_module_status(&mut client, "warn", "fixture", "1 warning");
+    assert_eq!(client.await_state_changed().health, Health::Warning);
+    client.shutdown();
+}
+
+#[test]
+fn metals_predicts_indexing_from_a_watched_scala_file_change() {
+    // The measured gap between the client's notification and the first progress begin is
+    // 0.15-0.33 s with no token open (ADR 0014 addendum decision D applied to Metals).
+    let (mut client, _) = metals_client(true);
+    metals_progress(&mut client, "x", "begin", Some("Indexing"));
+    client.await_state_changed();
+    metals_progress(&mut client, "x", "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    let root = support::repo_root();
+    client.did_change_watched_files(&[(&root.join("C.scala"), 1)]);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    metals_progress(
+        &mut client,
+        "c",
+        "begin",
+        Some("Compiling fixture_309b29d35b"),
+    );
+    metals_progress(&mut client, "c", "end", None);
+    metals_progress(&mut client, "x2", "begin", Some("Indexing"));
+    metals_progress(&mut client, "x2", "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    // A build file too; a file outside the watched set does not predict.
+    client.did_change_watched_files(&[(&root.join("project.scala"), 2)]);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    metals_progress(&mut client, "x3", "begin", Some("Indexing"));
+    metals_progress(&mut client, "x3", "end", None);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.did_change_watched_files(&[(&root.join("README.md"), 2)]);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "predicted indexing from a file outside the watched set"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn metals_spec_8_2_5_declares_no_guarantees_for_an_untested_version() {
+    let (mut client, result) = metals_client(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for the fake Metals's untested version: {result}"
+    );
+    client.shutdown();
+}
+
+// --- real Metals (local only) ---------------------------------------------
+
+fn real_metals(project: &support::TempScalaProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec!["--".to_string(), "metals".to_string()],
+        root: project.root.clone(),
+    }
+}
+
+/// Returns only the references to `target` in `A.scala` that point at `file`.
+fn scala_references_in(
+    client: &mut ConformanceClient,
+    a: &std::path::Path,
+    file: &std::path::Path,
+) -> Vec<Value> {
+    let wanted = support::file_uri(file);
+    client
+        .references(a, 1, 6)
+        .into_iter()
+        .filter(|location| location["uri"] == Value::String(wanted.clone()))
+        .collect()
+}
+
+/// Via Metals. Observes the transition from initializing to ready.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn metals_spec_7_1_through_lsp_det_with_real_metals() {
+    let project = support::TempScalaProject::with_cross_file_reference("readiness");
+    let mut client = ConformanceClient::start(&real_metals(&project));
+    client.initialize_with_root(true, &project.root);
+    assert_ne!(client.server_state().readiness, Readiness::Ready);
+    client.wait_until_ready();
+    assert_eq!(client.server_state().health, Health::Ok);
+    client.shutdown();
+}
+
+/// Measures 7.2 coverage against real Metals.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn metals_spec_7_2_coverage_through_lsp_det_with_real_metals() {
+    let project = support::TempScalaProject::with_cross_file_reference("coverage");
+    let a = project.file("A.scala");
+    let b = project.file("B.scala");
+    let mut client = ConformanceClient::start(&real_metals(&project));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    client.did_open(&a, "scala");
+    let found = scala_references_in(&mut client, &a, &b);
+    assert!(
+        found
+            .iter()
+            .any(|location| location["range"]["start"]["line"] == 1),
+        "missed the reference in B.scala while declaring ready (coverage violation): {found:#?}"
+    );
+    client.shutdown();
+}
+
+/// Measures 7.3 item 1 (didChange, cross-file) against real Metals.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn metals_spec_7_3_cross_file_freshness_through_lsp_det_with_real_metals() {
+    let project = support::TempScalaProject::with_cross_file_reference("freshness");
+    let a = project.file("A.scala");
+    let b = project.file("B.scala");
+    let mut client = ConformanceClient::start(&real_metals(&project));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    client.did_open(&a, "scala");
+    client.did_open(&b, "scala");
+    let before = scala_references_in(&mut client, &a, &b);
+    assert!(
+        !before.is_empty(),
+        "the premise is broken: a reference from B.scala should be visible"
+    );
+    client.did_change(&b, 2, support::SCALA_B_WITHOUT_CALL);
+    assert_eq!(client.server_state().readiness, Readiness::Ready);
+    let after = scala_references_in(&mut client, &a, &b);
+    assert!(
+        after.is_empty(),
+        "returned a reference that should have been removed while declaring ready (freshness violation): {after:#?}"
+    );
+    client.shutdown();
+}
+
+/// Measures 7.3 items 2-4 (watched Changed / Created / Deleted) against real Metals.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn metals_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_metals() {
+    let project = support::TempScalaProject::with_cross_file_reference("watched");
+    let mut client = ConformanceClient::start(&real_metals(&project));
+    client.initialize_with_root(true, &project.root);
+    client.wait_until_ready();
+    client.did_open(&project.file("A.scala"), "scala");
+    watched_file_changes_are_reflected(
+        &mut client,
+        &project.file("A.scala"),
+        &project.file("B.scala"),
+        support::SCALA_B_WITH_TWO_CALLS,
+        &project.file("C.scala"),
+        support::SCALA_C_WITH_CALL,
+        None,
+        scala_references_in,
+        true,
+    );
+    client.shutdown();
+}

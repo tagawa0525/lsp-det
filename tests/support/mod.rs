@@ -60,6 +60,12 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("gopls", &[])
     }
 
+    /// A fake upstream that calls itself Metals + lsp-det. lsp-det selects the Metals mapping
+    /// (M9, ADR 0019 decision F).
+    pub fn lsp_det_with_fake_metals() -> Self {
+        Self::lsp_det_with_upstream("Metals", &[])
+    }
+
     /// A fake upstream that plays pyright + lsp-det. pyright returns no `serverInfo`, so what the
     /// server calls itself comes only from the startup log (ADR 0011 decision A-2). lsp-det
     /// selects the pyright mapping.
@@ -535,6 +541,14 @@ impl ConformanceClient {
     /// gopls's `{"token", "value": {"kind", "title", "message"}}` as is.
     pub fn make_upstream_emit_progress(&mut self, params: Value) {
         self.notify("$/fake/emitProgress", params);
+    }
+
+    /// Makes the fake upstream send any notification (`method` with `params`).
+    pub fn make_upstream_emit_notification(&mut self, method: &str, params: Value) {
+        self.notify(
+            "$/fake/emitNotification",
+            json!({"method": method, "params": params}),
+        );
     }
 
     /// Makes the fake upstream send `window/logMessage`.
@@ -1067,6 +1081,51 @@ impl Drop for TempGoProject {
     }
 }
 
+/// A temporary scala-cli project. `B.scala` refers to `A.target` (M9, Metals).
+pub struct TempScalaProject {
+    pub root: PathBuf,
+}
+
+impl TempScalaProject {
+    pub fn with_cross_file_reference(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-scala-{tag}-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("cannot create the temporary project");
+        std::fs::write(root.join("project.scala"), SCALA_PROJECT).unwrap();
+        std::fs::write(root.join("A.scala"), SCALA_A).unwrap();
+        std::fs::write(root.join("B.scala"), SCALA_B_WITH_CALL).unwrap();
+        TempScalaProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+
+    pub fn with_many_symbols(tag: &str, n: usize) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        for file in 0..3 {
+            let body: String = std::iter::once(format!("object S{file} {{\n"))
+                .chain(
+                    (0..n)
+                        .filter(|i| i % 3 == file)
+                        .map(|i| format!("  def wsymprobe{i:03}(): Int = {i}\n")),
+                )
+                .chain(std::iter::once("}\n".to_string()))
+                .collect();
+            std::fs::write(project.root.join(format!("S{file}.scala")), body).unwrap();
+        }
+        project
+    }
+}
+
+impl Drop for TempScalaProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// Sends SIGKILL (TerminateProcess on Windows) to the descendants of `pid` whose command line
 /// contains `needle`. Used to bring down the tsserver (a grandchild process) of a real
 /// typescript-language-server. Returns the pids that were killed.
@@ -1267,6 +1326,16 @@ pub const GO_B_WITHOUT_CALL: &str = "package fixture\n\nfunc Caller() {}\n";
 pub const GO_B_WITH_TWO_CALLS: &str =
     "package fixture\n\nfunc Caller() {\n\tTarget()\n\tTarget()\n}\n";
 pub const GO_C_WITH_CALL: &str = "package fixture\n\nfunc Other() {\n\tTarget()\n}\n";
+
+pub const SCALA_PROJECT: &str = "//> using scala 3.3.4\n";
+/// `target` is on line 2 (0-based: line 1, character 6).
+pub const SCALA_A: &str = "object A {\n  def target: Int = 1\n}\n";
+/// The reference is on line 2 (0-based: line 1).
+pub const SCALA_B_WITH_CALL: &str = "object B {\n  val x: Int = A.target\n}\n";
+pub const SCALA_B_WITHOUT_CALL: &str = "object B {\n  val x: Int = 1\n}\n";
+pub const SCALA_B_WITH_TWO_CALLS: &str =
+    "object B {\n  val x: Int = A.target\n  val y: Int = A.target\n}\n";
+pub const SCALA_C_WITH_CALL: &str = "object C {\n  val z: Int = A.target\n}\n";
 
 /// `target` is at the 8th character of line 1 (0-based: line 0, character 7).
 pub const A_RS: &str = "pub fn target() {}\n";

@@ -9,6 +9,8 @@
 //!
 //! - `$/fake/emitServerStatus` (notification): emits the params as is as the params of
 //!   `experimental/serverStatus`
+//! - `$/fake/emitNotification` (notification): emits `params.params` as the params of the
+//!   notification `params.method` (any server-specific vocabulary)
 //! - `$/fake/emitProgress` (notification): emits the params as is as the params of
 //!   `$/progress` (reproduces gopls's "Setting up workspace" etc.)
 //! - `$/fake/report` (request): returns the list of methods received so far and the params
@@ -239,6 +241,18 @@ fn main() {
                     &mut stdout,
                     id,
                     json!({"health": fake_health, "readiness": fake_readiness, "message": "answered by upstream"}),
+                );
+            }
+            "$/fake/emitNotification" => {
+                // Any server-to-client notification: `{method, params}` (reproduces server-specific
+                // vocabularies such as Metals's `metals/status`).
+                send(
+                    &mut stdout,
+                    json!({
+                        "jsonrpc": "2.0",
+                        "method": params["method"],
+                        "params": params["params"]
+                    }),
                 );
             }
             "$/fake/emitProgress" => {

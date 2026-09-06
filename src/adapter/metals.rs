@@ -42,10 +42,14 @@ const IMPORTING_TITLE: &str = "Importing build";
 const COMPILING_PREFIX: &str = "Compiling ";
 const BSP_CONFIG_SUFFIX: &str = " bspConfig";
 
-/// Versions for which conformance tests 7.2 / 7.3 were run against a real Metals and passed.
-/// Matched by exact equality against `serverInfo.version`. Empty until the tests have passed
-/// (declaring a guarantee that cannot be kept violates spec 5.1).
-pub const TESTED_VERSIONS: &[&str] = &[];
+/// Versions for which conformance tests 7.2 (with the `workspace/symbol` count) and 7.3 item 1
+/// were run against a real Metals and passed. Matched by exact equality against
+/// `serverInfo.version`. When adding one, run `cargo test --test conformance -- --ignored metals`
+/// against that version first (declaring a guarantee that cannot be kept violates spec 5.1).
+///
+/// Record of versions passed: 1.6.8 (nixpkgs, scala-cli 1.16.0, OpenJDK 21.0.12), 2026-09-06,
+/// 3 consecutive runs.
+pub const TESTED_VERSIONS: &[&str] = &["1.6.8"];
 
 #[derive(Debug, Deserialize)]
 struct ProgressParams {
@@ -204,9 +208,14 @@ impl Mapping for MetalsAdapter {
         ServerState::initializing()
     }
 
+    /// `coverage` over the whole workspace with no cap (7.2: 300 of 300 `workspace/symbol`
+    /// results). `freshness` with no watched-file kind: `didChange` of an open document is
+    /// incorporated by the presentation compiler (7.3 item 1), but the semanticdb index that
+    /// answers for a file changed on disk is rebuilt after the "Compiling" end with no signal,
+    /// and references for that file are empty in the meantime (measured window 0.1 s).
     fn guarantees(&self) -> ServerStateProvider {
         if self.version_is_tested {
-            ServerStateProvider::workspace(&[], &crate::state::ALL_FILE_CHANGES)
+            ServerStateProvider::workspace(&[], &[])
         } else {
             ServerStateProvider::notifications_only()
         }
@@ -477,8 +486,15 @@ mod tests {
     fn declares_guarantees_only_for_tested_versions() {
         assert_eq!(
             MetalsAdapter::for_version(Some("1.6.8")).guarantees(),
-            ServerStateProvider::notifications_only(),
-            "no version has passed 7.2 / 7.3 yet"
+            ServerStateProvider::workspace(&[], &[])
+        );
+        assert_eq!(
+            MetalsAdapter::for_version(Some("1.5.0")).guarantees(),
+            ServerStateProvider::notifications_only()
+        );
+        assert_eq!(
+            MetalsAdapter::new().guarantees(),
+            ServerStateProvider::notifications_only()
         );
     }
 }

@@ -2542,17 +2542,24 @@ fn scala_references_in(
 fn metals_spec_7_1_through_lsp_det_with_real_metals() {
     let project = support::TempScalaProject::with_cross_file_reference("readiness");
     let mut client = ConformanceClient::start(&real_metals(&project));
-    client.initialize_with_root(true, &project.root);
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": []}}),
+        "no guarantee is declared for the measured version of real Metals: {result}"
+    );
     assert_ne!(client.server_state().readiness, Readiness::Ready);
     client.wait_until_ready();
-    let state = client.server_state();
-    client.shutdown();
-    let log = client.stderr_after_exit();
+    // The module status that carries health arrives on its own schedule: measured 7 ms
+    // after the "Indexing" end (research/metals-readiness-measurement.md). An observer may
+    // be ready with health still unknown (spec 8.2 item 2).
+    let state = poll_state_until(&mut client, |s| s.health != Health::Unknown);
     assert_eq!(
         state.health,
         Health::Ok,
-        "health is not ok at ready: {state:?}\nlsp-det's stderr:\n{log}"
+        "health after the module status: {state:?}"
     );
+    client.shutdown();
 }
 
 /// Measures 7.2 coverage against real Metals.
@@ -2603,25 +2610,18 @@ fn metals_spec_7_3_cross_file_freshness_through_lsp_det_with_real_metals() {
     client.shutdown();
 }
 
-/// Measures 7.3 items 2-4 (watched Changed / Created / Deleted) against real Metals.
+/// Measures the `workspace/symbol` cap of real Metals (the basis for `coverage.incomplete`).
 #[test]
 #[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
-fn metals_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_metals() {
-    let project = support::TempScalaProject::with_cross_file_reference("watched");
+fn spec_7_2_2_metals_workspace_symbol_count() {
+    let project = support::TempScalaProject::with_many_symbols("limit", 300);
     let mut client = ConformanceClient::start(&real_metals(&project));
     client.initialize_with_root(true, &project.root);
     client.wait_until_ready();
-    client.did_open(&project.file("A.scala"), "scala");
-    watched_file_changes_are_reflected(
-        &mut client,
-        &project.file("A.scala"),
-        &project.file("B.scala"),
-        support::SCALA_B_WITH_TWO_CALLS,
-        &project.file("C.scala"),
-        support::SCALA_C_WITH_CALL,
-        None,
-        scala_references_in,
-        true,
+    assert_eq!(
+        workspace_symbol_count_through(&mut client),
+        300,
+        "capped even though it is not listed under incomplete"
     );
     client.shutdown();
 }

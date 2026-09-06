@@ -10,7 +10,7 @@
 4. `docs/adr/` — 決定の経緯と却下案。成功基準と構造の根拠は ADR 0009、採用しなかった依存（tokio 等）の理由は ADR 0005
 5. `docs/vision.md` — 長期構想（宣言範囲・起動方法の宣言は凍結中）
 6. `docs/glossary.md` — 日本語と英語の対訳表。仕様・README・コードのコメントの訳語はここに合わせる
-7. `docs/research/` — 調査報告 23 本。実装中の疑問はまずここを検索（先行プロキシの落とし穴、各サーバーの readiness 挙動、Serena / CC の統合仕様が実測済み、CC 経由のドッグフーディング観測は `claude-code-dogfooding.md`）
+7. `docs/research/` — 調査報告 24 本。実装中の疑問はまずここを検索（先行プロキシの落とし穴、各サーバーの readiness 挙動、Serena / CC の統合仕様が実測済み、CC 経由のドッグフーディング観測は `claude-code-dogfooding.md`）
 
 ## 絶対の制約
 

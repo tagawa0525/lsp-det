@@ -121,6 +121,7 @@
         jdt-language-server # M23 の写像 (ADR 0020)。jdtls -data <dir>。readiness は language/status の ServiceReady から
         sorbet # M22 の写像 (ADR 0020)。sorbet --lsp。readiness は sorbet/showOperation から
         watchman # Sorbet がディスク上の変更を拾うのに要る（実測記録を参照）
+        clang-tools # M24 の写像 (ADR 0020)。clangd。readiness は背景索引の $/progress (title "indexing") から
       ];
     in
     {

@@ -4641,3 +4641,272 @@ fn jdtls_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_jdtls() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Sorbet (M22, ADR 0020 decision C row for Sorbet). The mapping in
+// research/sorbet-readiness-measurement.md: identified by the `sorbet/showOperation`
+// notification's method itself (no `serverInfo`, and the version never appears anywhere in the
+// protocol). Operations not tied to a request (`Indexing`, `SlowPathBlocking`,
+// `SlowPathNonBlocking`, `FastPath`) are counted -- they nest (measured: `Indexing` inside
+// `SlowPathBlocking`): a `start` opens one and, once the state has reached `ready` before (a
+// later round), moves to `indexing`; an `end` closes one, and readiness moves to `ready` once
+// none is left open (the first round stays `initializing` until then, the same pattern as
+// Gleam's first begin). Operations tied to a request (`References`, `SymbolSearch`, `Rename`,
+// `MoveMethod`) are the request's own processing and are not readiness (ADR 0019 decision G).
+// The server holds a request until the operation it depends on ends by itself, so there is
+// nothing to predict from `didChange` / `workspace/didChangeWatchedFiles` (`observe_client` is
+// not implemented). No health signal. No guarantee is declared for any version (ADR 0020
+// decision E): the version never appears in the protocol.
+//
+// lsp-det injects `initializationOptions.supportsOperationNotifications: true` only when it is
+// the one that launched the `sorbet` (or `srb`) command (ADR 0020 decision D); the fake
+// upstream in this section is launched under its own build name (as every other fake-based
+// test is), so it never receives the injected option and its `sorbet/showOperation` is emitted
+// purely on the test's own command (`make_upstream_emit_notification`). The injection itself
+// is exercised separately below, against a copy of the fake binary named `sorbet`.
+// ---------------------------------------------------------------------------
+
+fn sorbet_client() -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_sorbet();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    sorbet_identify(&mut client);
+    (client, result)
+}
+
+/// Emits `sorbet/showOperation` the way a real Sorbet does
+/// (research/sorbet-readiness-measurement.md).
+fn sorbet_operation(client: &mut ConformanceClient, name: &str, status: &str) {
+    client.make_upstream_emit_notification(
+        "sorbet/showOperation",
+        json!({"operationName": name, "description": format!("{name}..."), "status": status}),
+    );
+}
+
+/// Establishes Sorbet's identity with a request-tied operation. A request-tied operation is
+/// ignored by the mapping regardless of whether it reaches `interpret` at all, so it makes no
+/// difference that the very notification which establishes identity is not itself replayed
+/// through the mapping (`adapter::identity_from_notification`, `Tracker::observe_upstream`).
+/// Every operation asserted on afterward starts counting from a known, empty count of open
+/// operations.
+fn sorbet_identify(client: &mut ConformanceClient) {
+    sorbet_operation(client, "References", "start");
+    let _ = client.upstream_methods_seen();
+}
+
+#[test]
+fn sorbet_is_selected_by_its_notification_and_becomes_ready_after_the_first_round() {
+    let server = ServerUnderTest::lsp_det_with_fake_sorbet();
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(true);
+    let state = client.server_state();
+    assert_eq!(state.readiness, Readiness::Unknown);
+    assert_eq!(state.health, Health::Unknown);
+
+    // The real startup sequence (research/sorbet-readiness-measurement.md): SlowPathBlocking
+    // wraps Indexing. The very first notification establishes identity and is not itself
+    // replayed through the mapping, so only the three that follow are counted.
+    sorbet_operation(&mut client, "SlowPathBlocking", "start");
+    let _ = client.upstream_methods_seen();
+    assert_eq!(
+        client.server_state().readiness,
+        Readiness::Initializing,
+        "the notification establishing identity moves only to the mapping's starting state"
+    );
+    sorbet_operation(&mut client, "Indexing", "start");
+    let _ = client.upstream_methods_seen();
+    assert_eq!(
+        client.server_state().readiness,
+        Readiness::Initializing,
+        "still the first round: a nested start does not move past initializing"
+    );
+    sorbet_operation(&mut client, "Indexing", "end");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(state.health, Health::Unknown);
+    sorbet_operation(&mut client, "SlowPathBlocking", "end");
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "an end below the open count must not notify again"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn sorbet_becomes_ready_only_once_nested_operations_all_end() {
+    let (mut client, _) = sorbet_client();
+    sorbet_operation(&mut client, "SlowPathBlocking", "start");
+    let _ = client.upstream_methods_seen();
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    sorbet_operation(&mut client, "Indexing", "start");
+    let _ = client.upstream_methods_seen();
+    assert_eq!(
+        client.server_state().readiness,
+        Readiness::Initializing,
+        "still the first round: a nested start does not move past initializing"
+    );
+    sorbet_operation(&mut client, "Indexing", "end");
+    let _ = client.upstream_methods_seen();
+    assert_eq!(
+        client.server_state().readiness,
+        Readiness::Initializing,
+        "the outer SlowPathBlocking is still open"
+    );
+    sorbet_operation(&mut client, "SlowPathBlocking", "end");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn sorbet_reindexes_on_a_later_round() {
+    let (mut client, _) = sorbet_client();
+    sorbet_operation(&mut client, "Indexing", "start");
+    let _ = client.upstream_methods_seen();
+    sorbet_operation(&mut client, "Indexing", "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+
+    sorbet_operation(&mut client, "SlowPathNonBlocking", "start");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    sorbet_operation(&mut client, "SlowPathNonBlocking", "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn sorbet_ignores_request_tied_operations() {
+    let (mut client, _) = sorbet_client();
+    sorbet_operation(&mut client, "Indexing", "start");
+    let _ = client.upstream_methods_seen();
+    sorbet_operation(&mut client, "Indexing", "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+
+    for name in ["References", "SymbolSearch", "Rename", "MoveMethod"] {
+        sorbet_operation(&mut client, name, "start");
+        assert!(
+            client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+            "moved state on a request-tied operation's start: {name}"
+        );
+        sorbet_operation(&mut client, name, "end");
+        assert!(
+            client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+            "moved state on a request-tied operation's end: {name}"
+        );
+    }
+    client.shutdown();
+}
+
+#[test]
+fn sorbet_does_not_predict_from_document_or_watched_file_changes() {
+    let (mut client, _) = sorbet_client();
+    sorbet_operation(&mut client, "Indexing", "start");
+    let _ = client.upstream_methods_seen();
+    sorbet_operation(&mut client, "Indexing", "end");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+
+    client.did_change(
+        &std::path::PathBuf::from("/fake/lib/a.rb"),
+        2,
+        "# typed: true\nmodule Lib\nend\n",
+    );
+    client.did_change_watched_files(&[(&std::path::PathBuf::from("/fake/lib/b.rb"), 2)]);
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "predicted a state change from a didChange or a watched-file change; the server itself \
+         holds a request until the operation it depends on ends, so there is nothing to predict"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn sorbet_spec_8_2_5_declares_no_guarantees() {
+    let server = ServerUnderTest::lsp_det_with_fake_sorbet();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee Sorbet's vocabulary cannot keep (the version never appears in the \
+         protocol): {result}"
+    );
+    client.shutdown();
+}
+
+/// Gate (spec chapter 9) holds this on the client's behalf because it does not declare the
+/// protocol itself; the readiness that drives the hold comes from the Sorbet mapping's
+/// `sorbet/showOperation` tracking. `--references-depend-on-readiness` makes the fake
+/// upstream's own answer depend on ITS OWN state (default "ready"), so a non-empty answer
+/// arriving only after the matching end shows the request really was held, not merely delayed.
+#[test]
+fn sorbet_holds_references_until_ready() {
+    let server =
+        ServerUnderTest::lsp_det_with_upstream_flags("none", &["--references-depend-on-readiness"]);
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(false);
+    // Readiness is `unknown` (Gate forwards rather than holding, ADR 0008) until Sorbet is
+    // identified; the hold only starts once readiness becomes a known non-ready value.
+    sorbet_identify(&mut client);
+    let id = client.send_references();
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "forwarded references while initializing"
+    );
+    sorbet_operation(&mut client, "Indexing", "start");
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "forwarded references while indexing"
+    );
+    sorbet_operation(&mut client, "Indexing", "end");
+    let response = client.await_response_to(id);
+    assert!(
+        !response["result"]
+            .as_array()
+            .expect("references answers an array")
+            .is_empty(),
+        "did not release the hold once ready: {response}"
+    );
+    client.shutdown();
+}
+
+// --- initializationOptions injection (ADR 0020 decision D) --------------------------------
+
+#[test]
+fn sorbet_injects_the_operation_notifications_opt_in_when_launched_as_sorbet() {
+    let server = ServerUnderTest::lsp_det_with_fake_upstream_named("sorbet");
+    let mut client = ConformanceClient::start(&server);
+    // The client does not pass initializationOptions itself: the injection is what makes the
+    // option appear on the upstream side (ADR 0020 decision D).
+    client.initialize(true);
+    assert_eq!(
+        client.upstream_initialization_options()["supportsOperationNotifications"],
+        json!(true),
+        "did not inject the opt-in for a command named \"sorbet\""
+    );
+    client.shutdown();
+}
+
+#[test]
+fn sorbet_injects_the_operation_notifications_opt_in_when_launched_as_srb() {
+    let server = ServerUnderTest::lsp_det_with_fake_upstream_named("srb");
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(true);
+    assert_eq!(
+        client.upstream_initialization_options()["supportsOperationNotifications"],
+        json!(true),
+        "did not inject the opt-in for a command named \"srb\""
+    );
+    client.shutdown();
+}
+
+#[test]
+fn sorbet_does_not_inject_for_an_upstream_command_with_a_different_name() {
+    let server = ServerUnderTest::lsp_det_with_fake_upstream_named("not-sorbet");
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(true);
+    assert_eq!(
+        client.upstream_initialization_options(),
+        json!(null),
+        "injected the opt-in for a command lsp-det did not launch as sorbet or srb"
+    );
+    client.shutdown();
+}

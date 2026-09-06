@@ -122,9 +122,10 @@ impl ServerUnderTest {
         )
     }
 
-    /// A fake upstream that returns no `serverInfo` and, like the real crystalline, announces
-    /// nothing at startup: it is known only by the `window/logMessage` "[workspace] Found
-    /// projects:" a test emits on demand (M17, ADR 0019 decision F).
+    /// A fake upstream that returns no `serverInfo`. Like the real crystalline it is known only
+    /// by the startup `window/logMessage` `"[workspace] Found projects:` (the leading double
+    /// quote is part of the message and of the match), which a test emits on demand (M17,
+    /// ADR 0019 decision F).
     pub fn lsp_det_with_fake_crystalline() -> Self {
         Self::lsp_det_with_upstream("none", &[])
     }

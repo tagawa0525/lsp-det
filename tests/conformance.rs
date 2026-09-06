@@ -3322,9 +3322,9 @@ fn pyrefly_real_is_unknown_on_both_axes_and_nothing_is_held() {
 
 // ---------------------------------------------------------------------------
 // crystalline (M17, ADR 0019 decision F). The mapping in
-// research/crystalline-readiness-measurement.md: the server returns no `serverInfo` and is known
-// only by the startup `window/logMessage` "[workspace] Found projects:" (sent only when a
-// `shard.yml` project was found). Readiness moves from `initializing` to `ready` on the log "LSP
+// docs/research/crystalline-readiness-measurement.md: the server returns no `serverInfo` and is
+// known only by the startup `window/logMessage` `"[workspace] Found projects:` (the leading
+// double quote is part of the message; sent only when a `shard.yml` project was found). Readiness moves from `initializing` to `ready` on the log "LSP
 // server is ready.". `$/progress` is a per-request compilation (title "Building project") that a
 // request waits on synchronously before answering, so it is not readiness and is not read. No
 // health signal; no guarantee (the version does not appear in the protocol).

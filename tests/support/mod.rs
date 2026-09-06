@@ -72,9 +72,6 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("Expert", &[])
     }
 
-    /// A fake upstream that returns no `serverInfo` and calls itself Nextflow's language server
-    /// only through `executeCommandProvider.commands` (as the real one does) + lsp-det. lsp-det
-    /// selects the Nextflow mapping (M12).
     /// A fake upstream that returns no `serverInfo` and calls itself haskell-language-server only
     /// through its pid-prefixed `executeCommandProvider.commands` (as the real one does) +
     /// lsp-det. lsp-det selects the HLS mapping (M15).
@@ -88,6 +85,9 @@ impl ServerUnderTest {
         )
     }
 
+    /// A fake upstream that returns no `serverInfo` and calls itself Nextflow's language server
+    /// only through `executeCommandProvider.commands` (as the real one does) + lsp-det. lsp-det
+    /// selects the Nextflow mapping (M12).
     pub fn lsp_det_with_fake_nextflow() -> Self {
         Self::lsp_det_with_upstream(
             "none",

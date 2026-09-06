@@ -1324,6 +1324,37 @@ impl Drop for TempCabalProject {
     }
 }
 
+/// A temporary Python project for pyrefly. `pkg/b.py` calls `target` of `pkg/a.py` (M16).
+pub struct TempPyreflyProject {
+    pub root: PathBuf,
+}
+
+impl TempPyreflyProject {
+    pub fn with_cross_file_reference(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-pyrefly-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("pkg")).expect("cannot create the temporary project");
+        std::fs::write(root.join("pyproject.toml"), PYREFLY_PYPROJECT).unwrap();
+        std::fs::write(root.join("pkg/__init__.py"), "").unwrap();
+        std::fs::write(root.join("pkg/a.py"), PYREFLY_A).unwrap();
+        std::fs::write(root.join("pkg/b.py"), PYREFLY_B).unwrap();
+        TempPyreflyProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempPyreflyProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// Sends SIGKILL (TerminateProcess on Windows) to the descendants of `pid` whose command line
 /// contains `needle`. Used to bring down the tsserver (a grandchild process) of a real
 /// typescript-language-server. Returns the pids that were killed.
@@ -1530,6 +1561,12 @@ pub const MIX_EXS: &str = "defmodule Fixture.MixProject do\n  use Mix.Project\n\
 pub const EX_A: &str = "defmodule A do\n  def target, do: 1\nend\n";
 /// The call is on line 2 (0-based: line 1).
 pub const EX_B_WITH_CALL: &str = "defmodule B do\n  def x, do: A.target()\nend\n";
+pub const PYREFLY_PYPROJECT: &str = "[project]\nname = \"fixture\"\nversion = \"0.1.0\"\n";
+/// `target` is declared on line 0 (character 4).
+pub const PYREFLY_A: &str = "def target() -> int:\n    return 1\n";
+pub const PYREFLY_B: &str =
+    "from pkg.a import target\n\n\ndef x() -> int:\n    return target() + 1\n";
+pub const PYREFLY_TARGET_DECLARATION: (u32, u32) = (0, 4);
 pub const HS_CABAL: &str = "cabal-version:      2.4\nname:               fixture\nversion:            0.1.0.0\nbuild-type:         Simple\n\nlibrary\n    exposed-modules:  A, B\n    build-depends:    base\n    hs-source-dirs:   src\n    default-language: Haskell2010\n";
 pub const HS_HIE_YAML: &str = "cradle:\n  cabal:\n";
 pub const HS_HIE_YAML_BROKEN: &str = "cradle:\n  cabal:\n    component: \"lib:doesnotexist\"\n";

@@ -65,6 +65,7 @@ interface ServerState {
 | Expert（Elixir）           | `$/progress` の "… Starting engine node" / "Building …" / "Indexing source code" / "Loading search index"                                                                            | なし（`unknown`）                            | なし。読み込んだ索引がこれから作り直されるかを語彙で区別できない |
 | Nextflow の言語サーバー    | `$/progress` "Initializing" の end の後、workspaceFolders 以下の全 `*.nf` への `publishDiagnostics`（観測者が自分で歩く）。`didOpen` / `didChange` / `didClose` はその文書の診断まで | なし（`unknown`）                            | なし。版が語彙に現れない（`serverInfo` がない）                  |
 | haskell-language-server    | 読めるものがない。`$/progress` は 1 秒より長いセッションにしか出ず一部しか覆わない。索引中の `references` は増え続ける。`unknown`                                                    | `source: "cradle"` の error の診断 → `error` | なし。readiness を観測しない                                     |
+| pyrefly                    | なし。起動時の索引は stderr にしか出ず、"Pyrefly: Rechecking" は開いているファイルだけ。`unknown`                                                                                    | なし（`unknown`）                            | なし。写像なし                                                   |
 | その他                     | なし（両軸 `unknown`）                                                                                                                                                               |                                              | 宣言しない                                                       |
 
 **下流側**はクライアントを代行する。クライアントが `experimental.serverState` を宣言していれば状態を転送するだけで待たない。宣言していなければ、仕様 9 章の推奨挙動を代わりに実行する。

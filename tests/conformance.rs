@@ -3319,3 +3319,152 @@ fn pyrefly_real_is_unknown_on_both_axes_and_nothing_is_held() {
     assert_eq!(client.server_state().readiness, Readiness::Unknown);
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// crystalline (M17, ADR 0019 decision F). The mapping in
+// docs/research/crystalline-readiness-measurement.md: the server returns no `serverInfo` and is
+// known only by the startup `window/logMessage` `"[workspace] Found projects:` (the leading
+// double quote is part of the message; sent only when a `shard.yml` project was found). Readiness moves from `initializing` to `ready` on the log "LSP
+// server is ready.". `$/progress` is a per-request compilation (title "Building project") that a
+// request waits on synchronously before answering, so it is not readiness and is not read. No
+// health signal; no guarantee (the version does not appear in the protocol).
+// ---------------------------------------------------------------------------
+
+fn crystalline_client(root: &std::path::Path) -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_crystalline();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize_with_root(true, root);
+    (client, result)
+}
+
+/// A barrier: a round trip through the fake upstream. Everything the fake was told to emit
+/// before this call has already been read by lsp-det by the time the answer comes back (the same
+/// technique as `nextflow_sync`), so a query sent after this observes the effect of the log
+/// message even though selecting a mapping is not itself a notification.
+fn crystalline_sync(client: &mut ConformanceClient) {
+    let _ = client.upstream_methods_seen();
+}
+
+#[test]
+fn crystalline_is_selected_by_its_startup_log_and_becomes_ready_on_the_ready_log() {
+    let project = support::TempCrystalProject::new("select");
+    let (mut client, _) = crystalline_client(&project.root);
+    let state = client.server_state();
+    assert_eq!(state.readiness, Readiness::Unknown);
+    assert_eq!(state.health, Health::Unknown);
+
+    client.make_upstream_emit_log_message(3, "\"[workspace] Found projects:\n/p/fixture");
+    crystalline_sync(&mut client);
+    assert_eq!(
+        client.server_state().readiness,
+        Readiness::Initializing,
+        "the startup log did not select the mapping"
+    );
+
+    client.make_upstream_emit_log_message(3, "LSP server is ready.");
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(state.health, Health::Unknown);
+    client.shutdown();
+}
+
+#[test]
+fn crystalline_ignores_per_request_compilation_progress() {
+    let project = support::TempCrystalProject::new("progress");
+    let (mut client, _) = crystalline_client(&project.root);
+    client.make_upstream_emit_log_message(3, "\"[workspace] Found projects:\n/p/fixture");
+    client.make_upstream_emit_log_message(3, "LSP server is ready.");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+
+    client.make_upstream_emit_progress(json!({
+        "token": "workspace/compile/0",
+        "value": {"kind": "begin", "title": "Building project"}
+    }));
+    client.make_upstream_emit_progress(json!({
+        "token": "workspace/compile/0",
+        "value": {"kind": "end", "message": "Completed with errors."}
+    }));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "read readiness out of a per-request compilation token"
+    );
+    assert_eq!(client.server_state().health, Health::Unknown);
+    client.shutdown();
+}
+
+#[test]
+fn crystalline_spec_8_2_5_declares_no_guarantees() {
+    let project = support::TempCrystalProject::new("guarantee");
+    let (mut client, result) = crystalline_client(&project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for a server whose version is not observable: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn crystalline_without_a_project_stays_unknown() {
+    let project = support::TempCrystalProject::new("noproject");
+    let (mut client, _) = crystalline_client(&project.root);
+    client.make_upstream_emit_log_message(3, "LSP server is ready.");
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "selected the mapping without the \"Found projects:\" log"
+    );
+    let state = client.server_state();
+    assert_eq!(state.readiness, Readiness::Unknown);
+    assert_eq!(state.health, Health::Unknown);
+    client.shutdown();
+}
+
+// --- real crystalline (local only) --------------------------------
+
+fn real_crystalline(project: &support::TempCrystalProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec!["--".to_string(), "crystalline".to_string()],
+        root: project.root.clone(),
+    }
+}
+
+/// Via the real server: `ready` comes from the startup log, no guarantee is declared, and
+/// `textDocument/definition` (crystalline has no `references`) answers across files.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn crystalline_real_becomes_ready_from_the_startup_log_and_answers_definition() {
+    let project = support::TempCrystalProject::new("real");
+    let fixture_cr = project.file("src/fixture.cr");
+    let b_cr = project.file("src/b.cr");
+    let mut client = ConformanceClient::start(&real_crystalline(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for a server whose version is not observable: {result}"
+    );
+    let state = poll_state_until(&mut client, |s| s.readiness == Readiness::Ready);
+    assert_eq!(state.health, Health::Unknown);
+
+    client.did_open(&fixture_cr, "crystal");
+    let response = client.request(
+        "textDocument/definition",
+        json!({
+            "textDocument": {"uri": support::file_uri(&fixture_cr)},
+            "position": {"line": 3, "character": 5},
+        }),
+    );
+    let locations = response["result"].as_array().cloned().unwrap_or_default();
+    assert!(
+        !locations.is_empty(),
+        "definition returned nothing: {response}"
+    );
+    assert_eq!(
+        locations[0]["uri"],
+        Value::String(support::file_uri(&b_cr)),
+        "definition did not point at b.cr: {response}"
+    );
+    assert_eq!(locations[0]["range"]["start"]["line"], json!(2));
+    client.shutdown();
+}

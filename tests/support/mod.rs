@@ -122,6 +122,14 @@ impl ServerUnderTest {
         )
     }
 
+    /// A fake upstream that returns no `serverInfo`. Like the real crystalline it is known only
+    /// by the startup `window/logMessage` `"[workspace] Found projects:` (the leading double
+    /// quote is part of the message and of the match), which a test emits on demand (M17,
+    /// ADR 0019 decision F).
+    pub fn lsp_det_with_fake_crystalline() -> Self {
+        Self::lsp_det_with_upstream("none", &[])
+    }
+
     /// A fake upstream conformant to this protocol + lsp-det. The upstream side becomes the
     /// identity mapping, and the downstream side reads the upstream's state across the boundary
     /// (design 4.1).
@@ -1663,3 +1671,42 @@ impl Drop for TempGitWorkspace {
         let _ = std::fs::remove_dir_all(&self.root);
     }
 }
+
+/// A temporary Crystal shard (M17, crystalline). `src/b.cr`'s `x` calls `src/a.cr`'s `target`,
+/// and the shard's main, `src/fixture.cr`, requires both and calls `x`.
+pub struct TempCrystalProject {
+    pub root: PathBuf,
+}
+
+impl TempCrystalProject {
+    pub fn new(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-crystal-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("cannot create the temporary project");
+        std::fs::write(root.join("shard.yml"), CR_SHARD_YML).unwrap();
+        std::fs::write(root.join("src/a.cr"), CR_A).unwrap();
+        std::fs::write(root.join("src/b.cr"), CR_B).unwrap();
+        std::fs::write(root.join("src/fixture.cr"), CR_FIXTURE).unwrap();
+        TempCrystalProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempCrystalProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+pub const CR_SHARD_YML: &str = "name: fixture\nversion: 0.1.0\n\ntargets:\n  fixture:\n    main: src/fixture.cr\n\ncrystal: \">= 1.10.0\"\n";
+pub const CR_A: &str = "def target : Int32\n  1\nend\n";
+/// `def x` is on line 2 (0-based).
+pub const CR_B: &str = "require \"./a\"\n\ndef x : Int32\n  target + 1\nend\n";
+/// The call to `x` is on line 3, character 5 (0-based).
+pub const CR_FIXTURE: &str = "require \"./a\"\nrequire \"./b\"\n\nputs x\n";

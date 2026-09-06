@@ -211,9 +211,12 @@ mod tests {
     #[test]
     fn declares_a_guarantee_only_for_the_tested_version() {
         let tested = DartAdapter::for_version(Some("3.13.0"));
+        // freshness for `didChange` only: on-disk changes are noticed by the server's own
+        // watcher asynchronously, with no signal before its `ANALYZING` begin (see the
+        // module documentation).
         assert_eq!(
             tested.guarantees(),
-            ServerStateProvider::workspace(&[], &ALL_FILE_CHANGES)
+            ServerStateProvider::workspace(&[], &[])
         );
         let untested = DartAdapter::for_version(Some("3.12.0"));
         assert_eq!(

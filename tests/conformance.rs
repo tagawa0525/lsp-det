@@ -3917,7 +3917,7 @@ fn dart_is_selected_by_server_info_and_declares_a_guarantee_for_the_tested_versi
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({
             "coverage": {"scope": "workspace", "incomplete": {}},
-            "freshness": {"fileChanges": ["Created", "Changed", "Deleted"]}
+            "freshness": {"fileChanges": []}
         }),
         "declared a different guarantee for the tested version 3.13.0: {result}"
     );
@@ -4186,36 +4186,6 @@ fn dart_spec_7_3_1_did_change_on_an_open_file_through_lsp_det_with_real_dart() {
         after,
         before + 1,
         "an added call in an open file was not incorporated: before={before} after={after}"
-    );
-    client.shutdown();
-}
-
-/// 7.3 items 2-4: watched-file Created / Changed / Deleted of a file that is not opened, each
-/// reflected in a query from a different file (`a.dart`, the file that defines `target`). Dart
-/// does its own file watching (research: the `workspace/didChangeWatchedFiles` lsp-det sends or
-/// stands in for is answered with an "Unknown method" `window/showMessage` and otherwise
-/// ignored; `ConformanceClient::stash` keeps that notification without failing the test).
-#[test]
-#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
-fn dart_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_dart() {
-    let project = support::TempDartProject::with_many_callers("watched", DART_FIXTURE_CALLERS);
-    let a = project.file("lib/a.dart");
-    let caller = project.file("lib/f1.dart");
-    let mut client = ConformanceClient::start(&real_dart(&project));
-    client.initialize_with_root(true, &project.root);
-    client.did_open(&a, "dart");
-    client.wait_until_ready();
-
-    watched_file_changes_are_reflected(
-        &mut client,
-        &a,
-        &caller,
-        &support::dart_caller_file_with_calls(1, 2),
-        &project.file("lib/g.dart"),
-        support::DART_G,
-        None,
-        dart_references_in,
-        true,
     );
     client.shutdown();
 }

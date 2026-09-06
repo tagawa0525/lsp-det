@@ -154,7 +154,9 @@ enum ClientKind {
     Notification(Option<ServerState>),
     /// `textDocument/didOpen`. If the uri is already open, carries the message rewritten into
     /// a full-text `didChange` (ADR 0015 decision B).
-    DidOpen(Option<RawMessage>),
+    /// `textDocument/didOpen`: the message rewritten into a `didChange` when the document is
+    /// already open (ADR 0015), and the change the mapping predicted from it, if any.
+    DidOpen(Option<RawMessage>, Option<ServerState>),
     Other,
 }
 
@@ -305,11 +307,21 @@ impl UpstreamSide {
             }
             Ok(view) if view.is_notification() => match view.method() {
                 Some("textDocument/didOpen") => {
-                    ClientKind::DidOpen(self.documents.on_did_open(&msg.body))
+                    let rewritten = self.documents.on_did_open(&msg.body);
+                    let predicted = if self.identity {
+                        None
+                    } else {
+                        self.tracker.observe_client(&view, &msg.body)
+                    };
+                    ClientKind::DidOpen(rewritten, predicted)
                 }
                 Some("textDocument/didClose") => {
                     self.documents.on_did_close(&msg.body);
-                    ClientKind::Other
+                    if self.identity {
+                        ClientKind::Other
+                    } else {
+                        ClientKind::Notification(self.tracker.observe_client(&view, &msg.body))
+                    }
                 }
                 Some("workspace/didChangeWatchedFiles") => {
                     // The client sends it itself. No longer stand in from now on
@@ -416,7 +428,16 @@ impl UpstreamSide {
                 }
                 outs
             }
-            ClientKind::DidOpen(rewritten) => vec![Out::ToUpstream(rewritten.unwrap_or(msg))],
+            ClientKind::DidOpen(rewritten, predicted) => {
+                let mut outs = vec![Out::ToUpstream(rewritten.unwrap_or(msg))];
+                if let Some(state) = predicted {
+                    outs.extend(releases(gate, &state));
+                    if let Some(notification) = self.notify(&state) {
+                        outs.push(Out::ToClient(notification));
+                    }
+                }
+                outs
+            }
             ClientKind::Other => vec![Out::ToUpstream(msg)],
         }
     }
@@ -487,10 +508,12 @@ impl UpstreamSide {
     /// or switch to the identity mapping.
     fn on_initialize_result(&mut self, msg: RawMessage) -> Vec<Out> {
         use initialize::InitializeResultAction::*;
-        // Select the mapping by the name the upstream calls itself. Ask that mapping for the
-        // guarantees to declare.
-        self.tracker
-            .select_mapping(initialize::server_info(&msg.body).as_ref());
+        // Select the mapping by the name the upstream calls itself, or, without a
+        // `serverInfo`, by what the result declares. Ask that mapping for the guarantees to
+        // declare.
+        let identity = initialize::server_info(&msg.body)
+            .or_else(|| adapter::identity_from_initialize_result(&msg.body));
+        self.tracker.select_mapping(identity.as_ref());
         let provider = self.tracker.provider();
         match initialize::declare_server_state_provider(&msg.body, &provider) {
             NotASuccess => {

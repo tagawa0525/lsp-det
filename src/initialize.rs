@@ -86,6 +86,24 @@ pub fn workspace_roots(body: &[u8]) -> Vec<std::path::PathBuf> {
     roots
 }
 
+/// Only the `workspaceFolders` of the client's `initialize` (no `rootUri` fallback). A server
+/// that scans per folder (Nextflow's) does not scan a lone `rootUri`.
+pub fn workspace_folders(body: &[u8]) -> Vec<std::path::PathBuf> {
+    let Ok(root) = serde_json::from_slice::<Value>(body) else {
+        return Vec::new();
+    };
+    root["params"]["workspaceFolders"]
+        .as_array()
+        .map(|folders| {
+            folders
+                .iter()
+                .filter_map(|folder| folder["uri"].as_str())
+                .filter_map(crate::uri::uri_to_path)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The name and version the upstream called itself in `InitializeResult.serverInfo`
 /// (LSP 3.15).
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -2835,6 +2835,13 @@ fn nextflow_diagnostics(client: &mut ConformanceClient, path: &std::path::Path) 
     );
 }
 
+/// A barrier: a round trip through the fake upstream. Everything the fake was told to emit
+/// before it has been read by lsp-det by the time the answer comes back, so a client
+/// notification sent after this is observed after those emissions.
+fn nextflow_sync(client: &mut ConformanceClient) {
+    let _ = client.upstream_methods_seen();
+}
+
 /// Configures, runs the "Initializing" token, and diagnoses both scripts: the fake's way to
 /// ready.
 fn nextflow_reach_ready(client: &mut ConformanceClient, project: &support::TempNextflowProject) {
@@ -2915,6 +2922,7 @@ fn nextflow_does_not_predict_from_watched_files_and_has_no_health_signal() {
     nextflow_initializing(&mut client, "begin");
     nextflow_initializing(&mut client, "end");
     nextflow_diagnostics(&mut client, &main);
+    nextflow_sync(&mut client);
     // A script deleted after the walk is never diagnosed by the scan: it leaves the set.
     client.did_change_watched_files(&[(&greet, 3)]);
     assert_eq!(client.await_state_changed().readiness, Readiness::Ready);

@@ -26,6 +26,8 @@ pub struct Tracker {
     /// the upstream calls itself a name, so hold it until then and hand it to the selected
     /// mapping.
     initialization_options: Option<serde_json::Value>,
+    /// The `workspaceFolders` of the client's `initialize`, held for the same reason.
+    workspace_folders: Vec<std::path::PathBuf>,
 }
 
 impl Default for Tracker {
@@ -43,11 +45,17 @@ impl Tracker {
             identity: None,
             named_but_unknown: false,
             initialization_options: None,
+            workspace_folders: Vec::new(),
         }
     }
 
-    /// Remember the client's `initialize` (hand `initializationOptions` to the mapping).
+    /// Remember the client's `initialize` (hand `initializationOptions` and `workspaceFolders`
+    /// to the mapping).
     pub fn remember_initialize(&mut self, body: &[u8]) {
+        self.workspace_folders = crate::initialize::workspace_folders(body);
+        if let Some(adapter) = self.adapter.as_mut() {
+            adapter.learn_workspace_folders(&self.workspace_folders);
+        }
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
             return;
         };
@@ -117,6 +125,7 @@ impl Tracker {
         if let Some(options) = &self.initialization_options {
             adapter.learn_initialization_options(options);
         }
+        adapter.learn_workspace_folders(&self.workspace_folders);
         self.state = adapter.initial_state();
         self.adapter = Some(adapter);
         self.identity = Some(identity);

@@ -7,7 +7,9 @@
 //! mapping, reporting `unknown` on both axes (spec 8.2 item 3).
 //!
 //! A mapping is chosen by the name the upstream calls itself in
-//! `InitializeResult.serverInfo.name` ([`select`]). The mapping is also
+//! `InitializeResult.serverInfo.name` ([`select`]), or, for a server that returns no
+//! `serverInfo`, by its startup notification ([`identity_from_notification`]) or by what its
+//! `InitializeResult` declares ([`identity_from_initialize_result`]). The mapping is also
 //! responsible for compensating for the coarseness of a language server's
 //! vocabulary, so the downstream side only ever sees spec values (ADR 0009
 //! decision D-6).
@@ -15,6 +17,7 @@
 pub mod expert;
 pub mod gopls;
 pub mod metals;
+pub mod nextflow;
 pub mod pyright;
 pub mod rust_analyzer;
 pub mod typescript_language_server;
@@ -60,6 +63,11 @@ pub trait Mapping {
     fn learn_initialization_options(&mut self, options: &serde_json::Value) {
         let _ = options;
     }
+    /// The `workspaceFolders` of the client's `initialize`. Read by a mapping (Nextflow) that
+    /// reconstructs the set of files the server scans. Does nothing by default.
+    fn learn_workspace_folders(&mut self, folders: &[std::path::PathBuf]) {
+        let _ = folders;
+    }
     /// Observes a client-to-upstream message. Predicting the start of reindexing from a
     /// notification is allowed only for a mapping that has measured that a completion signal is
     /// always sent (ADR 0014 addendum decision D). Reads nothing by default.
@@ -99,12 +107,31 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         "metals" => Some(Box::new(metals::MetalsAdapter::for_version(version))),
         // The version is not looked at: Expert declares no guarantee for any version.
         "expert" => Some(Box::new(expert::ExpertAdapter::new())),
+        // The version is not observable: Nextflow's language server declares no guarantee.
+        nextflow::SERVER_NAME => Some(Box::new(nextflow::NextflowAdapter::new())),
         "pyright" | "basedpyright" => Some(Box::new(PyrightAdapter::for_identity(&key, version))),
         typescript_language_server::SERVER_NAME => Some(Box::new(
             TypescriptLanguageServerAdapter::for_version(version),
         )),
         _ => None,
     }
+}
+
+/// The identity of an upstream that returns no `serverInfo` and announces nothing at startup,
+/// read from what its `InitializeResult` declares. Nextflow's language server is known only
+/// by its `executeCommandProvider.commands` (`nextflow.server.*`); its version is not
+/// observable. `None` when `serverInfo` is present (that is the identity) or nothing is
+/// recognized.
+pub fn identity_from_initialize_result(body: &[u8]) -> Option<ServerInfo> {
+    let root = serde_json::from_slice::<serde_json::Value>(body).ok()?;
+    let result = root.get("result")?;
+    if result.get("serverInfo").is_some_and(|info| !info.is_null()) {
+        return None;
+    }
+    nextflow::is_nextflow_initialize_result(result).then(|| ServerInfo {
+        name: nextflow::SERVER_NAME.to_string(),
+        version: None,
+    })
 }
 
 /// The identity announcement of an upstream that does not return `serverInfo` (ADR 0011

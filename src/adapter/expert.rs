@@ -1,4 +1,4 @@
-//! The Expert (Elixir) mapping (M10, ADR 0019 decision F.
+//! The Expert (Elixir) mapping (M10, ADR 0019 decision F).
 //! research/expert-readiness-measurement.md).
 //!
 //! Expert has no readiness vocabulary of its own. It is synthesized from the `$/progress`

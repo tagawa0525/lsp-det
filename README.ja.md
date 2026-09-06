@@ -101,13 +101,15 @@ Claude Code のプラグイン（`.lsp.json`）:
 
 4 サーバーぶんの実物は [dogfood/claude-plugin/.lsp.json](dogfood/claude-plugin/.lsp.json)、手順は [dogfood/README.md](dogfood/README.md)。Serena は `.serena/project.yml` の `ls_specific_settings.<言語>.ls_base_cmd` に同じコマンドを書く（[dogfood/serena/README.md](dogfood/serena/README.md)）。
 
-lsp-det は stderr に写像の選択と状態遷移を出す。
+lsp-det は stderr に写像の選択、状態遷移、保留の開始と終わり（待った時間と、列を離れた理由）を出す。保留に時間の上限はないので、保留されたままのリクエストが、写像がサーバーの信号を取り逃したことの現れになる。
 
 ```text
 lsp-det: upstream is "rust-analyzer" version "2026-08-03"; using its mapping, declaring {"coverage":{"scope":"workspace","incomplete":{"workspace/symbol":128}},"freshness":{"fileChanges":["Created","Changed","Deleted"]}}
 lsp-det: [0.041s] server state -> {"health":"unknown","readiness":"initializing"} (previous held 0.041s)
 lsp-det: [0.213s] server state -> {"health":"ok","readiness":"indexing"} (previous held 0.172s)
+lsp-det: [0.219s] holding textDocument/references (id 1) while {"health":"ok","readiness":"indexing"}; 1 held
 lsp-det: [6.712s] server state -> {"health":"ok","readiness":"ready"} (previous held 6.499s)
+lsp-det: [6.712s] released textDocument/references (id 1) after 6.493s: ready
 ```
 
 下流側は、クライアントがしないことを 2 つ代行する（ADR 0015）。クライアントが `workspace.didChangeWatchedFiles` を宣言も送信もしないとき、横断リクエストのたびに `git ls-files`（追跡中と、無視されていない未追跡のファイル）でワークスペースを列挙し、前回から増えた・変わった・消えたファイルを言語サーバーに知らせる。自前でディスクを監視しない言語サーバー（gopls、pyright）でも、シェルでの編集が応答に反映される。これには PATH 上の `git` と、git 管理下のワークスペースが要る（管理外では何も送らない）。もう 1 つは、既に開いている文書への `didOpen` を全文の `didChange` に書き換えること。LSP が求める形で、typescript-language-server はこれでないと受け付けない。どちらもクライアントが自分で行うようになれば消える。

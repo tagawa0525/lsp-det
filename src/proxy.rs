@@ -308,8 +308,14 @@ impl UpstreamSide {
             Ok(view) if view.is_notification() => match view.method() {
                 Some("textDocument/didOpen") => {
                     let rewritten = self.documents.on_did_open(&msg.body);
+                    // The mapping observes the notification that is actually forwarded: the
+                    // `didChange` it was rewritten into, when it was.
                     let predicted = if self.identity {
                         None
+                    } else if let Some(changed) = &rewritten {
+                        peek::peek(&changed.body).ok().and_then(|changed_view| {
+                            self.tracker.observe_client(&changed_view, &changed.body)
+                        })
                     } else {
                         self.tracker.observe_client(&view, &msg.body)
                     };

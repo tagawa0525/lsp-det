@@ -3107,6 +3107,11 @@ fn nextflow_spec_7_3_cross_file_freshness_through_lsp_det_with_real_nextflow() {
         "the premise is broken: the call in main.nf should be visible: {before:#?}"
     );
     client.did_change(&main, 2, support::NF_MAIN_WITHOUT_CALL);
+    // The mapping predicts `indexing` until the diagnostics of main.nf. This client declares
+    // `experimental.serverState`, so nothing is held on its behalf: it waits itself (spec
+    // chapter 9), as it did before the first query.
+    assert_eq!(client.server_state().readiness, Readiness::Indexing);
+    client.wait_until_ready();
     let after = nextflow_references_in(&mut client, &greet, &main);
     assert!(
         after

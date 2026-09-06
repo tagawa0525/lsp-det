@@ -72,6 +72,19 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("Expert", &[])
     }
 
+    /// A fake upstream that returns no `serverInfo` and calls itself haskell-language-server only
+    /// through its pid-prefixed `executeCommandProvider.commands` (as the real one does) +
+    /// lsp-det. lsp-det selects the HLS mapping (M15).
+    pub fn lsp_det_with_fake_haskell_language_server() -> Self {
+        Self::lsp_det_with_upstream(
+            "none",
+            &[
+                "--execute-commands",
+                "4242:ghcide-type-lenses:typesignature.add,4242:eval:evalCommand",
+            ],
+        )
+    }
+
     /// A fake upstream that returns no `serverInfo` and calls itself Nextflow's language server
     /// only through `executeCommandProvider.commands` (as the real one does) + lsp-det. lsp-det
     /// selects the Nextflow mapping (M12).
@@ -1272,6 +1285,45 @@ impl Drop for TempNextflowProject {
     }
 }
 
+/// A temporary cabal library with a `cradle: cabal:` hie.yaml. `B.x` in `src/B.hs` uses
+/// `A.target` (M15, haskell-language-server).
+pub struct TempCabalProject {
+    pub root: PathBuf,
+}
+
+impl TempCabalProject {
+    pub fn with_cross_file_reference(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-cabal-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("cannot create the temporary project");
+        std::fs::write(root.join("fixture.cabal"), HS_CABAL).unwrap();
+        std::fs::write(root.join("hie.yaml"), HS_HIE_YAML).unwrap();
+        std::fs::write(root.join("src/A.hs"), HS_A).unwrap();
+        std::fs::write(root.join("src/B.hs"), HS_B).unwrap();
+        TempCabalProject { root }
+    }
+
+    /// The cradle names a component that does not exist: HLS cannot load the project.
+    pub fn with_broken_cradle(tag: &str) -> Self {
+        let project = Self::with_cross_file_reference(tag);
+        std::fs::write(project.root.join("hie.yaml"), HS_HIE_YAML_BROKEN).unwrap();
+        project
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempCabalProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// Sends SIGKILL (TerminateProcess on Windows) to the descendants of `pid` whose command line
 /// contains `needle`. Used to bring down the tsserver (a grandchild process) of a real
 /// typescript-language-server. Returns the pids that were killed.
@@ -1478,6 +1530,13 @@ pub const MIX_EXS: &str = "defmodule Fixture.MixProject do\n  use Mix.Project\n\
 pub const EX_A: &str = "defmodule A do\n  def target, do: 1\nend\n";
 /// The call is on line 2 (0-based: line 1).
 pub const EX_B_WITH_CALL: &str = "defmodule B do\n  def x, do: A.target()\nend\n";
+pub const HS_CABAL: &str = "cabal-version:      2.4\nname:               fixture\nversion:            0.1.0.0\nbuild-type:         Simple\n\nlibrary\n    exposed-modules:  A, B\n    build-depends:    base\n    hs-source-dirs:   src\n    default-language: Haskell2010\n";
+pub const HS_HIE_YAML: &str = "cradle:\n  cabal:\n";
+pub const HS_HIE_YAML_BROKEN: &str = "cradle:\n  cabal:\n    component: \"lib:doesnotexist\"\n";
+/// `target` is declared on line 3 (character 0).
+pub const HS_A: &str = "module A (target) where\n\ntarget :: Int\ntarget = 1\n";
+pub const HS_B: &str = "module B (x) where\n\nimport A (target)\n\nx :: Int\nx = target + 1\n";
+pub const HS_TARGET_DECLARATION: (u32, u32) = (3, 0);
 pub const NF_CONFIG: &str = "nextflow.enable.dsl = 2\n";
 /// The position of `GREET` in its declaration in `modules/greet.nf` (line, character).
 pub const NF_GREET_DECLARATION: (u32, u32) = (0, 8);

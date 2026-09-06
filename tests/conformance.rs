@@ -3133,3 +3133,148 @@ fn nextflow_spec_7_3_cross_file_freshness_through_lsp_det_with_real_nextflow() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// haskell-language-server (M15, ADR 0019 decision F). The mapping in
+// research/haskell-language-server-readiness-measurement.md: the server returns no `serverInfo`
+// and is known by its pid-prefixed `executeCommandProvider.commands` (`<pid>:ghcide-…`); its
+// `$/progress` tokens are suppressed by a 1-second delay in the lsp library and cover only
+// slices of the indexing, and `references` answers partial results that grow while the index
+// is written, so readiness is `unknown` (spec 8.2 item 3); a cradle failure shows up as a
+// diagnostic with `source: "cradle"`, which is the health signal; no guarantee.
+// ---------------------------------------------------------------------------
+
+fn hls_client(root: &std::path::Path) -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_haskell_language_server();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize_with_root(true, root);
+    (client, result)
+}
+
+fn hls_diagnostics(client: &mut ConformanceClient, path: &std::path::Path, diagnostics: Value) {
+    client.make_upstream_emit_notification(
+        "textDocument/publishDiagnostics",
+        json!({"uri": support::file_uri(path), "diagnostics": diagnostics}),
+    );
+}
+
+#[test]
+fn hls_is_selected_by_its_pid_prefixed_commands_and_readiness_stays_unknown() {
+    let project = support::TempCabalProject::with_cross_file_reference("select");
+    let (mut client, result) = hls_client(&project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for a server whose readiness cannot be observed: {result}"
+    );
+    // Spec 8.4 item 1: unknown on both axes right after initialize.
+    let state = client.server_state();
+    assert_eq!(state.readiness, Readiness::Unknown);
+    assert_eq!(state.health, Health::Unknown);
+    // The time-gated tokens say nothing about the index: they move nothing.
+    client.make_upstream_emit_progress(
+        json!({"token": 1, "value": {"kind": "begin", "title": "Indexing", "percentage": 0}}),
+    );
+    client.make_upstream_emit_progress(
+        json!({"token": 2, "value": {"kind": "begin", "title": "Processing", "message": "1/2"}}),
+    );
+    client.make_upstream_emit_progress(json!({"token": 1, "value": {"kind": "end"}}));
+    client.make_upstream_emit_progress(json!({"token": 2, "value": {"kind": "end"}}));
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "read readiness out of tokens the server suppresses by time"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Unknown);
+    client.shutdown();
+}
+
+#[test]
+fn hls_maps_a_cradle_failure_diagnostic_to_error_health() {
+    let project = support::TempCabalProject::with_cross_file_reference("cradle");
+    let a = project.file("src/A.hs");
+    let (mut client, _) = hls_client(&project.root);
+    let range = json!({"start": {"line": 0, "character": 0}, "end": {"line": 1, "character": 0}});
+    hls_diagnostics(
+        &mut client,
+        &a,
+        json!([{"source": "cradle", "severity": 1, "range": range,
+                "message": "Failed to run cabal v2-repl 'lib:doesnotexist' in directory /p\nConsult the logs"}]),
+    );
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Error);
+    assert_eq!(
+        state.message.as_deref(),
+        Some("Failed to run cabal v2-repl 'lib:doesnotexist' in directory /p")
+    );
+    assert_eq!(state.readiness, Readiness::Unknown);
+    // An ordinary type error is not a cradle failure, and diagnostics without the cradle
+    // error mean the cradle loaded: nothing positive is observable, so back to unknown.
+    hls_diagnostics(
+        &mut client,
+        &a,
+        json!([{"source": "typecheck", "severity": 1, "range": range, "message": "Variable not in scope"}]),
+    );
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Unknown);
+    assert_eq!(state.message, None);
+    client.shutdown();
+}
+
+// --- real haskell-language-server (local only) --------------------------------
+
+fn real_hls(project: &support::TempCabalProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec![
+            "--".to_string(),
+            "haskell-language-server-wrapper".to_string(),
+            "--lsp".to_string(),
+        ],
+        root: project.root.clone(),
+    }
+}
+
+/// Via the real server: nothing is held (readiness is unknown), the declaration is `{}`, and
+/// health stays unknown on a loadable project.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn hls_real_readiness_is_unknown_and_nothing_is_held() {
+    let project = support::TempCabalProject::with_cross_file_reference("unknown");
+    let a = project.file("src/A.hs");
+    let mut client = ConformanceClient::start(&real_hls(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "declared a guarantee for a server whose readiness cannot be observed: {result}"
+    );
+    client.did_open(&a, "haskell");
+    let (line, character) = support::HS_TARGET_DECLARATION;
+    // Answered (possibly incomplete, as the spec's `unknown` allows), not held.
+    let _ = client.references(&a, line, character);
+    let state = client.server_state();
+    assert_eq!(state.readiness, Readiness::Unknown);
+    assert_eq!(state.health, Health::Unknown);
+    client.shutdown();
+}
+
+/// Via the real server with a cradle that cannot load: health becomes `error`.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn hls_real_broken_cradle_is_error_health() {
+    let project = support::TempCabalProject::with_broken_cradle("broken");
+    let a = project.file("src/A.hs");
+    let mut client = ConformanceClient::start(&real_hls(&project));
+    client.initialize_with_root(true, &project.root);
+    client.did_open(&a, "haskell");
+    let state = poll_state_until(&mut client, |s| s.health != Health::Unknown);
+    assert_eq!(state.health, Health::Error, "{state:?}");
+    assert!(
+        state
+            .message
+            .as_deref()
+            .is_some_and(|m| m.starts_with("Failed to run cabal")),
+        "{state:?}"
+    );
+    client.shutdown();
+}

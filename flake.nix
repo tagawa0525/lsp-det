@@ -67,6 +67,9 @@
         erlang # 同上
         expert # M10 の写像
         nextflow-language-server # M12 の写像
+        haskell-language-server # M15 (ADR 0019 決定 F)。readiness の信号は時間で抑制されるので写像は health だけ
+        ghc # haskell-language-server と同じ版でビルドされた GHC（cradle の読み込みに要る）
+        cabal-install # hie-bios の cabal cradle が呼ぶ
       ];
     in
     {

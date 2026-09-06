@@ -16,6 +16,7 @@
 
 pub mod expert;
 pub mod gopls;
+pub mod haskell_language_server;
 pub mod metals;
 pub mod nextflow;
 pub mod pyright;
@@ -109,6 +110,10 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         "expert" => Some(Box::new(expert::ExpertAdapter::new())),
         // The version is not observable: Nextflow's language server declares no guarantee.
         nextflow::SERVER_NAME => Some(Box::new(nextflow::NextflowAdapter::new())),
+        // Readiness is not observable at all, the version neither: no guarantee.
+        haskell_language_server::SERVER_NAME => Some(Box::new(
+            haskell_language_server::HaskellLanguageServerAdapter::new(),
+        )),
         "pyright" | "basedpyright" => Some(Box::new(PyrightAdapter::for_identity(&key, version))),
         typescript_language_server::SERVER_NAME => Some(Box::new(
             TypescriptLanguageServerAdapter::for_version(version),
@@ -119,8 +124,8 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
 
 /// The identity of an upstream that returns no `serverInfo` and announces nothing at startup,
 /// read from what its `InitializeResult` declares. Nextflow's language server is known only
-/// by its `executeCommandProvider.commands` (`nextflow.server.*`); its version is not
-/// observable. `None` when `serverInfo` is present (that is the identity) or nothing is
+/// by its `executeCommandProvider.commands` (`nextflow.server.*`), haskell-language-server by
+/// its pid-prefixed ones (`<pid>:ghcide-…`); neither version is observable. `None` when `serverInfo` is present (that is the identity) or nothing is
 /// recognized.
 pub fn identity_from_initialize_result(body: &[u8]) -> Option<ServerInfo> {
     let root = serde_json::from_slice::<serde_json::Value>(body).ok()?;
@@ -128,8 +133,15 @@ pub fn identity_from_initialize_result(body: &[u8]) -> Option<ServerInfo> {
     if result.get("serverInfo").is_some_and(|info| !info.is_null()) {
         return None;
     }
-    nextflow::is_nextflow_initialize_result(result).then(|| ServerInfo {
-        name: nextflow::SERVER_NAME.to_string(),
+    let name = if nextflow::is_nextflow_initialize_result(result) {
+        nextflow::SERVER_NAME
+    } else if haskell_language_server::is_hls_initialize_result(result) {
+        haskell_language_server::SERVER_NAME
+    } else {
+        return None;
+    };
+    Some(ServerInfo {
+        name: name.to_string(),
         version: None,
     })
 }

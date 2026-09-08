@@ -4,8 +4,20 @@
 
 ## 予定
 
-- 外向きの提出（`docs/upstream-submissions.md` の順。文面を作ってユーザーの確認をもらってから出す）: typescript-language-server の不具合修正 PR、Claude Code への報告（既存 issue 3 件へのコメントと新規 2 件）、Serena の不具合と提案、fork の 4 パッチ、0.4.0 と 0.5.0 で見つけた 10 サーバー分の提案
+- 外向きの提出（`docs/upstream-submissions.md` の順。文面を作ってユーザーの確認をもらってから出す）: typescript-language-server の不具合修正 PR、Claude Code への報告（既存 issue 3 件へのコメントと新規 2 件。`workspace/configuration` の未支持と `shutdown` の `params: {}` を含む）、Serena の不具合と提案、fork の 4 パッチ、0.4.0〜0.6.0 で見つけた 12 サーバー分の提案
 - 保留の再測定: Kotlin（次の release）、sourcekit-lsp（nixpkgs に 6.x が来たら）
+
+## 0.6.0（2026-09-08）
+
+作者の日常の言語（Rust、Python、Nix）のうち写像のなかった Nix を当て、ドッグフーディングを日常の環境に載せる ADR 0021 のバッチ。2 サーバーとも `references` が要求のあった文書に閉じ、仕様の `coverage.scope` に `"document"` を足した。
+
+- **ADR 0021**（2026-09-08）: 順序は nixd → nil → ドッグフーディングの本番化（M25〜M27）、1 つずつ PR。ruff の LSP は横断要求も走査もなく写像しない（A-4）。`references` が単一文書に閉じる 2 サーバーの `coverage.scope` の問い（決定 E）は実測の後にユーザーが (b) と決めた。外向きの提出は 0.6.0 の後
+- **nixd**（M25、PR #73）: "evaluating …" の `$/progress`（token は乱数の整数。既定で 2 本並行）を未完了の集合で数え、空になった end で `ready`。索引に依る `definition` はサーバー自身が評価の完了まで待たせる。health の信号はなし（失敗の end も "evaluated …"、worker の死で nixd 自身が SIGPIPE で落ちる）。上流への提案 3 件
+- **nil**（M26、PR #76）: 固定 token 3 つの `$/progress` を数え、`window/showMessage` の type 1 / 2 を health の `error` / `warning` に。flake.lock の読み込み（約 100 ms）には信号がなく、nil は要求を待たせないので、その窓の `definition` は宣言しないクライアントには lsp-det の保留が埋める。begin が来ない workspace では `initializing` のまま（(a)。(b) との選択は保留）。上流への提案 3 件
+- **仕様の変更**（決定 E、PR #78。ユーザーの決定）: 5 章の `coverage.scope` に `"document"`（要求が名指した文書だけ）。8.1 の 1 と 7.2 の 1 を追従。nixd 2.9.2 と nil 2026-07-23 に `coverage: {scope: "document", incomplete: {}}` を宣言し、`freshness` は宣言しない（7.3 は横断を要する）
+- **ドッグフーディングの本番化**（M27、PR #74、#77、nixfiles PR #180）: rust-analyzer 1.97.1（rust-overlay）を結合テスト 6 件に通して `TESTED_VERSIONS` に。`.lsp.json` に `.nix`（nixd）。flake に `packages.default`（lsp-det 本体）を足し、nixfiles が flake input として取り込んで `~/.claude/skills/lsp-det-dogfood` に置く（skills-as-plugins。`--plugin-dir` は要らない）。第 7 回で Nix・Rust・Python の 3 経路の保留と解放を確認
+- **実測の記録**: `docs/research/` に 2 本（nixd、nil の readiness）とドッグフーディング第 7 回。コーパスに nil と ruff の行
+- 実サーバーの結合テストは 73 件（直列で全部通過）
 
 ## 0.5.0（2026-09-07）
 

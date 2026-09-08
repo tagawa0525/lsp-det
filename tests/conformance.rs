@@ -5566,9 +5566,11 @@ fn nixd_spec_7_1_readiness_and_definition_through_lsp_det_with_real_nixd() {
         1,
         "expected exactly one definition location: {response}"
     );
+    // `Location` carries `uri`; a `LocationLink` (allowed by LSP) carries `targetUri`.
     let uri = locations[0]["uri"]
         .as_str()
-        .unwrap_or_else(|| panic!("a location has a uri: {response}"));
+        .or_else(|| locations[0]["targetUri"].as_str())
+        .unwrap_or_else(|| panic!("a location has a uri or targetUri: {response}"));
     assert!(
         uri.ends_with("/hello/package.nix"),
         "expected nixpkgs's hello/package.nix, got {uri}"

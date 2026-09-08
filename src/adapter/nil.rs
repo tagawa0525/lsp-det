@@ -23,13 +23,20 @@
 //!   decision (a) -- the alternative, `unknown` until the first begin, is not implemented; the
 //!   choice between them is pending the user's decision)
 //! - **no prediction** (`observe_client` is not implemented): the only 7.0 method that depends
-//!   on flake information is `textDocument/definition` on an input, and this mapping's own hold
-//!   (spec chapter 9) already keeps that complete once `ready`; `textDocument/references` is
-//!   limited to the requesting document's own uses (Nix name resolution does not follow
-//!   `import` across files, ADR 0021 decision D), so there is nothing index-dependent left to
-//!   predict from `didChange` / `didChangeWatchedFiles` (nil registers and reads
-//!   `workspace/didChangeWatchedFiles` for flake.nix and flake.lock itself, and re-emits
-//!   begin / end on a change)
+//!   on flake information is `textDocument/definition` on an input, and unlike nixd, nil does
+//!   not hold it -- it answers from a snapshot right away. Right after flake.lock's own
+//!   (signal-less) read, that answer is already complete regardless of whether the NixOS
+//!   options load is still running (that load affects completion and hover, not this request;
+//!   research doc, "起動と索引に依る要求" section), so once a begin has been observed the answer
+//!   can be trusted; a request sent in the brief window before the first begin (before
+//!   flake.lock is read) answers empty instead -- a real gap this mapping does not predict its
+//!   way around. It is covered by the observer's own hold (spec chapter 9), driven by this
+//!   mapping's readiness staying `initializing` until that first begin, for a client that has
+//!   not declared the protocol itself. `textDocument/references` is limited to the requesting
+//!   document's own uses (Nix name resolution does not follow `import` across files, ADR 0021
+//!   decision D), so there is nothing else index-dependent to predict from `didChange` /
+//!   `workspace/didChangeWatchedFiles` (nil registers and reads the latter for flake.nix and
+//!   flake.lock itself, and re-emits begin / end on a change)
 //! - **health**: `window/showMessage` type 1 -> `error`, type 2 -> `warning` (only the type is
 //!   read; the message text is not parsed). The begin of any of the three tokens -> `ok`
 //!   (flake.lock was read and the input exists, or fetching one that was missing has started).

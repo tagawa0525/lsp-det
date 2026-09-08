@@ -5730,3 +5730,149 @@ fn nil_show_message_error_moves_health_and_is_forwarded_unchanged() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Real nil integration (local only. Not part of CI -- v0.1-design.md chapter 6). Requires nil
+// and a `nix` binary on PATH (`nix develop .#servers`; nixpkgs `nil`).
+// ---------------------------------------------------------------------------
+
+fn real_nil(project: &support::TempNilProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec!["--".to_string(), "nil".to_string()],
+        root: project.root.clone(),
+    }
+}
+
+fn assert_nix_is_on_path() {
+    let status = std::process::Command::new("nix")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    assert!(
+        matches!(status, Ok(status) if status.success()),
+        "the real nil tests need a `nix` binary on PATH (nix develop .#servers provides one)"
+    );
+}
+
+/// Identity and the guarantee declared (none, for any version -- ADR 0021 decision E is
+/// pending).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nil_is_selected_by_its_real_server_info_and_declares_no_guarantee() {
+    assert_nix_is_on_path();
+    let project = support::TempNilProject::new("select");
+    let mut client = ConformanceClient::start(&real_nil(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "a guarantee is declared for real nil, which ADR 0021 decision E has not settled: {result}"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+/// 7.1: the readiness sequence `initializing` -> `indexing` -> `ready` (research doc, run 1: the
+/// NixOS options load begins once flake.lock's own signal-less read finishes and ends within
+/// about a second). Unlike nixd, nil does not hold `textDocument/definition` on the `nixpkgs`
+/// input while loading -- it answers from a snapshot right away, complete as soon as flake.lock
+/// itself has been read (the module doc's "no prediction" bullet: the request is sent once the
+/// load's begin has been observed, which is exactly the signal that read finished), resolving
+/// into nixpkgs's own `flake.nix` outside the workspace. Then 7.1 item 3: rewriting flake.lock
+/// and sending `workspace/didChangeWatchedFiles` Changed for it reloads through `indexing` ->
+/// `ready` again.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nil_spec_7_1_readiness_definition_and_reload_through_lsp_det_with_real_nil() {
+    assert_nix_is_on_path();
+    let project = support::TempNilProject::new("readiness");
+    let flake_nix = project.file("flake.nix");
+    let mut client = ConformanceClient::start(&real_nil(&project));
+    client.initialize_with_root(true, &project.root);
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+
+    client.did_open(&flake_nix, "nix");
+
+    let indexing = client.await_state_changed();
+    assert_eq!(
+        indexing.readiness,
+        Readiness::Indexing,
+        "did not observe a load begin: {indexing:?}"
+    );
+
+    // flake.lock has just been read (the begin above is exactly that signal), so this answers
+    // complete even though the NixOS options load it is part of is still running.
+    let (line, character) = support::NIL_NIXPKGS_INPUT_DECLARATION;
+    let id = client.send_definition(&flake_nix, line, character);
+    client.wait_until_ready();
+
+    let response = client.await_response_to(id);
+    let locations = match &response["result"] {
+        Value::Array(items) => items.clone(),
+        Value::Null => Vec::new(),
+        single => vec![single.clone()],
+    };
+    assert_eq!(
+        locations.len(),
+        1,
+        "expected exactly one definition location: {response}"
+    );
+    let uri = locations[0]["uri"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a location has a uri: {response}"));
+    assert!(
+        uri.ends_with("/flake.nix"),
+        "expected nixpkgs's own flake.nix, got {uri}"
+    );
+    assert!(
+        uri.starts_with("file:///nix/store/"),
+        "expected a nix store path, got {uri}"
+    );
+    let root_uri = support::file_uri(&project.root);
+    assert!(
+        !uri.starts_with(&root_uri),
+        "expected a path outside the workspace, got {uri}"
+    );
+
+    // 7.1 item 3: a reload after `workspace/didChangeWatchedFiles` Changed for flake.lock.
+    project.rewrite_flake_lock();
+    client.did_change_watched_files(&[(&project.file("flake.lock"), 2)]);
+    let reloading = client.await_state_changed();
+    assert_eq!(
+        reloading.readiness,
+        Readiness::Indexing,
+        "did not observe a reload begin: {reloading:?}"
+    );
+    client.wait_until_ready();
+
+    client.shutdown();
+}
+
+/// 7.1 item 4: a `nixpkgs` input whose store path does not exist (a corrupted `narHash`) never
+/// sends a `$/progress` begin (research doc's "失敗の見え方" section, run 4), only
+/// `window/showMessage` type 2, which this mapping reads as health `warning`. Readiness stays
+/// `initializing`.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nil_spec_7_1_item_4_health_warning_with_missing_input_through_lsp_det_with_real_nil() {
+    assert_nix_is_on_path();
+    let project = support::TempNilProject::with_missing_input("missing-input");
+    let mut client = ConformanceClient::start(&real_nil(&project));
+    client.initialize_with_root(true, &project.root);
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+
+    let state = client.await_state_changed();
+    assert_eq!(
+        state.health,
+        Health::Warning,
+        "expected a window/showMessage type 2 for the missing store path: {state:?}"
+    );
+    assert_eq!(
+        state.readiness,
+        Readiness::Initializing,
+        "no $/progress begin for a missing store path (research doc)"
+    );
+    client.shutdown();
+}

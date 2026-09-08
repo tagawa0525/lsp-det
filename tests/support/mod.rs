@@ -1807,6 +1807,100 @@ impl Drop for TempNixdProject {
     }
 }
 
+/// `nixpkgs` on line 2 ("  outputs = { self, nixpkgs }:"), inside the "nixpkgs" identifier
+/// bound as the second parameter (M26, the method section of
+/// research/nil-readiness-measurement.md).
+pub const NIL_NIXPKGS_INPUT_DECLARATION: (u32, u32) = (2, 21);
+
+fn nil_flake_nix(nixpkgs_rev: &str) -> String {
+    format!(
+        "{{\n  inputs.nixpkgs.url = \"github:NixOS/nixpkgs/{nixpkgs_rev}\";\n  outputs = {{ self, nixpkgs }}:\n    let\n      pkgs = nixpkgs.legacyPackages.x86_64-linux;\n    in\n    {{\n      packages.x86_64-linux.default = pkgs.hello;\n    }};\n}}\n"
+    )
+}
+
+fn nil_flake_lock(nixpkgs_node: &Value) -> String {
+    serde_json::to_string_pretty(&json!({
+        "nodes": {
+            "nixpkgs": nixpkgs_node,
+            "root": {"inputs": {"nixpkgs": "nixpkgs"}},
+        },
+        "root": "root",
+        "version": 7,
+    }))
+    .unwrap()
+}
+
+/// A temporary Nix flake project for nil: `flake.nix` (a single `nixpkgs` input, `pkgs.hello` as
+/// an output) and `flake.lock` built from lsp-det's own `flake.lock` (M26, the method section of
+/// research/nil-readiness-measurement.md). The `nixpkgs` node is copied verbatim from lsp-det's
+/// own lock file, so the store path it locks to already exists in the development environment
+/// nil evaluates in (`nix develop .#servers`), and `flake.nix` pins the same rev so the input
+/// and the lock file agree.
+pub struct TempNilProject {
+    pub root: PathBuf,
+}
+
+impl TempNilProject {
+    pub fn new(tag: &str) -> Self {
+        Self::build(tag, |node| node.clone())
+    }
+
+    /// Like [`TempNilProject::new`], but with the `nixpkgs` input's `narHash` corrupted so the
+    /// store path it locks to does not exist (M26, research doc's "失敗の見え方" section, run 4):
+    /// nil cannot resolve the input and reports `window/showMessage` type 2, never a `$/progress`
+    /// begin.
+    pub fn with_missing_input(tag: &str) -> Self {
+        Self::build(tag, |node| {
+            let mut node = node.clone();
+            node["locked"]["narHash"] =
+                json!("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+            node
+        })
+    }
+
+    fn build(tag: &str, transform_nixpkgs_node: impl FnOnce(&Value) -> Value) -> Self {
+        let manifest_lock_path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("flake.lock");
+        let manifest_lock = std::fs::read_to_string(&manifest_lock_path)
+            .expect("lsp-det's own flake.lock is readable");
+        let manifest_lock: Value =
+            serde_json::from_str(&manifest_lock).expect("lsp-det's own flake.lock is valid JSON");
+        let nixpkgs_node = &manifest_lock["nodes"]["nixpkgs"];
+        let nixpkgs_rev = nixpkgs_node["locked"]["rev"]
+            .as_str()
+            .expect("lsp-det's own flake.lock pins a nixpkgs rev")
+            .to_string();
+        let nixpkgs_node = transform_nixpkgs_node(nixpkgs_node);
+
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-nil-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("cannot create the temporary project");
+        std::fs::write(root.join("flake.nix"), nil_flake_nix(&nixpkgs_rev)).unwrap();
+        std::fs::write(root.join("flake.lock"), nil_flake_lock(&nixpkgs_node)).unwrap();
+        TempNilProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+
+    /// Rewrites `flake.lock` with the content it already has (spec 7.1 item 3: a
+    /// `workspace/didChangeWatchedFiles` Changed reloads even when the content did not change).
+    pub fn rewrite_flake_lock(&self) {
+        let content = std::fs::read_to_string(self.file("flake.lock")).unwrap();
+        std::fs::write(self.file("flake.lock"), content).unwrap();
+    }
+}
+
+impl Drop for TempNilProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// A temporary Haxe project for haxe-language-server. `src/B.hx` calls `A.target()`, and
 /// `src/Main.hx` calls `B.x()` (M20).
 pub struct TempHaxeProject {

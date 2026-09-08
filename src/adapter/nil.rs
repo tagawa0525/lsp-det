@@ -3,21 +3,96 @@
 //!
 //! Identified by `serverInfo.name` "nil" exactly; the version is `serverInfo.version`
 //! ("2026-07-23" for the tested build).
+//!
+//! - **readiness**: starts `initializing`. nil reads flake.lock right after `initialized`, but
+//!   that read carries no signal of its own (research doc, "起動と索引に依る要求" section): the
+//!   first observable event is the begin of one of three fixed-string `$/progress` tokens --
+//!   `nil/loadNixosOptionsProgress` (once the `nixpkgs` input's store path is resolved),
+//!   `nil/loadInputFlakeProgress` (opt-in `nix.flake.autoEvalInputs`), and
+//!   `nil/flakeArchiveProgress` (after a `window/showMessageRequest` answer starts fetching a
+//!   missing input) -- each preceded by its own `window/workDoneProgress/create`. A begin adds
+//!   its token to the set of unfinished loads and moves readiness to `indexing`; the matching
+//!   end removes it, and readiness becomes `ready` only once the set is empty. A later begin
+//!   after `ready` -- a reload nil starts on its own after a `workspace/didChangeWatchedFiles`
+//!   Changed for flake.lock, or a `didOpen` / `didChange` of flake.nix -- goes back to
+//!   `indexing`. Other tokens, `report` values, and ends of tokens not in the open set are
+//!   ignored: an end of an unknown token must never make the state `ready` by itself. A
+//!   workspace with no flake, no flake.lock, no `nixpkgs` input, or no store path for it sends
+//!   no begin at all, and this mapping stays `initializing` (choice (a) of the record's
+//!   "写像（設計）と未決の点" section, like clangd without a compilation database, ADR 0020
+//!   decision (a) -- the alternative, `unknown` until the first begin, is not implemented; the
+//!   choice between them is pending the user's decision)
+//! - **no prediction** (`observe_client` is not implemented): the only 7.0 method that depends
+//!   on flake information is `textDocument/definition` on an input, and this mapping's own hold
+//!   (spec chapter 9) already keeps that complete once `ready`; `textDocument/references` is
+//!   limited to the requesting document's own uses (Nix name resolution does not follow
+//!   `import` across files, ADR 0021 decision D), so there is nothing index-dependent left to
+//!   predict from `didChange` / `didChangeWatchedFiles` (nil registers and reads
+//!   `workspace/didChangeWatchedFiles` for flake.nix and flake.lock itself, and re-emits
+//!   begin / end on a change)
+//! - **health**: `window/showMessage` type 1 -> `error`, type 2 -> `warning` (only the type is
+//!   read; the message text is not parsed). The begin of any of the three tokens -> `ok`
+//!   (flake.lock was read and the input exists, or fetching one that was missing has started).
+//!   Types 3 and 4 are ignored
+//!
+//! `guarantees()` is `notifications_only()` for every version, for the same reason as nixd
+//! (ADR 0021 decision D): `references` is limited to the requesting document, a scope spec
+//! chapter 5's `coverage.scope` has no name for yet. ADR 0021 decision E leaves the question of
+//! naming that scope to the maintainer; until it is answered no guarantee is declared for any
+//! version, so there is no `TESTED_VERSIONS` here (research doc's "写像" section).
+
+use serde::Deserialize;
 
 use super::Mapping;
 use crate::peek::MessageView;
-use crate::state::{ServerState, ServerStateProvider};
+use crate::state::{Health, Readiness, ServerState, ServerStateProvider};
 
 /// The name nil calls itself in `InitializeResult.serverInfo.name`, already lowercased for the
 /// case-insensitive comparison [`super::select`] does.
 pub const SERVER_NAME: &str = "nil";
 
+const PROGRESS_METHOD: &str = "$/progress";
+const SHOW_MESSAGE_METHOD: &str = "window/showMessage";
+
+/// LSP `MessageType.Error`.
+const SHOW_MESSAGE_ERROR: u8 = 1;
+/// LSP `MessageType.Warning`.
+const SHOW_MESSAGE_WARNING: u8 = 2;
+
+/// The three fixed `$/progress` tokens nil sends for the phases that read flake information:
+/// NixOS options evaluation, input flake evaluation (opt-in `nix.flake.autoEvalInputs`), and
+/// fetching a flake archive (after a `window/showMessageRequest` answer). flake.lock's own read
+/// has no signal (research doc, "起動と索引に依る要求" section): the first observable event is
+/// one of these three begins.
+const KNOWN_TOKENS: &[&str] = &[
+    "nil/loadNixosOptionsProgress",
+    "nil/loadInputFlakeProgress",
+    "nil/flakeArchiveProgress",
+];
+
+#[derive(Deserialize)]
+struct ProgressParams {
+    token: String,
+    value: ProgressValue,
+}
+
+#[derive(Deserialize)]
+struct ProgressValue {
+    kind: String,
+}
+
+#[derive(Deserialize)]
+struct ShowMessageParams {
+    #[serde(rename = "type")]
+    kind: u8,
+    message: String,
+}
+
 pub struct NilAdapter {
-    // RED (M26): held only for the tests below to read directly; GREEN's `on_progress` /
-    // `on_show_message` (the fixed-token `$/progress` and `window/showMessage` rules) read and
-    // update it too, which will make this field's ordinary (non-test) use non-dead.
-    #[allow(dead_code)]
     state: ServerState,
+    /// Tokens among [`KNOWN_TOKENS`] that began and have not yet ended. `ready` only once this
+    /// is empty.
+    open: Vec<String>,
 }
 
 impl Default for NilAdapter {
@@ -30,7 +105,58 @@ impl NilAdapter {
     pub fn new() -> Self {
         NilAdapter {
             state: ServerState::initializing(),
+            open: Vec::new(),
         }
+    }
+
+    fn on_progress(&mut self, params: ProgressParams) -> Option<ServerState> {
+        let ProgressParams { token, value } = params;
+        match value.kind.as_str() {
+            "begin" => {
+                if !KNOWN_TOKENS.contains(&token.as_str()) {
+                    return None;
+                }
+                self.open.push(token);
+                let next = ServerState {
+                    readiness: Readiness::Indexing,
+                    health: Health::Ok,
+                    message: None,
+                };
+                if next == self.state {
+                    return None;
+                }
+                self.state = next;
+                Some(self.state.clone())
+            }
+            "end" => {
+                let index = self.open.iter().position(|t| *t == token)?;
+                self.open.remove(index);
+                if !self.open.is_empty() {
+                    return None;
+                }
+                self.state.readiness = Readiness::Ready;
+                Some(self.state.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn on_show_message(&mut self, params: ShowMessageParams) -> Option<ServerState> {
+        let health = match params.kind {
+            SHOW_MESSAGE_ERROR => Health::Error,
+            SHOW_MESSAGE_WARNING => Health::Warning,
+            _ => return None,
+        };
+        let next = ServerState {
+            health,
+            message: Some(params.message),
+            ..self.state.clone()
+        };
+        if next == self.state {
+            return None;
+        }
+        self.state = next;
+        Some(self.state.clone())
     }
 }
 
@@ -39,15 +165,35 @@ impl Mapping for NilAdapter {
         ServerState::initializing()
     }
 
-    /// Never a guarantee, whatever the version (ADR 0021 decision E is pending).
+    /// Never a guarantee, whatever the version (see the module documentation: ADR 0021
+    /// decision E is pending).
     fn guarantees(&self) -> ServerStateProvider {
         ServerStateProvider::notifications_only()
     }
 
-    /// RED (M26): the fixed-token `$/progress` and `window/showMessage` rules are not
-    /// implemented yet. Reads nothing.
-    fn interpret(&mut self, _view: &MessageView, _body: &[u8]) -> Option<ServerState> {
-        None
+    fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
+        if !view.is_notification() {
+            return None;
+        }
+        match view.method()? {
+            PROGRESS_METHOD => {
+                #[derive(Deserialize)]
+                struct Envelope {
+                    params: ProgressParams,
+                }
+                let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
+                self.on_progress(envelope.params)
+            }
+            SHOW_MESSAGE_METHOD => {
+                #[derive(Deserialize)]
+                struct Envelope {
+                    params: ShowMessageParams,
+                }
+                let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
+                self.on_show_message(envelope.params)
+            }
+            _ => None,
+        }
     }
 }
 

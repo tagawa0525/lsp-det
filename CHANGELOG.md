@@ -7,6 +7,10 @@
 - 外向きの提出（戦略・順序・規則は `docs/upstream-submissions.md`。文面を作ってユーザーの確認をもらってから出す）: 提出前の準備（仕様を安定版にする、typescript-language-server のパッチを typescript-language-server/typescript-language-server#305 の取りこぼし修正に作り直す、gopls を health に縮める、rust-analyzer の `serverStatus` への field 追加案、LSP 本体向けの `.proposed.ts`、Serena の再測定）→ 第 1 段（typescript-language-server、Claude Code anthropics/claude-code#76870 への `experimental/serverState` の提案、pyright）→ 第 2 段（Serena の registry、rust-analyzer の両案、gopls の health）→ 第 3 段（12 サーバー、LSP 本体）
 - 保留の再測定: Kotlin（次の release）、sourcekit-lsp（nixpkgs に 6.x が来たら）
 
+## 未リリース
+
+- **nil の begin なし workspace**（ADR 0021 追補、2026-09-09）: begin が一度も来ない workspace（flake がない、flake.lock がない、nixpkgs の入力がない、入力の store path がない）の扱いを (a) `initializing` のままから (b) `unknown` に変更。`initialize` の `workspaceFolders` の `flake.lock` の root の入力に `nixpkgs` があるかで判定し、begin 前の type 2 の `window/showMessage` も readiness を `unknown` にする
+
 ## 0.6.0（2026-09-08）
 
 作者の日常の言語（Rust、Python、Nix）のうち写像のなかった Nix を当て、ドッグフーディングを日常の環境に載せる ADR 0021 のバッチ。2 サーバーとも `references` が要求のあった文書に閉じ、仕様の `coverage.scope` に `"document"` を足した。

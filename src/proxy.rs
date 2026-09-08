@@ -51,7 +51,7 @@ where
     R: Read + Send + 'static,
     W: Write + Send + 'static,
 {
-    let mut upstream_side = UpstreamSide::new(upstream_command_basename(command));
+    let mut upstream_side = UpstreamSide::new(upstream_command_basename(command), args);
     let mut gate = Gate::new();
     let mut handles = process::spawn(command, args)?;
     let mut upstream_stdin = handles.stdin;
@@ -282,9 +282,9 @@ struct UpstreamSide {
 }
 
 impl UpstreamSide {
-    fn new(upstream_command_basename: String) -> Self {
+    fn new(upstream_command_basename: String, command_args: &[String]) -> Self {
         UpstreamSide {
-            tracker: StateTracker::new(),
+            tracker: StateTracker::new(command_args),
             client_declared: false,
             client_declared_progress: false,
             initialize_id: None,
@@ -770,13 +770,17 @@ struct StateTracker {
 }
 
 impl StateTracker {
-    fn new() -> Self {
+    fn new(command_args: &[String]) -> Self {
         let now = Instant::now();
         let mut tracker = StateTracker {
             tracker: Tracker::new(),
             started: now,
             entered_state: now,
         };
+        // Hand the upstream's own launch arguments to the mapping once one is selected
+        // (`Mapping::learn_upstream_arguments`, ADR 0020 addendum 2026-09-09), the same as
+        // `remember_initialize`'s workspaceFolders / initializationOptions.
+        tracker.tracker.remember_upstream_arguments(command_args);
         // Print the starting state as the first line. Without it the series of durations
         // loses its origin and cannot be used to measure flaps.
         let initial = tracker.tracker.state().clone();

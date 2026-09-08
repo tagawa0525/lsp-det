@@ -53,11 +53,13 @@ impl Tracker {
         }
     }
 
-    /// Remember the arguments lsp-det itself launched the upstream with (the same pattern as
-    /// `remember_initialize`'s `workspaceFolders` / `initializationOptions`). Not yet handed to
-    /// a mapping (`Mapping::learn_upstream_arguments`, ADR 0020 addendum 2026-09-09).
+    /// Remember the arguments lsp-det itself launched the upstream with, and hand them to the
+    /// mapping if one is already selected (the same pattern as `remember_initialize`).
     pub fn remember_upstream_arguments(&mut self, args: &[String]) {
         self.upstream_arguments = args.to_vec();
+        if let Some(adapter) = self.adapter.as_mut() {
+            adapter.learn_upstream_arguments(&self.upstream_arguments);
+        }
     }
 
     /// Remember the client's `initialize` (hand `initializationOptions` and `workspaceFolders`
@@ -137,6 +139,7 @@ impl Tracker {
             adapter.learn_initialization_options(options);
         }
         adapter.learn_workspace_folders(&self.workspace_folders);
+        adapter.learn_upstream_arguments(&self.upstream_arguments);
         self.state = adapter.initial_state();
         self.adapter = Some(adapter);
         self.identity = Some(identity);

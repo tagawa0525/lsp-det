@@ -5345,7 +5345,7 @@ fn nixd_begin(client: &mut ConformanceClient, token: i64, title: &str) {
 }
 
 /// Emits the matching end. nixd's end message is "evaluated ..." on both success and failure
-/// (research doc's "失敗の見え方" section); this mapping does not read the message.
+/// (research doc's "how failures show" section); this mapping does not read the message.
 fn nixd_end(client: &mut ConformanceClient, token: i64, message: &str) {
     client.make_upstream_emit_progress(json!({
         "token": token,
@@ -5853,7 +5853,7 @@ fn nil_spec_7_1_readiness_definition_and_reload_through_lsp_det_with_real_nil() 
 }
 
 /// 7.1 item 4: a `nixpkgs` input whose store path does not exist (a corrupted `narHash`) never
-/// sends a `$/progress` begin (research doc's "失敗の見え方" section, run 4), only
+/// sends a `$/progress` begin (research doc's "how failures show" section, run 4), only
 /// `window/showMessage` type 2, which this mapping reads as health `warning`. Readiness stays
 /// `initializing`.
 /// nil answers from its current snapshot and never waits, so a `definition` on a flake input

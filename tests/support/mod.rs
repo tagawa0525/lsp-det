@@ -1846,7 +1846,7 @@ impl TempNilProject {
     }
 
     /// Like [`TempNilProject::new`], but with the `nixpkgs` input's `narHash` corrupted so the
-    /// store path it locks to does not exist (M26, research doc's "失敗の見え方" section, run 4):
+    /// store path it locks to does not exist (M26, research doc's "how failures show" section, run 4):
     /// nil cannot resolve the input and reports `window/showMessage` type 2, never a `$/progress`
     /// begin.
     pub fn with_missing_input(tag: &str) -> Self {

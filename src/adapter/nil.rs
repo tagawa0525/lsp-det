@@ -5,7 +5,7 @@
 //! ("2026-07-23" for the tested build).
 //!
 //! - **readiness**: starts `initializing`. nil reads flake.lock right after `initialized`, but
-//!   that read carries no signal of its own (research doc, "起動と索引に依る要求" section): the
+//!   that read carries no signal of its own (research doc, "startup and index-dependent requests" section): the
 //!   first observable event is the begin of one of three fixed-string `$/progress` tokens --
 //!   `nil/loadNixosOptionsProgress` (once the `nixpkgs` input's store path is resolved),
 //!   `nil/loadInputFlakeProgress` (opt-in `nix.flake.autoEvalInputs`), and
@@ -19,7 +19,7 @@
 //!   ignored: an end of an unknown token must never make the state `ready` by itself. A
 //!   workspace with no flake, no flake.lock, no `nixpkgs` input, or no store path for it sends
 //!   no begin at all, and this mapping stays `initializing` (choice (a) of the record's
-//!   "写像（設計）と未決の点" section, like clangd without a compilation database, ADR 0020
+//!   "mapping (design) and open points" section, like clangd without a compilation database, ADR 0020
 //!   decision (a) -- the alternative, `unknown` until the first begin, is not implemented; the
 //!   choice between them is pending the user's decision)
 //! - **no prediction** (`observe_client` is not implemented): the only 7.0 method that depends
@@ -27,7 +27,7 @@
 //!   not hold it -- it answers from a snapshot right away. Right after flake.lock's own
 //!   (signal-less) read, that answer is already complete regardless of whether the NixOS
 //!   options load is still running (that load affects completion and hover, not this request;
-//!   research doc, "起動と索引に依る要求" section), so once a begin has been observed the answer
+//!   research doc, "startup and index-dependent requests" section), so once a begin has been observed the answer
 //!   can be trusted; a request sent in the brief window before the first begin (before
 //!   flake.lock is read) answers empty instead -- a real gap this mapping does not predict its
 //!   way around. It is covered by the observer's own hold (spec chapter 9), driven by this
@@ -46,7 +46,7 @@
 //! (ADR 0021 decision D): `references` is limited to the requesting document, a scope spec
 //! chapter 5's `coverage.scope` has no name for yet. ADR 0021 decision E leaves the question of
 //! naming that scope to the maintainer; until it is answered no guarantee is declared for any
-//! version, so there is no `TESTED_VERSIONS` here (research doc's "写像" section).
+//! version, so there is no `TESTED_VERSIONS` here (research doc's "mapping (design)" section).
 
 use serde::Deserialize;
 
@@ -69,7 +69,7 @@ const SHOW_MESSAGE_WARNING: u8 = 2;
 /// The three fixed `$/progress` tokens nil sends for the phases that read flake information:
 /// NixOS options evaluation, input flake evaluation (opt-in `nix.flake.autoEvalInputs`), and
 /// fetching a flake archive (after a `window/showMessageRequest` answer). flake.lock's own read
-/// has no signal (research doc, "起動と索引に依る要求" section): the first observable event is
+/// has no signal (research doc, "startup and index-dependent requests" section): the first observable event is
 /// one of these three begins.
 const KNOWN_TOKENS: &[&str] = &[
     "nil/loadNixosOptionsProgress",

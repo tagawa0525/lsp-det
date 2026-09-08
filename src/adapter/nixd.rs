@@ -37,7 +37,7 @@
 //! `"workspace"` and `"openDocuments"` would be false), so no `coverage` can be declared
 //! honestly. ADR 0021 decision E leaves the question of naming that scope to the maintainer;
 //! until it is answered no guarantee is declared for any version, so there is no
-//! `TESTED_VERSIONS` here (research doc's "写像" section).
+//! `TESTED_VERSIONS` here (research doc's "mapping (design)" section).
 
 use serde::Deserialize;
 use serde_json::Value;

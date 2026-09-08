@@ -203,6 +203,14 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("clangd", &["--server-version", CLANGD_TESTED_VERSION])
     }
 
+    /// A fake upstream that calls itself "nixd" version "2.9.2" (as the real nixd does in
+    /// `serverInfo`) + lsp-det. lsp-det selects the nixd mapping, which declares no guarantee
+    /// for any version (M25, research/nixd-readiness-measurement.md; ADR 0021 decision E is
+    /// pending).
+    pub fn lsp_det_with_fake_nixd() -> Self {
+        Self::lsp_det_with_upstream("nixd", &["--server-version", "2.9.2"])
+    }
+
     /// A fake upstream conformant to this protocol + lsp-det. The upstream side becomes the
     /// identity mapping, and the downstream side reads the upstream's state across the boundary
     /// (design 4.1).
@@ -1003,6 +1011,30 @@ impl ConformanceClient {
                 "contentChanges": [{"text": text}],
             }),
         );
+    }
+
+    /// Only sends `textDocument/definition` (does not wait for the response). Used to check
+    /// holding.
+    pub fn send_definition(&mut self, path: &std::path::Path, line: u32, character: u32) -> i64 {
+        self.send_request(
+            "textDocument/definition",
+            json!({
+                "textDocument": {"uri": file_uri(path)},
+                "position": {"line": line, "character": character},
+            }),
+        )
+    }
+
+    /// `textDocument/definition`. The result can be a single `Location`, a `Location[]`, or
+    /// `LocationLink[]` (LSP); normalized to a `Vec` either way, empty on `null`.
+    pub fn definition(&mut self, path: &std::path::Path, line: u32, character: u32) -> Vec<Value> {
+        let id = self.send_definition(path, line, character);
+        let response = self.await_response_to(id);
+        match &response["result"] {
+            Value::Array(items) => items.clone(),
+            Value::Null => Vec::new(),
+            single => vec![single.clone()],
+        }
     }
 
     /// `textDocument/references`. Excludes the declaration (counts only the uses).

@@ -5310,3 +5310,178 @@ fn clangd_without_lsp_det_answers_partial_references_while_indexing() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// nixd (M25, ADR 0021 decision C row for nixd). The mapping in
+// research/nixd-readiness-measurement.md: identified by `serverInfo.name` "nixd" exactly (the
+// version is `serverInfo.version`). Right after the `initialize` response nixd begins
+// evaluating nixpkgs entries and NixOS options in parallel, each its own `$/progress` with a
+// random JSON-number token and a title starting with "evaluating " -- a begin adds the token
+// to the set of unfinished evaluations and moves readiness to `indexing`; the matching end
+// removes it, and readiness becomes `ready` only once the set is empty. A later begin after
+// `ready` (a re-evaluation after `didChangeConfiguration`) goes back to `indexing`. No health
+// signal. No guarantee is declared for any version: ADR 0021 decision E (how to name the
+// document-scoped `references` nixd answers) is pending, so `guarantees()` is
+// `notifications_only()` unconditionally.
+// ---------------------------------------------------------------------------
+
+const NIXD_NIXPKGS_TOKEN: i64 = 1804289383;
+const NIXD_NIXOS_OPTIONS_TOKEN: i64 = 846930886;
+
+fn nixd_client() -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_nixd();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    (client, result)
+}
+
+/// Emits an evaluation's begin, as a real nixd does right after `initialize`
+/// (research/nixd-readiness-measurement.md).
+fn nixd_begin(client: &mut ConformanceClient, token: i64, title: &str) {
+    client.make_upstream_emit_progress(json!({
+        "token": token,
+        "value": {"kind": "begin", "title": title}
+    }));
+}
+
+/// Emits the matching end. nixd's end message is "evaluated ..." on both success and failure
+/// (research doc's "失敗の見え方" section); this mapping does not read the message.
+fn nixd_end(client: &mut ConformanceClient, token: i64, message: &str) {
+    client.make_upstream_emit_progress(json!({
+        "token": token,
+        "value": {"kind": "end", "message": message}
+    }));
+}
+
+#[test]
+fn nixd_is_selected_by_server_info_and_declares_no_guarantee() {
+    let (mut client, result) = nixd_client();
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "nixd must declare no guarantee until ADR 0021 decision E is answered: {result}"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+#[test]
+fn nixd_becomes_ready_only_after_both_evaluations_end() {
+    let (mut client, _) = nixd_client();
+    nixd_begin(
+        &mut client,
+        NIXD_NIXPKGS_TOKEN,
+        "evaluating nixpkgs entries",
+    );
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    nixd_begin(
+        &mut client,
+        NIXD_NIXOS_OPTIONS_TOKEN,
+        "evaluating nixos options",
+    );
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "a second begin while already indexing must not renotify"
+    );
+    nixd_end(&mut client, NIXD_NIXPKGS_TOKEN, "evaluated nixpkgs entries");
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "the nixos options evaluation is still open"
+    );
+    nixd_end(
+        &mut client,
+        NIXD_NIXOS_OPTIONS_TOKEN,
+        "evaluated nixos options",
+    );
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    assert_eq!(state.health, Health::Unknown, "nixd has no health signal");
+    client.shutdown();
+}
+
+#[test]
+fn nixd_a_later_begin_after_ready_reindexes_spec_7_1_item_3() {
+    let (mut client, _) = nixd_client();
+    nixd_begin(
+        &mut client,
+        NIXD_NIXPKGS_TOKEN,
+        "evaluating nixpkgs entries",
+    );
+    client.await_state_changed();
+    nixd_end(&mut client, NIXD_NIXPKGS_TOKEN, "evaluated nixpkgs entries");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    // A re-evaluation, e.g. after `workspace/didChangeConfiguration` answers with a new
+    // `nixpkgs.expr` (research doc, run 6).
+    nixd_begin(
+        &mut client,
+        NIXD_NIXPKGS_TOKEN,
+        "evaluating nixpkgs entries",
+    );
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    nixd_end(&mut client, NIXD_NIXPKGS_TOKEN, "evaluated nixpkgs entries");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn nixd_ignores_ends_of_unknown_tokens_and_other_titles() {
+    let (mut client, _) = nixd_client();
+    nixd_end(&mut client, 999, "evaluated nothing that began");
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "an end of a token that never began moved the state"
+    );
+    nixd_begin(&mut client, 111, "Something else");
+    assert!(
+        client.expect_no_notification("experimental/serverStateChanged", NEGATIVE_WINDOW),
+        "a title not starting with \"evaluating \" moved the state"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+/// Gate (spec chapter 9) holds this on the client's behalf because it does not declare the
+/// protocol itself (`initialize(false)`); the readiness that drives the hold comes from the
+/// nixd mapping's `$/progress` tracking, not from any guarantee nixd declares (it declares
+/// none for any version).
+#[test]
+fn nixd_holds_definition_until_both_evaluations_end() {
+    let server = ServerUnderTest::lsp_det_with_fake_nixd();
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(false);
+    let id = client.send_definition(&std::path::PathBuf::from("/fake/default.nix"), 2, 19);
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "forwarded definition before any evaluation began"
+    );
+    nixd_begin(
+        &mut client,
+        NIXD_NIXPKGS_TOKEN,
+        "evaluating nixpkgs entries",
+    );
+    nixd_begin(
+        &mut client,
+        NIXD_NIXOS_OPTIONS_TOKEN,
+        "evaluating nixos options",
+    );
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "forwarded definition while evaluating"
+    );
+    nixd_end(&mut client, NIXD_NIXPKGS_TOKEN, "evaluated nixpkgs entries");
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "forwarded definition before the second evaluation ended"
+    );
+    nixd_end(
+        &mut client,
+        NIXD_NIXOS_OPTIONS_TOKEN,
+        "evaluated nixos options",
+    );
+    let response = client.await_response_to(id);
+    assert!(
+        response.get("result").is_some(),
+        "did not release the hold once ready: {response}"
+    );
+    client.shutdown();
+}

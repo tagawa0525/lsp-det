@@ -1756,6 +1756,50 @@ fn clangd_compile_commands(root: &std::path::Path, sources: &[String]) -> String
     serde_json::to_string_pretty(&entries).unwrap()
 }
 
+/// The fixed content of `default.nix` for [`TempNixdProject`] (M25, the method section of
+/// research/nixd-readiness-measurement.md): `pkgs.hello` is the target of the
+/// `textDocument/definition` conformance test. Requires `NIX_PATH` with a `nixpkgs` entry to
+/// evaluate (`nix develop .#servers` provides `nixpkgs=flake:nixpkgs`).
+pub const NIXD_DEFAULT_NIX: &str =
+    "{ pkgs ? import <nixpkgs> { } }:\nlet\n  greeting = pkgs.hello;\nin\n{ inherit greeting; }\n";
+
+/// `pkgs.hello` on line 2 ("  greeting = pkgs.hello;"), inside the "hello" identifier.
+pub const NIXD_HELLO_DECLARATION: (u32, u32) = (2, 19);
+
+/// A temporary Nix project for nixd: a single `default.nix` importing `<nixpkgs>` and
+/// referencing `pkgs.hello` (M25, the method section of research/nixd-readiness-measurement.md).
+/// nixd's evaluation is not made to take observable time by fixture size (unlike the source-code
+/// mappings): the two default evaluations (nixpkgs entries, NixOS options) always run and take
+/// tens to hundreds of milliseconds regardless of workspace size, so a single small file is
+/// enough to observe the `indexing` -> `ready` transition and the server holding a `definition`
+/// sent before it.
+pub struct TempNixdProject {
+    pub root: PathBuf,
+}
+
+impl TempNixdProject {
+    pub fn new(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-nixd-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("cannot create the temporary project");
+        std::fs::write(root.join("default.nix"), NIXD_DEFAULT_NIX).unwrap();
+        TempNixdProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempNixdProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
 /// A temporary Haxe project for haxe-language-server. `src/B.hx` calls `A.target()`, and
 /// `src/Main.hx` calls `B.x()` (M20).
 pub struct TempHaxeProject {

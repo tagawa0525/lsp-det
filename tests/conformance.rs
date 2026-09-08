@@ -5485,3 +5485,98 @@ fn nixd_holds_definition_until_both_evaluations_end() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// Real nixd integration (local only. Not part of CI -- v0.1-design.md chapter 6). Requires
+// nixd on PATH and `NIX_PATH` with a `nixpkgs` entry (`nix develop .#servers`; nixpkgs `nixd`).
+// ---------------------------------------------------------------------------
+
+fn real_nixd(project: &support::TempNixdProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec!["--".to_string(), "nixd".to_string()],
+        root: project.root.clone(),
+    }
+}
+
+fn assert_nix_path_is_set() {
+    assert!(
+        std::env::var_os("NIX_PATH").is_some(),
+        "the real nixd test needs NIX_PATH with a nixpkgs entry (nix develop .#servers \
+         provides nixpkgs=flake:nixpkgs)"
+    );
+}
+
+/// Identity and the guarantee declared (none, for any version -- ADR 0021 decision E is
+/// pending).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nixd_is_selected_by_its_real_server_info_and_declares_no_guarantee() {
+    assert_nix_path_is_set();
+    let project = support::TempNixdProject::new("select");
+    let mut client = ConformanceClient::start(&real_nixd(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "a guarantee is declared for real nixd, which ADR 0021 decision E has not settled: {result}"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+/// 7.1: the readiness sequence `initializing` -> `indexing` -> `ready` (research doc, run 1:
+/// nixpkgs entries and NixOS options begin evaluating right after the `initialize` response and
+/// end within hundreds of milliseconds), and a `textDocument/definition` on `pkgs.hello` sent
+/// right after `didOpen` -- before this mapping has observed either evaluation's begin, let
+/// alone its end -- is answered complete once both have ended. nixd's own controller holds the
+/// RPC to the nixpkgs evaluation worker until the evaluation finishes (Definition.cpp), so there
+/// is no empty or partial answer to observe even though the query races the very first signal.
+/// The single answer resolves into nixpkgs's own `hello/package.nix`, outside the workspace.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nixd_spec_7_1_readiness_and_definition_through_lsp_det_with_real_nixd() {
+    assert_nix_path_is_set();
+    let project = support::TempNixdProject::new("readiness");
+    let default_nix = project.file("default.nix");
+    let mut client = ConformanceClient::start(&real_nixd(&project));
+    client.initialize_with_root(true, &project.root);
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+
+    client.did_open(&default_nix, "nix");
+    let (line, character) = support::NIXD_HELLO_DECLARATION;
+    let id = client.send_definition(&default_nix, line, character);
+
+    let indexing = client.await_state_changed();
+    assert_eq!(
+        indexing.readiness,
+        Readiness::Indexing,
+        "did not observe an evaluation begin: {indexing:?}"
+    );
+    client.wait_until_ready();
+
+    let response = client.await_response_to(id);
+    let locations = match &response["result"] {
+        Value::Array(items) => items.clone(),
+        Value::Null => Vec::new(),
+        single => vec![single.clone()],
+    };
+    assert_eq!(
+        locations.len(),
+        1,
+        "expected exactly one definition location: {response}"
+    );
+    let uri = locations[0]["uri"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a location has a uri: {response}"));
+    assert!(
+        uri.ends_with("/hello/package.nix"),
+        "expected nixpkgs's hello/package.nix, got {uri}"
+    );
+    let root_uri = support::file_uri(&project.root);
+    assert!(
+        !uri.starts_with(&root_uri),
+        "expected a nixpkgs path outside the workspace, got {uri}"
+    );
+    client.shutdown();
+}

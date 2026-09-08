@@ -31,13 +31,13 @@
 //!   next RPC to it) rather than reporting anything on the protocol first, so `unknown`
 //!   (spec 8.2 item 3)
 //!
-//! `guarantees()` is `notifications_only()` for every version: nixd's `references` answers
-//! only the requesting document's own uses (Nix name resolution does not follow `import`
-//! across files), a scope spec chapter 5's `coverage.scope` has no name for yet (both
-//! `"workspace"` and `"openDocuments"` would be false), so no `coverage` can be declared
-//! honestly. ADR 0021 decision E leaves the question of naming that scope to the maintainer;
-//! until it is answered no guarantee is declared for any version, so there is no
-//! `TESTED_VERSIONS` here (research doc's "mapping (design)" section).
+//! `coverage: {scope: "document", incomplete: {}}` is declared only for versions
+//! ([`TESTED_VERSIONS`]) for which the conformance test of 7.2 item 1 was run against a real
+//! nixd and passed (spec 8.2 item 5): nixd's `references` answers only the requesting
+//! document's own uses (Nix name resolution does not follow `import` across files), which spec
+//! chapter 5's `"document"` scope names (ADR 0021 decision E, answer (b)). No `freshness` is
+//! ever declared: 7.3's guarantee is inherently cross-file, which cannot be constructed for a
+//! document-local server (`didChange` is already covered by LSP's own ordering guarantee).
 
 use serde::Deserialize;
 use serde_json::Value;
@@ -58,6 +58,15 @@ const PROGRESS_METHOD: &str = "$/progress";
 /// that stays true).
 const EVALUATING_PREFIX: &str = "evaluating ";
 
+/// Versions for which the conformance test of 7.2 item 1 was run against a real nixd and
+/// passed. Matched by exact equality against `serverInfo.version`. No guarantee is declared for
+/// a version not in the list. When adding one, run
+/// `cargo test --test conformance -- --ignored nixd` against that version first (declaring a
+/// guarantee that cannot be kept violates spec 5.1).
+///
+/// Record of versions passed: "2.9.2" (nixpkgs `nixd`, flake.nix `servers`), 2026-09-08.
+pub const TESTED_VERSIONS: &[&str] = &["2.9.2"];
+
 #[derive(Deserialize)]
 struct ProgressParams {
     token: Value,
@@ -72,6 +81,9 @@ struct ProgressValue {
 }
 
 pub struct NixdAdapter {
+    /// Whether the announced version is in [`TESTED_VERSIONS`]. The condition for declaring a
+    /// guarantee.
+    version_is_tested: bool,
     state: ServerState,
     /// Tokens of evaluations that began with a title starting with "evaluating " and have not
     /// yet ended. Several run in parallel (2 by default, more with configuration), so `ready`
@@ -86,17 +98,19 @@ impl Default for NixdAdapter {
 }
 
 impl NixdAdapter {
+    /// For a nixd that does not announce a version. Declares no guarantee.
     pub fn new() -> Self {
+        Self::for_version(None)
+    }
+
+    /// Looks at `serverInfo.version` and declares a guarantee if it is a tested version.
+    pub fn for_version(version: Option<&str>) -> Self {
+        let version_is_tested = version.is_some_and(|v| TESTED_VERSIONS.contains(&v));
         NixdAdapter {
+            version_is_tested,
             state: ServerState::initializing(),
             open: Vec::new(),
         }
-    }
-
-    // TODO(GREEN): look at TESTED_VERSIONS and declare document_only(&[]) for a tested version
-    // (ADR 0021 decision E, answer (b)).
-    pub fn for_version(_version: Option<&str>) -> Self {
-        Self::new()
     }
 
     fn on_progress(&mut self, params: ProgressParams) -> Option<ServerState> {
@@ -129,10 +143,16 @@ impl Mapping for NixdAdapter {
         ServerState::initializing()
     }
 
-    /// Never a guarantee, whatever the version (see the module documentation: ADR 0021
-    /// decision E is pending).
+    /// The guarantee to declare (spec chapter 5). Declared only for [`TESTED_VERSIONS`] (spec
+    /// 8.2 item 5): `references` is limited to the requesting document (ADR 0021 decision E,
+    /// answer (b)). No `freshness`: 7.3 needs a cross-file query, which cannot be constructed
+    /// for a document-local server.
     fn guarantees(&self) -> ServerStateProvider {
-        ServerStateProvider::notifications_only()
+        if self.version_is_tested {
+            ServerStateProvider::document_only(&[])
+        } else {
+            ServerStateProvider::notifications_only()
+        }
     }
 
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
@@ -304,16 +324,6 @@ mod tests {
                 .unwrap()
                 .health,
             Health::Unknown
-        );
-    }
-
-    #[test]
-    fn declares_notifications_only_regardless_of_version() {
-        // No `TESTED_VERSIONS`, no `for_version`: nixd's version is never looked at, because
-        // no guarantee is declared for any version until ADR 0021 decision E is answered.
-        assert_eq!(
-            NixdAdapter::new().guarantees(),
-            ServerStateProvider::notifications_only()
         );
     }
 

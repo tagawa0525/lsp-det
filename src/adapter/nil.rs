@@ -42,11 +42,13 @@
 //!   (flake.lock was read and the input exists, or fetching one that was missing has started).
 //!   Types 3 and 4 are ignored
 //!
-//! `guarantees()` is `notifications_only()` for every version, for the same reason as nixd
-//! (ADR 0021 decision D): `references` is limited to the requesting document, a scope spec
-//! chapter 5's `coverage.scope` has no name for yet. ADR 0021 decision E leaves the question of
-//! naming that scope to the maintainer; until it is answered no guarantee is declared for any
-//! version, so there is no `TESTED_VERSIONS` here (research doc's "mapping (design)" section).
+//! `coverage: {scope: "document", incomplete: {}}` is declared only for versions
+//! ([`TESTED_VERSIONS`]) for which the conformance test of 7.2 item 1 was run against a real nil
+//! and passed (spec 8.2 item 5): `references` is limited to the requesting document, for the
+//! same reason as nixd (ADR 0021 decision D), which spec chapter 5's `"document"` scope names
+//! (ADR 0021 decision E, answer (b)). No `freshness` is ever declared: 7.3's guarantee is
+//! inherently cross-file, which cannot be constructed for a document-local server (`didChange`
+//! is already covered by LSP's own ordering guarantee).
 
 use serde::Deserialize;
 
@@ -77,6 +79,15 @@ const KNOWN_TOKENS: &[&str] = &[
     "nil/flakeArchiveProgress",
 ];
 
+/// Versions for which the conformance test of 7.2 item 1 was run against a real nil and passed.
+/// Matched by exact equality against `serverInfo.version`. No guarantee is declared for a
+/// version not in the list. When adding one, run
+/// `cargo test --test conformance -- --ignored nil_` against that version first (declaring a
+/// guarantee that cannot be kept violates spec 5.1).
+///
+/// Record of versions passed: "2026-07-23" (nixpkgs `nil`, flake.nix `servers`), 2026-09-08.
+pub const TESTED_VERSIONS: &[&str] = &["2026-07-23"];
+
 #[derive(Deserialize)]
 struct ProgressParams {
     token: String,
@@ -96,6 +107,9 @@ struct ShowMessageParams {
 }
 
 pub struct NilAdapter {
+    /// Whether the announced version is in [`TESTED_VERSIONS`]. The condition for declaring a
+    /// guarantee.
+    version_is_tested: bool,
     state: ServerState,
     /// Tokens among [`KNOWN_TOKENS`] that began and have not yet ended. `ready` only once this
     /// is empty.
@@ -109,17 +123,19 @@ impl Default for NilAdapter {
 }
 
 impl NilAdapter {
+    /// For a nil that does not announce a version. Declares no guarantee.
     pub fn new() -> Self {
+        Self::for_version(None)
+    }
+
+    /// Looks at `serverInfo.version` and declares a guarantee if it is a tested version.
+    pub fn for_version(version: Option<&str>) -> Self {
+        let version_is_tested = version.is_some_and(|v| TESTED_VERSIONS.contains(&v));
         NilAdapter {
+            version_is_tested,
             state: ServerState::initializing(),
             open: Vec::new(),
         }
-    }
-
-    // TODO(GREEN): look at TESTED_VERSIONS and declare document_only(&[]) for a tested version
-    // (ADR 0021 decision E, answer (b)).
-    pub fn for_version(_version: Option<&str>) -> Self {
-        Self::new()
     }
 
     fn on_progress(&mut self, params: ProgressParams) -> Option<ServerState> {
@@ -178,10 +194,16 @@ impl Mapping for NilAdapter {
         ServerState::initializing()
     }
 
-    /// Never a guarantee, whatever the version (see the module documentation: ADR 0021
-    /// decision E is pending).
+    /// The guarantee to declare (spec chapter 5). Declared only for [`TESTED_VERSIONS`] (spec
+    /// 8.2 item 5): `references` is limited to the requesting document (ADR 0021 decision E,
+    /// answer (b)). No `freshness`: 7.3 needs a cross-file query, which cannot be constructed
+    /// for a document-local server.
     fn guarantees(&self) -> ServerStateProvider {
-        ServerStateProvider::notifications_only()
+        if self.version_is_tested {
+            ServerStateProvider::document_only(&[])
+        } else {
+            ServerStateProvider::notifications_only()
+        }
     }
 
     fn interpret(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
@@ -383,16 +405,6 @@ mod tests {
         .expect("a health-only change is still a signal");
         assert_eq!(state.readiness, Readiness::Ready, "readiness did not move");
         assert_eq!(state.health, Health::Warning);
-    }
-
-    #[test]
-    fn declares_notifications_only_regardless_of_version() {
-        // No `TESTED_VERSIONS`, no `for_version`: nil's version is never looked at, because no
-        // guarantee is declared for any version until ADR 0021 decision E is answered.
-        assert_eq!(
-            NilAdapter::new().guarantees(),
-            ServerStateProvider::notifications_only()
-        );
     }
 
     #[test]

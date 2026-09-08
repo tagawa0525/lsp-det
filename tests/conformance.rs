@@ -5312,11 +5312,12 @@ fn clangd_without_lsp_det_answers_partial_references_while_indexing() {
 }
 
 /// Counts whole-word occurrences of `word` in `text`, splitting on anything that is not part of
-/// a Nix identifier (alphanumeric, `_`, or `'`). Used to derive the expected `references` count
-/// for nixd and nil's 7.2 item 1 tests from the fixture text itself instead of hard-coding it --
-/// a plain substring search would also match "nixpkgs" when `word` is "pkgs".
+/// a Nix identifier (alphanumeric, `_`, `-`, or `'`; `x86_64-linux` is one identifier). Used to
+/// derive the expected `references` count for nixd and nil's 7.2 item 1 tests from the fixture
+/// text itself instead of hard-coding it -- a plain substring search would also match "nixpkgs"
+/// when `word` is "pkgs".
 fn count_word_occurrences(text: &str, word: &str) -> usize {
-    text.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '\''))
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-' || c == '\''))
         .filter(|token| *token == word)
         .count()
 }

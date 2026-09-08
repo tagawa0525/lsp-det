@@ -67,3 +67,24 @@
 - `CLAUDE.md` に言語の規則（本 ADR の A・B・D）を足す
 - `docs/glossary.md` を新設する
 - `README.md` の「Documents other than this README are written in Japanese」と仕様の「Japanese; an English translation is planned」は、仕様の英訳の PR で直す
+
+## 追補（2026-09-09）: README.md から直接リンクする文書は英語が正
+
+決定 A の表のうち「ADR・`docs/research/`・`docs/v0.1-design.md`・`docs/vision.md`」と「`scripts/*/README.md`・`dogfood/serena/README.md`」の行を一部改める（ユーザーの依頼）。
+
+### F. `README.md` からワンクリックで飛べる文書は英語が正、日本語版は `.ja.md`
+
+- 対象は `README.md` が直接リンクする 6 本: `docs/vision.md`、`docs/v0.1-design.md`、`docs/research/claude-code-dogfooding.md`、`docs/adr/README.md`（ADR の索引）、`scripts/upstream/README.md`、`dogfood/serena/README.md`。英語版を元のパスに置き、日本語版を同名の `.ja.md` に改名した。維持の規則は決定 B と同じ（同じコミットで追従、見出しの構成を 1 対 1、レビューは日本語版で）
+- `docs/research/` はディレクトリへのリンクなので、英語の索引 `docs/research/README.md`（42 本の一覧と各 1 文の要旨。英語のみ）を置き、それを着地点にする。個々の調査報告は日本語のまま
+- 理由: 最初に読まれる `README.md` から辿れる先が日本語だと、外部の読者（上流のメンテナ、提案の読者）がそこで止まる。外向きの提出（`docs/upstream-submissions.md`）の前に揃える
+- 個々の ADR と調査報告は従来どおり日本語（保守者の記録。必要になったものだけ個別に訳す）。英語の文書からそれらへリンクするときはリンクテキストに "(Japanese)" を付ける（仕様 10 章の形）
+
+却下した案:
+
+| 案                                   | 却下理由                                                                                 |
+| ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `docs/research/` の 42 本を全部英訳  | 量が多く更新も頻繁で、同じコミットでの追従が保てない。索引で足りる                       |
+| 個々の ADR を全部英訳                | 同上。決定の要旨は英語の索引にある                                                       |
+| 英語版を `.en.md` にして日本語を正に | `README.md` と仕様が英語を正にしている形と揃えない理由がない。リンク先の既定が英語になる |
+
+影響: `CLAUDE.md` の言語の節、日本語の文書から 6 本へのリンク（`.ja.md` に付け替え）、`docs/research/README.md` の新設

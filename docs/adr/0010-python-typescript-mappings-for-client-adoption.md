@@ -2,11 +2,11 @@
 
 - 日付: 2026-09-03
 - 状態: 採用
-- 関連: [ADR 0001](0001-tool-first-readiness-gate.md)、[ADR 0009](0009-success-criterion-and-two-sided-reference.md)、[research/server-readiness.md](../research/server-readiness.md)、[research/serena-solidlsp.md](../research/serena-solidlsp.md)、[vision.md 5 章](../vision.md)
+- 関連: [ADR 0001](0001-tool-first-readiness-gate.md)、[ADR 0009](0009-success-criterion-and-two-sided-reference.md)、[research/server-readiness.md](../research/server-readiness.md)、[research/serena-solidlsp.md](../research/serena-solidlsp.md)、[vision.md 5 章](../vision.ja.md)
 
 ## 経緯
 
-v0.1 の成功基準（ADR 0009 決定 A-2）は満たした。仕様・上流側と下流側の準拠テスト・両側の参照実装が自己無矛盾で、rust-analyzer 1.98.0 / 2026-08-03 と gopls v0.23.0 に当てて通っている。Claude Code を被験者にしたドッグフーディングも 3 回行い（[research/claude-code-dogfooding.md](../research/claude-code-dogfooding.md)）、設計判断を変える事実は出なかった。
+v0.1 の成功基準（ADR 0009 決定 A-2）は満たした。仕様・上流側と下流側の準拠テスト・両側の参照実装が自己無矛盾で、rust-analyzer 1.98.0 / 2026-08-03 と gopls v0.23.0 に当てて通っている。Claude Code を被験者にしたドッグフーディングも 3 回行い（[research/claude-code-dogfooding.md](../research/claude-code-dogfooding.ja.md)）、設計判断を変える事実は出なかった。
 
 次段階は ADR 0009 決定 A-3 のとおり順序付きで、最終目標は LSP 本体への提案である。vision 5 章の経路は「公開 → 各上流に実測付きの issue → LSP 本体に提案」だが、その前段として**クライアント（エージェント）に上流側の写像を取り込んでもらう**ことが提案の重みになる。ここで問題になるのは写像の言語の範囲である。
 
@@ -19,7 +19,7 @@ v0.1 の成功基準（ADR 0009 決定 A-2）は満たした。仕様・上流�
 
 ### A. 範囲
 
-1. v0.1 は現在の main で完了とする。以後の作業は v0.2 の範囲とし、v0.1 設計書（[v0.1-design.md](../v0.1-design.md)）の 8 章にマイルストーンを追記する形で進める。仕様（[spec/server-state.ja.md](../spec/server-state.ja.md)）は変更しない
+1. v0.1 は現在の main で完了とする。以後の作業は v0.2 の範囲とし、v0.1 設計書（[v0.1-design.md](../v0.1-design.ja.md)）の 8 章にマイルストーンを追記する形で進める。仕様（[spec/server-state.ja.md](../spec/server-state.ja.md)）は変更しない
 2. v0.2 の範囲は、**pyright の写像**、**typescript-language-server の写像**、**Serena を下流の被験者にした観測**の 3 つである
 3. 宣言範囲と起動方法の宣言は凍結のまま（ADR 0001 決定 2）。jdtls・clangd の写像は範囲外。提案を 1 つに絞る
 4. rust-analyzer と gopls への上流 issue（vision 5 章 2）は v0.2 の完了を待たずに出してよい。ただし相手が読める形（README と仕様の英訳）が先に要る。これは v0.2 のマイルストーンとは独立の小さい作業として扱う

@@ -56,4 +56,4 @@ clangd (llvm/llvm-project) は monorepo が巨大なため clone しない。必
 
 ## ソースからのビルド
 
-上流に出す変更を確かめるとき、pyright・typescript-language-server・rust-analyzer・golang-tools（gopls）はここの clone からビルドできる（`scripts/upstream/build-*.sh`。起動子は `target/upstream/bin/`）。手順と受け入れ条件は `scripts/upstream/README.md`。
+上流に出す変更を確かめるとき、pyright・typescript-language-server・rust-analyzer・golang-tools（gopls）はここの clone からビルドできる（`scripts/upstream/build-*.sh`。起動子は `target/upstream/bin/`）。手順と受け入れ条件は `scripts/upstream/README.ja.md`。

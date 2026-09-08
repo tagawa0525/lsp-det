@@ -16,20 +16,20 @@
 
 oraios/serena の issue 総数は 847 件(open + closed、2026-08-28 時点、PR 除く)。キーワード検索による概数を示す(検索は重複・ノイズを含む。特に「memory」は Serena 自身のメモリー機能の issue が大半)。
 
-| カテゴリ | 概数 | ノイズ・備考 |
-| --- | --- | --- |
-| indexing / index | 226 | インデックス関連全般。機能要望も含む |
-| 起動失敗・startup / launch | 183 | ダッシュボード起動等のノイズあり |
-| ignored / gitignore | 171 | 無視パス処理は独立した頻出領域 |
-| timeout | 128 | MCP タイムアウトと LS タイムアウトが混在 |
-| 空応答・シンボル不検出 | 124 | — |
-| restart | 107 | 再起動要望・再起動バグ両方 |
-| 参照の欠落・部分結果 | 78 | B に直結する群 |
-| crash | 77 | — |
-| hang / stuck | 63 | — |
-| diagnostics | 34 | — |
-| encoding / offset | 29 | — |
-| range 不正 | 28 | 件数は少ないが実害が破損 |
+| カテゴリ                   | 概数 | ノイズ・備考                             |
+| -------------------------- | ---- | ---------------------------------------- |
+| indexing / index           | 226  | インデックス関連全般。機能要望も含む     |
+| 起動失敗・startup / launch | 183  | ダッシュボード起動等のノイズあり         |
+| ignored / gitignore        | 171  | 無視パス処理は独立した頻出領域           |
+| timeout                    | 128  | MCP タイムアウトと LS タイムアウトが混在 |
+| 空応答・シンボル不検出     | 124  | —                                        |
+| restart                    | 107  | 再起動要望・再起動バグ両方               |
+| 参照の欠落・部分結果       | 78   | B に直結する群                           |
+| crash                      | 77   | —                                        |
+| hang / stuck               | 63   | —                                        |
+| diagnostics                | 34   | —                                        |
+| encoding / offset          | 29   | —                                        |
+| range 不正                 | 28   | 件数は少ないが実害が破損                 |
 
 ### 1.1 準備完了の不在(B 直撃)
 
@@ -97,13 +97,13 @@ oraios/serena の issue 総数は 847 件(open + closed、2026-08-28 時点、PR
 
 出典: `reference/LSAP/README.md`、`reference/LSAP/docs/locate_design.md`。
 
-| 不足点 | 内容 |
-| --- | --- |
-| 原子的すぎる操作 | 「参照を全部知りたい」だけで open → offset 計算 → definition → URI 解析 → 読取 → 抽出の十数往復が必要 |
-| 位置指定の困難 | LSP は正確な `{line, character}` を要求するが、LLM は列番号を正確に計算できず、軽微な編集で位置が無効化する(locate_design.md「Problems with Traditional Approaches」) |
-| シンボルパスの限界 | シンボルパス方式(Serena 等)は宣言位置しか指せず、シンボル内部・非シンボル位置(文字列・コメント)を指せない |
-| 出力がエディタ向け | raw JSON スパンではなくコンテキスト付き Markdown が必要 |
-| 合成クエリの不在 | 呼び出し経路・影響分析は raw LSP では複雑なオーケストレーションが必要 |
+| 不足点             | 内容                                                                                                                                                                  |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 原子的すぎる操作   | 「参照を全部知りたい」だけで open → offset 計算 → definition → URI 解析 → 読取 → 抽出の十数往復が必要                                                                 |
+| 位置指定の困難     | LSP は正確な `{line, character}` を要求するが、LLM は列番号を正確に計算できず、軽微な編集で位置が無効化する(locate_design.md「Problems with Traditional Approaches」) |
+| シンボルパスの限界 | シンボルパス方式(Serena 等)は宣言位置しか指せず、シンボル内部・非シンボル位置(文字列・コメント)を指せない                                                             |
+| 出力がエディタ向け | raw JSON スパンではなくコンテキスト付き Markdown が必要                                                                                                               |
+| 合成クエリの不在   | 呼び出し経路・影響分析は raw LSP では複雑なオーケストレーションが必要                                                                                                 |
 
 LSAP は README で Claude Code のネイティブ LSP を「あるが機能していない」と評し(Reddit スレッドを引用)、代替として自層(ブリッジで締める方式)を正当化している。なお [agent-bridges.md](agent-bridges.md) の調査どおり、LSAP 自身は準備完了の待ち・リトライを一切持たない。
 
@@ -111,14 +111,14 @@ LSAP は README で Claude Code のネイティブ LSP を「あるが機能し�
 
 出典: `reference/lsai-protocol/README.md`、`spec/LSAI-v1.4.md`、`ROADMAP.md`。
 
-| 不足点 | 内容 | lsp-det との関係 |
-| --- | --- | --- |
-| 往復回数 | 「誰が X を呼び、どのテストがカバーするか」に 5〜8 回の呼び出し | プロトコル外(上位層) |
-| 絶対 URI | `file:///...` はトークン浪費。相対パスが必要 | プロトコル外(出力形式) |
-| capability 欠落 | callHierarchy 等が無いサーバーでは references + documentSymbol や正規表現で代替(spec の Fallback Strategies) | 機能欠落への代替であり、時間軸の空応答(B)は扱わない |
-| 言語ごとの手動セットアップ | 「One server per language, manual setup」を明示的に欠点として列挙 | **C の動機と一致** |
-| readiness | ROADMAP に「Deterministic workspace readiness: AsyncReady config per language」— 言語別設定で readiness を自前実装 | **B の欠如の傍証** |
-| ビルド前提 | 「Parasitic Architecture」= ビルド済み前提。ビルド・インデックスの状態管理を放棄 | B の回避策の一形態 |
+| 不足点                     | 内容                                                                                                               | lsp-det との関係                                    |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------- |
+| 往復回数                   | 「誰が X を呼び、どのテストがカバーするか」に 5〜8 回の呼び出し                                                    | プロトコル外(上位層)                                |
+| 絶対 URI                   | `file:///...` はトークン浪費。相対パスが必要                                                                       | プロトコル外(出力形式)                              |
+| capability 欠落            | callHierarchy 等が無いサーバーでは references + documentSymbol や正規表現で代替(spec の Fallback Strategies)       | 機能欠落への代替であり、時間軸の空応答(B)は扱わない |
+| 言語ごとの手動セットアップ | 「One server per language, manual setup」を明示的に欠点として列挙                                                  | **C の動機と一致**                                  |
+| readiness                  | ROADMAP に「Deterministic workspace readiness: AsyncReady config per language」— 言語別設定で readiness を自前実装 | **B の欠如の傍証**                                  |
+| ビルド前提                 | 「Parasitic Architecture」= ビルド済み前提。ビルド・インデックスの状態管理を放棄                                   | B の回避策の一形態                                  |
 
 ## 3. cclsp / mcpls / claude-code-lsps の苦労点
 
@@ -211,38 +211,38 @@ anthropics/claude-code にはタイトルに LSP を含む issue が 279 件(202
 
 ### 5.1 カバーされる不満
 
-| 拡張 | カバーされる不満(代表出典) |
-| --- | --- |
-| A: 宣言範囲 | Serena #1529 / #1484 / #1498 / #1697、Serena の 12 言語分シンボル補正コード([serena-solidlsp.md](serena-solidlsp.md))、gopls の `type` キーワード欠落([vision.md](../vision.md) 1.1) |
+| 拡張        | カバーされる不満(代表出典)                                                                                                                                                                                       |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A: 宣言範囲 | Serena #1529 / #1484 / #1498 / #1697、Serena の 12 言語分シンボル補正コード([serena-solidlsp.md](serena-solidlsp.md))、gopls の `type` キーワード欠落([vision.ja.md](../vision.ja.md) 1.1)                       |
 | B: 準備完了 | Serena #1937 / #1858 / #1923 / #1871 / #937 / #1390 / #1789 / #634、cclsp #27 / #30 / #26、boostvolt #14、LSAI の言語別 AsyncReady 設定、solidlsp の 6 類型 readiness 近似。空応答と「結果なし」の区別不能が根本 |
-| C: 起動 | Serena #1469 / #1798 / #1838、boostvolt #32 / #30、Piebald #72 / #69 / #67 / #62、claude-code #78188 / #79690、20 超言語の起動前 CLI 実行、LSAI の「manual setup per language」批判 |
+| C: 起動     | Serena #1469 / #1798 / #1838、boostvolt #32 / #30、Piebald #72 / #69 / #67 / #62、claude-code #78188 / #79690、20 超言語の起動前 CLI 実行、LSAI の「manual setup per language」批判                              |
 
 補足: Claude Code の登録失敗群(4.1 の「No LSP server available」系)はクライアント実装バグだが、起動宣言が仕様外であるがゆえに各クライアントが独自の設定スキーマ(`lspServers`)を発明し、その解釈差で壊れているという意味で C の間接的な帰結でもある。
 
 ### 5.2 決定性に関わるが 3 拡張でカバーされない不満
 
-| 領域 | 内容 | 代表出典 |
-| --- | --- | --- |
-| 診断の完了通知 | `publishDiagnostics` はいつ「揃った」かを示さない。stale 診断・取りこぼしが多発 | claude-code #50024 / #80267 / #57840 / #64239、cclsp #42、Serena #1770 |
-| サーバー死活・部分故障 | OOM 死・クラッシュが空応答と区別できず「成功」として報告される | Serena #1814 / #1770 / #1940、cclsp #35、boostvolt #14 |
-| 無視ディレクトリ | どのパスを解析対象とするかがサーバー・ブリッジ毎に非決定的 | Serena #1806 / #1729 / #1624、claude-code #72594 / #50224 |
-| position encoding / URI | UTF-16 既定と URI 形式差(特に Windows)による InvalidParams | boostvolt #29、mcpls の変換インフラ、[agent-bridges.md](agent-bridges.md) |
-| クライアント側準拠 | server→client 要求(`workspace/configuration` 等)・dynamic registration・バイトフレーミングの未実装 | claude-plugins-official #1359、claude-code #52693、cclsp #52 |
-| シンボル同定 | name_path 等シンボルの一意な指し方が未標準(Erlang `foo/1` 衝突、位置指定の困難) | Serena #1797、LSAP locate_design.md |
-| ワークスペース構成 | monorepo / worktree / 複数ルートでの参照過少・状態リーク | Serena #1939 / #1260 / #805、claude-code #50224 |
-| 並行アクセス | 同一プロジェクトへの複数クライアントでインデックス破損 | Serena #1944 / #1864 |
+| 領域                    | 内容                                                                                               | 代表出典                                                                  |
+| ----------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| 診断の完了通知          | `publishDiagnostics` はいつ「揃った」かを示さない。stale 診断・取りこぼしが多発                    | claude-code #50024 / #80267 / #57840 / #64239、cclsp #42、Serena #1770    |
+| サーバー死活・部分故障  | OOM 死・クラッシュが空応答と区別できず「成功」として報告される                                     | Serena #1814 / #1770 / #1940、cclsp #35、boostvolt #14                    |
+| 無視ディレクトリ        | どのパスを解析対象とするかがサーバー・ブリッジ毎に非決定的                                         | Serena #1806 / #1729 / #1624、claude-code #72594 / #50224                 |
+| position encoding / URI | UTF-16 既定と URI 形式差(特に Windows)による InvalidParams                                         | boostvolt #29、mcpls の変換インフラ、[agent-bridges.md](agent-bridges.md) |
+| クライアント側準拠      | server→client 要求(`workspace/configuration` 等)・dynamic registration・バイトフレーミングの未実装 | claude-plugins-official #1359、claude-code #52693、cclsp #52              |
+| シンボル同定            | name_path 等シンボルの一意な指し方が未標準(Erlang `foo/1` 衝突、位置指定の困難)                    | Serena #1797、LSAP locate_design.md                                       |
+| ワークスペース構成      | monorepo / worktree / 複数ルートでの参照過少・状態リーク                                           | Serena #1939 / #1260 / #805、claude-code #50224                           |
+| 並行アクセス            | 同一プロジェクトへの複数クライアントでインデックス破損                                             | Serena #1944 / #1864                                                      |
 
 このうち「診断の完了通知」と「死活の可視化」は B の自然な隣接領域であり、issue 上も B と同じ「無言の嘘(silently wrong)」として現れる。v0.1 スコープ外としても、拡張 B の語彙設計時に将来の拡張余地(例: readiness の対象に diagnostics フェーズを含められる形)を意識する価値がある。
 
 ### 5.3 プロトコル外(lsp-det の非目的と整合)
 
-| 領域 | 内容 | 主な担い手 |
-| --- | --- | --- |
-| 往復回数・トークン効率 | 合成クエリ(impact / context / callers)、Markdown 出力、相対パス | LSAP、LSAI |
-| 位置指定の人間工学 | `find` パターン等の semantic locate | LSAP locate モジュール |
-| 性能・メモリ | 30GB 消費、インデックス時間、ゾンビプロセス | Serena #944 / #529 / #1081 |
-| MCP 層の設計 | ツールタイムアウト、stdio 切断時の子プロセス管理、read_only の広告 | Serena #1052、cclsp #47、mcpls #321 |
-| capability 欠落への代替 | callHierarchy 等が無いサーバーでのフォールバック | LSAI Fallback Strategies |
+| 領域                    | 内容                                                               | 主な担い手                          |
+| ----------------------- | ------------------------------------------------------------------ | ----------------------------------- |
+| 往復回数・トークン効率  | 合成クエリ(impact / context / callers)、Markdown 出力、相対パス    | LSAP、LSAI                          |
+| 位置指定の人間工学      | `find` パターン等の semantic locate                                | LSAP locate モジュール              |
+| 性能・メモリ            | 30GB 消費、インデックス時間、ゾンビプロセス                        | Serena #944 / #529 / #1081          |
+| MCP 層の設計            | ツールタイムアウト、stdio 切断時の子プロセス管理、read_only の広告 | Serena #1052、cclsp #47、mcpls #321 |
+| capability 欠落への代替 | callHierarchy 等が無いサーバーでのフォールバック                   | LSAI Fallback Strategies            |
 
 ## 6. 考察
 

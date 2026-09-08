@@ -2,6 +2,8 @@
 
 [English](README.md)
 
+[![CI](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml/badge.svg)](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/tagawa0525/lsp-det?display_name=tag)](https://github.com/tagawa0525/lsp-det/releases) [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#ライセンス)
+
 言語サーバーの「無言の嘘」を消す、サーバー状態プロトコルの参照実装。
 
 LSP には、サーバーが要求に完全に答えられる状態かをクライアントが機械的に知る手段がない。その結果、インデックス未完了の空配列・壊れたサーバーの成功風の応答・編集を織り込まない結果を、クライアントは正当な答えとして受け取る。エディタでは人間の目とタイミング感覚がこれを補っていた。コーディングエージェントは補わない。`initialize` の直後に `textDocument/references` を投げ、空配列を「参照なし」と読み、そのままリネームや削除を実行する。
@@ -13,7 +15,7 @@ lsp-det は 2 つのものからなる。
 
 ## 何が起きるか
 
-Claude Code に rust-analyzer を lsp-det 経由で使わせた実測（[docs/research/claude-code-dogfooding.md](docs/research/claude-code-dogfooding.md)）:
+Claude Code に rust-analyzer を lsp-det 経由で使わせた実測（[docs/research/claude-code-dogfooding.ja.md](docs/research/claude-code-dogfooding.ja.md)）:
 
 | 場面                                                     | lsp-det なし                               | lsp-det あり                                                                |
 | -------------------------------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------- |
@@ -88,6 +90,16 @@ interface ServerState {
 
 メッセージのボディは原文バイトのまま転送する。写像に要る通知と `initialize` の往復だけをパースする。
 
+## 導入
+
+いずれか 1 つ。
+
+- **Release のバイナリ**: `v*` の tag ごとに [GitHub Releases](https://github.com/tagawa0525/lsp-det/releases) にプラットフォームごとの静的バイナリが付く（`lsp-det-x86_64-unknown-linux-gnu`、`lsp-det-aarch64-unknown-linux-gnu`、`lsp-det-x86_64-apple-darwin`、`lsp-det-aarch64-apple-darwin`、`lsp-det-x86_64-pc-windows-msvc.exe`）。自分のプラットフォームのものを落とし、`lsp-det`（Windows は `lsp-det.exe`）に改名して実行権限を付け、`PATH` に置く
+- **Cargo**: `cargo install --git https://github.com/tagawa0525/lsp-det`（stable の Rust、edition 2024。依存は `serde`、`serde_json`、`thiserror`、`libc` だけで、Rust 以外のツールチェーンは要らない）
+- **Nix**: `nix profile install github:tagawa0525/lsp-det`。または `github:tagawa0525/lsp-det` を flake input にして `packages.${system}.default` を取る（作者の home-manager の構成はこの形。[dogfood/README.md](dogfood/README.md)）
+
+lsp-det に設定ファイルとフラグはない。透過プロキシなので、次の節のとおり言語サーバーのコマンドの前に置くだけでよい。
+
 ## 使い方
 
 ```text
@@ -113,7 +125,7 @@ Claude Code のプラグイン（`.lsp.json`）:
 }
 ```
 
-4 サーバーぶんの実物は [dogfood/claude-plugin/.lsp.json](dogfood/claude-plugin/.lsp.json)、手順は [dogfood/README.md](dogfood/README.md)。Serena は `.serena/project.yml` の `ls_specific_settings.<言語>.ls_base_cmd` に同じコマンドを書く（[dogfood/serena/README.md](dogfood/serena/README.md)）。
+4 サーバーぶんの実物は [dogfood/claude-plugin/.lsp.json](dogfood/claude-plugin/.lsp.json)、手順は [dogfood/README.md](dogfood/README.md)。Serena は `.serena/project.yml` の `ls_specific_settings.<言語>.ls_base_cmd` に同じコマンドを書く（[dogfood/serena/README.ja.md](dogfood/serena/README.ja.md)）。
 
 lsp-det は stderr に写像の選択、状態遷移、保留の開始と終わり（待った時間と、列を離れた理由）を出す。保留に時間の上限はないので、保留されたままのリクエストが、写像がサーバーの信号を取り逃したことの現れになる。
 
@@ -144,12 +156,12 @@ cargo test --test conformance -- --ignored   # 実サーバー結合 36 件（�
 
 テストは仕様をそのまま実行可能にしたもので、被験者を差し替えれば実サーバー・実クライアントにも当たる。
 
-| テスト                        | 仕様の章     | 被験者                                                                                               |
-| ----------------------------- | ------------ | ---------------------------------------------------------------------------------------------------- |
-| `tests/conformance.rs`        | 7 章、8.4    | lsp-det の上流側。偽の上流（`examples/fake_lsp_server.rs`）と実サーバー 4 種                         |
-| `tests/client_conformance.rs` | 9.1          | lsp-det の下流側。準拠した偽の上流と rust-analyzer を名乗る偽の上流                                  |
-| `tests/process_lifetime.rs`   | 設計 4.5     | クライアントや lsp-det が不意に死んだとき lsp-det と上流が終了すること。CI が 3 OS で回す            |
-| `tests/upstream_dev.rs`       | 上流への変更 | 上流の fork に当てたパッチの受け入れ条件（[scripts/upstream/README.md](scripts/upstream/README.md)） |
+| テスト                        | 仕様の章     | 被験者                                                                                                     |
+| ----------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------- |
+| `tests/conformance.rs`        | 7 章、8.4    | lsp-det の上流側。偽の上流（`examples/fake_lsp_server.rs`）と実サーバー 4 種                               |
+| `tests/client_conformance.rs` | 9.1          | lsp-det の下流側。準拠した偽の上流と rust-analyzer を名乗る偽の上流                                        |
+| `tests/process_lifetime.rs`   | 設計 4.5     | クライアントや lsp-det が不意に死んだとき lsp-det と上流が終了すること。CI が 3 OS で回す                  |
+| `tests/upstream_dev.rs`       | 上流への変更 | 上流の fork に当てたパッチの受け入れ条件（[scripts/upstream/README.ja.md](scripts/upstream/README.ja.md)） |
 
 ## 上流への働きかけ
 
@@ -170,11 +182,15 @@ cargo test --test conformance -- --ignored   # 実サーバー結合 36 件（�
 | 文書                                                         | 内容                                                                                                                                         |
 | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | [docs/spec/server-state.ja.md](docs/spec/server-state.ja.md) | サーバー状態プロトコルの仕様の日本語版。規範は英語版 [docs/spec/server-state.md](docs/spec/server-state.md) で、他文書と食い違えば英語版が正 |
-| [docs/v0.1-design.md](docs/v0.1-design.md)                   | プロキシの実装スコープ（上流側・下流側・写像・実行モデル）                                                                                   |
-| [docs/adr/README.md](docs/adr/README.md)                     | 設計判断の索引。生きている決定と却下した案                                                                                                   |
-| [docs/vision.md](docs/vision.md)                             | 長期構想（宣言範囲・起動方法の宣言は凍結中）                                                                                                 |
+| [docs/v0.1-design.ja.md](docs/v0.1-design.ja.md)             | プロキシの実装スコープ（上流側・下流側・写像・実行モデル）                                                                                   |
+| [docs/adr/README.ja.md](docs/adr/README.ja.md)               | 設計判断の索引。生きている決定と却下した案                                                                                                   |
+| [docs/vision.ja.md](docs/vision.ja.md)                       | 長期構想（宣言範囲・起動方法の宣言は凍結中）                                                                                                 |
 | [docs/research/](docs/research/)                             | 調査と実測 25 本。各言語サーバーの readiness の実態、先行プロキシ、Serena / Claude Code / Zed / VS Code の LSP 統合                          |
 
 ## 現在地
 
 v0.1（rust-analyzer と gopls）と v0.2（pyright、typescript-language-server、Serena 統合）は完了している。次は上流への提出。
+
+## ライセンス
+
+[Apache License, Version 2.0](LICENSE-APACHE) または [MIT license](LICENSE-MIT) のいずれか、利用者の選択による。明示的に別の意思表示がない限り、この作品への貢献として意図的に提出されたものは、追加の条項なしに上記の二重ライセンスとする。

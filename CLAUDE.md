@@ -4,11 +4,11 @@
 
 ## 文書の読む順序と優先度
 
-1. `docs/adr/README.md` — ADR の索引。**生きている決定だけ**が列挙されている。廃止された決定を読む必要はない
+1. `docs/adr/README.ja.md` — ADR の索引。**生きている決定だけ**が列挙されている。廃止された決定を読む必要はない
 2. `docs/spec/server-state.md`（英語が正。日本語版は `docs/spec/server-state.ja.md`）— サーバー状態プロトコルの**規範**。食い違いはすべてここが正。3〜7 章がサーバーの義務、8 章が観測者（中継層等）の合成する値、9 章がクライアントの推奨挙動
-3. `docs/v0.1-design.md` — 実装スコープ（上流側・下流側・写像・実行モデル・マイルストーン）
+3. `docs/v0.1-design.ja.md` — 実装スコープ（上流側・下流側・写像・実行モデル・マイルストーン）
 4. `docs/adr/` — 決定の経緯と却下案。成功基準と構造の根拠は ADR 0009、採用しなかった依存（tokio 等）の理由は ADR 0005
-5. `docs/vision.md` — 長期構想（宣言範囲・起動方法の宣言は凍結中）
+5. `docs/vision.ja.md` — 長期構想（宣言範囲・起動方法の宣言は凍結中）
 6. `docs/glossary.md` — 日本語と英語の対訳表。仕様・README・コードのコメントの訳語はここに合わせる
 7. `docs/research/` — 調査報告 42 本。実装中の疑問はまずここを検索（先行プロキシの落とし穴、各サーバーの readiness 挙動、Serena / CC の統合仕様が実測済み、CC 経由のドッグフーディング観測は `claude-code-dogfooding.md`）
 
@@ -25,9 +25,9 @@
 
 ## 言語（ADR 0017）
 
-- 英語が正: `README.md`、`docs/spec/server-state.md`。日本語版（`README.ja.md`、`docs/spec/server-state.ja.md`）は**同じコミット**で追従させ、見出しの構成を 1 対 1 に保つ。レビューは日本語版で行う
-- 英語: `src` / `tests` / `examples` のコメントとテスト名、実行時のメッセージ、`dogfood/README.md`
-- 日本語: ADR、`docs/research/`、`docs/v0.1-design.md`、`docs/vision.md`、`scripts/*/README.md`、`dogfood/serena/README.md`、本ファイル、コミットメッセージ、PR 本文、CHANGELOG
+- 英語が正: `README.md`、`docs/spec/server-state.md`、そして `README.md` から直接リンクする 6 本（`docs/vision.md`、`docs/v0.1-design.md`、`docs/research/claude-code-dogfooding.md`、`docs/adr/README.md`、`scripts/upstream/README.md`、`dogfood/serena/README.md`。追補 F）。日本語版（同名の `.ja.md`）は**同じコミット**で追従させ、見出しの構成を 1 対 1 に保つ。レビューは日本語版で行う
+- 英語のみ: `src` / `tests` / `examples` のコメントとテスト名、実行時のメッセージ、`dogfood/README.md`、`docs/research/README.md`（調査報告の索引）
+- 日本語: 個々の ADR、`docs/research/` の各報告、`scripts/serena/README.md` 等の upstream 以外の `scripts/*/README.md`、本ファイル、コミットメッセージ、PR 本文、CHANGELOG。英語の文書からこれらへリンクするときはリンクテキストに "(Japanese)" を付ける
 - 訳語は `docs/glossary.md` に合わせる。変えるときは表を先に直す
 
 ## 開発環境
@@ -35,8 +35,8 @@
 - `flake.nix` の `default` はビルドの道具だけ、`servers` は言語サーバー全部（rust-analyzer・gopls・pyright・basedpyright・typescript-language-server・clangd。版の固定はここ。nixpkgs はシステム構成と同じ rev）。実サーバーの結合テストとドッグフーディングは `nix develop .#servers` か direnv（`.envrc` は `use flake .#servers` + `PATH_add target/release`。グローバルの gitignore に負けるので `git add -f` で追跡している）で入る
 - 対応 OS は Linux・macOS・Windows（ADR 0012）。プロセス寿命の追従は `src/process/{linux,macos,windows}.rs` に分かれている。他 OS のコンパイルは `scripts/check-targets.sh`（rustup の stable でクロスターゲットの `cargo check`）で push の前に確かめ、挙動は GitHub Actions の CI（`.github/workflows/ci.yml`、3 OS で `cargo test`）が確かめる。`v*` のタグで `.github/workflows/release.yml` が各 OS のバイナリを Release に添付する
 - 言語サーバーの版は保証の宣言に直結する（`src/adapter/*/TESTED_VERSIONS`）。`flake.lock` を更新して版が変わったら `cargo test --test conformance -- --ignored` を通してから一覧を動かす
-- ドッグフーディングは `dogfood/README.md`（`cargo build --release` → `claude --plugin-dir dogfood/claude-plugin`）。Serena は `dogfood/serena/README.md`
-- 上流に出す変更は `scripts/upstream/README.md` の手順でローカルに確かめる（pyright・typescript-language-server・rust-analyzer・gopls の 4 つの上流に当てるパッチは fork のブランチに用意済み。上流への PR はユーザー確認のうえで出す。出すものの一覧と順序は `docs/upstream-submissions.md`）（`reference/` の clone をビルドして `target/upstream/bin` を PATH の先頭に置き、`tests/upstream_dev.rs` の受け入れ条件と準拠テストを当てる）。Serena 側は `scripts/serena/probe.py`
+- ドッグフーディングは `dogfood/README.md`（`cargo build --release` → `claude --plugin-dir dogfood/claude-plugin`）。Serena は `dogfood/serena/README.ja.md`
+- 上流に出す変更は `scripts/upstream/README.ja.md` の手順でローカルに確かめる（pyright・typescript-language-server・rust-analyzer・gopls の 4 つの上流に当てるパッチは fork のブランチに用意済み。上流への PR はユーザー確認のうえで出す。出すものの一覧と順序は `docs/upstream-submissions.md`）（`reference/` の clone をビルドして `target/upstream/bin` を PATH の先頭に置き、`tests/upstream_dev.rs` の受け入れ条件と準拠テストを当てる）。Serena 側は `scripts/serena/probe.py`
 
 ## 開発プロセス
 
@@ -57,7 +57,7 @@
 - 0.6.0（ADR 0021: nixd、nil、ドッグフーディングの本番化）も完了。nixd（"evaluating …" の `$/progress` を数える。索引に依る `definition` はサーバー自身が待たせる）と nil（固定 token 3 つの `$/progress`、health は `window/showMessage` の type 1 / 2。flake.lock の読み込みには信号がない）は `references` が要求のあった文書に閉じるので、仕様 5 章の `coverage.scope` に `"document"` を足し（決定 E。ユーザーの決定）、通した版に `coverage` だけ宣言する。nil は begin が一度も来ない workspace（flake がない、flake.lock がない、nixpkgs の入力がない、入力の store path がない）の扱いを (b) `unknown` から始めるに決めた（2026-09-09、ADR 0021 追補。`initialize` の `workspaceFolders` の `flake.lock` の root の入力に `nixpkgs` があるかで判定し、begin 前の type 2 の `window/showMessage` も readiness を `unknown` にする。永遠に `initializing` のまま保留し続ける (a) は使いにくいという判断）。ruff の LSP は横断要求がなく写像しない。ドッグフーディングは nixfiles が lsp-det を flake input として取り込み `~/.claude/skills/lsp-det-dogfood` に置く形（`packages.default`。`--plugin-dir` は作業木の変更を観るときだけ）。次: 外向きの提出（`docs/upstream-submissions.md` の順。文面を作ってユーザーの確認をもらってから出す）。保留の Kotlin と sourcekit-lsp は次の版が入手できたら測る
 - 実サーバーの結合テストは `cargo test --test conformance -- --ignored`（75 件。全件は `--test-threads=1` で回す。並列では tsls の 7.3 の Changed が負荷で揺れる。Metals、Expert、Nextflow、HLS、pyrefly、crystalline、Gleam、haxe-language-server、Dart、Sorbet、jdtls、clangd、nixd、nil は `nix develop .#servers` で。nixd は `NIX_PATH` に nixpkgs、nil は `nix` が要る）と `cargo test --test process_lifetime -- --ignored`（4 件）。`TESTED_VERSIONS` を動かすのはこれらを通してから
 
-ドッグフーディングは `dogfood/README.md` の手順。観測結果は `docs/research/claude-code-dogfooding.md` に追記する（第 1〜3 回で、経路の成立・起動直後の横断リクエストが保留されて完全な結果になること・82 秒の保留でも CC がタイムアウトしないこと・gopls 経路・`error` の拒否の見せ方を確認済み。第 4 回で CC が送る通知の全数、第 5 回（CC 2.1.261）で `didChangeWatchedFiles` の代行が効くことと、Write の再 `didOpen` が CC 側で直ったことを確認済み。第 6 回で実害の一事例（直接では tsls と gopls の両方でエージェントが使われている関数を消しビルドが壊れる。lsp-det 経由では消さない）を記録済み。第 7 回（CC 2.1.263）で日常の環境（flake input と skills-as-plugins）から Nix・Rust・Python の 3 経路の保留と解放を確認済み。CC は `workspace/configuration` を支持しない）。観測項目: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007: 通常編集では往復しない）。
+ドッグフーディングは `dogfood/README.md` の手順。観測結果は `docs/research/claude-code-dogfooding.ja.md` に追記する（第 1〜3 回で、経路の成立・起動直後の横断リクエストが保留されて完全な結果になること・82 秒の保留でも CC がタイムアウトしないこと・gopls 経路・`error` の拒否の見せ方を確認済み。第 4 回で CC が送る通知の全数、第 5 回（CC 2.1.261）で `didChangeWatchedFiles` の代行が効くことと、Write の再 `didOpen` が CC 側で直ったことを確認済み。第 6 回で実害の一事例（直接では tsls と gopls の両方でエージェントが使われている関数を消しビルドが壊れる。lsp-det 経由では消さない）を記録済み。第 7 回（CC 2.1.263）で日常の環境（flake input と skills-as-plugins）から Nix・Rust・Python の 3 経路の保留と解放を確認済み。CC は `workspace/configuration` を支持しない）。観測項目: CC がサーバーをいつ起動しいつ最初の横断リクエストを投げるか、CC のリクエストタイムアウトとエラーの見せ方、CC が未知の通知をどう扱うか。quiescent フラップは実測完了（ADR 0007: 通常編集では往復しない）。
 
 ### この開発環境の rust-analyzer 起動不能問題（2026-08-28 解消）
 

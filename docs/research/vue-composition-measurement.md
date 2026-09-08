@@ -39,5 +39,5 @@ vue-language-server の接続で横断の要求は答えられず、答えは ts
 ## 結論（決定 B-5 の確認）
 
 - 「接続ごとの保留で結果が完全になる」は成り立つ。横断の答えは 1 つの接続（tsls + plugin）から出て、その接続の lsp-det の保留が空応答を消す。vue-language-server の接続は横断を持たないので、保留すべきものがない
-- 合成（2 つの `ServerState` の AND、`tsserver/request` の転送）はクライアントの責務で、lsp-det は隣の接続を知らない。仕様の変更は要らない。`docs/vision.md` に「相方サーバーとの合成はクライアントの責務。接続ごとの保留で足りる（M13 で実測）」と書く
+- 合成（2 つの `ServerState` の AND、`tsserver/request` の転送）はクライアントの責務で、lsp-det は隣の接続を知らない。仕様の変更は要らない。`docs/vision.ja.md` に「相方サーバーとの合成はクライアントの責務。接続ごとの保留で足りる（M13 で実測）」と書く
 - vue-language-server は写像を書かない（両軸 `unknown`）。`serverInfo` があり名乗るので、lsp-det は「知らない名前」として両軸 `unknown` を宣言する

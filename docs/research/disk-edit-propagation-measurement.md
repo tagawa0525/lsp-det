@@ -26,7 +26,7 @@ ADR 0014 と ADR 0015 の根拠。コーディングエージェントはファ�
 - `capabilities.workspace`: `{"configuration": false, "workspaceFolders": false}` だけ。**`didChangeWatchedFiles` はない**。`window` と `experimental` もない
 - `capabilities.textDocument.synchronization`: `{"dynamicRegistration": false, "willSave": false, "willSaveWaitUntil": false, "didSave": true}`。他に `publishDiagnostics`、`hover`、`definition`、`references`、`documentSymbol`、`callHierarchy`。`general.positionEncodings: ["utf-16"]`
 - 送った通知は `initialized`、`didOpen`（version 1、全文）、`references`、`shutdown`（`params: {}`）の順。`didChange`・`didSave`・`didClose`・`didChangeWatchedFiles`・`exit` はない。サーバーからの `workspace/diagnostic/refresh` には `-32601 Unhandled method` で答える
-- `--debug` のログ 29 本の全数確認（[claude-code-dogfooding.md](claude-code-dogfooding.md) 第 4 回）: CC が送る通知は `initialized`・`didOpen`・`exit` の 3 種だけ。Write のたびに同じファイルへ `didOpen` を送り直し（書き込みの 1ms 後、新しい本文）、Bash の編集には何も送らない
+- `--debug` のログ 29 本の全数確認（[claude-code-dogfooding.ja.md](claude-code-dogfooding.ja.md) 第 4 回）: CC が送る通知は `initialized`・`didOpen`・`exit` の 3 種だけ。Write のたびに同じファイルへ `didOpen` を送り直し（書き込みの 1ms 後、新しい本文）、Bash の編集には何も送らない
 
 したがって CC の利用者に起きていることは次の 3 つで、すべて実測に基づく。
 

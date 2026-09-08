@@ -234,9 +234,54 @@ impl Mapping for NilAdapter {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use serde_json::Value;
+
     use super::*;
     use crate::peek::peek;
     use crate::state::{Health, Readiness};
+
+    /// A throwaway directory for a fake workspace folder, cleaned up on drop. No dependency is
+    /// added for this (`CLAUDE.md`'s absolute constraint): `std::env::temp_dir()` plus a name
+    /// unique to the test and the process.
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("lsp-det-nil-adapter-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("cannot create the temporary directory");
+            TempDir { path }
+        }
+
+        /// Writes a `flake.lock` whose root node's inputs are exactly `names`.
+        fn write_flake_lock(&self, names: &[&str]) {
+            let mut inputs = serde_json::Map::new();
+            for name in names {
+                inputs.insert((*name).to_string(), Value::String(format!("{name}-node")));
+            }
+            let value = serde_json::json!({
+                "nodes": {"root": {"inputs": Value::Object(inputs)}},
+                "root": "root",
+                "version": 7,
+            });
+            std::fs::write(
+                self.path.join("flake.lock"),
+                serde_json::to_string_pretty(&value).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 
     /// The three fixed `$/progress` tokens a real nil was observed to send
     /// (research/nil-readiness-measurement.md): NixOS options evaluation, input flake
@@ -435,5 +480,79 @@ mod tests {
             json.contains("coverage"),
             "nil must declare coverage: {json}"
         );
+    }
+
+    // ADR 0021 addendum 2026-09-09, decision (b): a workspace whose `flake.lock` root node has
+    // no `nixpkgs` input never sends a `$/progress` begin, so this mapping starts `unknown`
+    // instead of `initializing` there.
+
+    #[test]
+    fn a_workspace_folder_with_a_nixpkgs_flake_lock_starts_initializing() {
+        let dir = TempDir::new("with-nixpkgs");
+        dir.write_flake_lock(&["nixpkgs"]);
+        let mut m = NilAdapter::new();
+        m.learn_workspace_folders(std::slice::from_ref(&dir.path));
+        assert_eq!(m.initial_state().readiness, Readiness::Initializing);
+        assert_eq!(m.initial_state().health, Health::Unknown);
+    }
+
+    #[test]
+    fn a_workspace_folder_without_a_flake_lock_starts_unknown() {
+        let dir = TempDir::new("no-flake-lock");
+        let mut m = NilAdapter::new();
+        m.learn_workspace_folders(std::slice::from_ref(&dir.path));
+        assert_eq!(m.initial_state().readiness, Readiness::Unknown);
+    }
+
+    #[test]
+    fn a_flake_lock_whose_root_has_no_nixpkgs_input_starts_unknown() {
+        let dir = TempDir::new("no-nixpkgs-input");
+        dir.write_flake_lock(&["some-other-input"]);
+        let mut m = NilAdapter::new();
+        m.learn_workspace_folders(std::slice::from_ref(&dir.path));
+        assert_eq!(m.initial_state().readiness, Readiness::Unknown);
+    }
+
+    #[test]
+    fn a_type_2_show_message_before_any_begin_moves_readiness_to_unknown_too() {
+        let mut m = NilAdapter::new();
+        let state = feed(
+            &mut m,
+            &show_message(2, "Some flake inputs are not available"),
+        )
+        .expect("a type 2 message is a signal");
+        assert_eq!(state.readiness, Readiness::Unknown);
+        assert_eq!(state.health, Health::Warning);
+    }
+
+    #[test]
+    fn unknown_from_a_workspace_without_a_nixpkgs_flake_lock_still_indexes_and_becomes_ready_on_a_begin()
+     {
+        let dir = TempDir::new("no-flake-lock-then-begin");
+        let mut m = NilAdapter::new();
+        m.learn_workspace_folders(std::slice::from_ref(&dir.path));
+        assert_eq!(m.initial_state().readiness, Readiness::Unknown);
+        let state = feed(&mut m, &progress(LOAD_NIXOS_OPTIONS_TOKEN, "begin"))
+            .expect("a begin is a signal even from a workspace that started unknown");
+        assert_eq!(state.readiness, Readiness::Indexing);
+        let state = feed(&mut m, &progress(LOAD_NIXOS_OPTIONS_TOKEN, "end"))
+            .expect("the matching end is a signal");
+        assert_eq!(state.readiness, Readiness::Ready);
+    }
+
+    #[test]
+    fn unknown_from_a_pre_begin_show_message_still_indexes_and_becomes_ready_on_a_begin() {
+        let mut m = NilAdapter::new();
+        feed(
+            &mut m,
+            &show_message(2, "Some flake inputs are not available"),
+        );
+        assert_eq!(m.state.readiness, Readiness::Unknown);
+        let state = feed(&mut m, &progress(LOAD_NIXOS_OPTIONS_TOKEN, "begin"))
+            .expect("a begin is a signal even from unknown");
+        assert_eq!(state.readiness, Readiness::Indexing);
+        let state = feed(&mut m, &progress(LOAD_NIXOS_OPTIONS_TOKEN, "end"))
+            .expect("the matching end is a signal");
+        assert_eq!(state.readiness, Readiness::Ready);
     }
 }

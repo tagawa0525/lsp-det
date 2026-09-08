@@ -5687,10 +5687,13 @@ fn nixd_spec_7_1_readiness_and_definition_through_lsp_det_with_real_nixd() {
 
 const NIL_LOAD_NIXOS_OPTIONS_TOKEN: &str = "nil/loadNixosOptionsProgress";
 
-fn nil_client() -> (ConformanceClient, Value) {
+/// `root` is a workspace folder the mapping's `learn_workspace_folders` reads (ADR 0021 addendum
+/// 2026-09-09): a `flake.lock` with a `nixpkgs` input there is what starts readiness
+/// `initializing` instead of `unknown`. The fake upstream itself never touches the filesystem.
+fn nil_client(root: &std::path::Path) -> (ConformanceClient, Value) {
     let server = ServerUnderTest::lsp_det_with_fake_nil();
     let mut client = ConformanceClient::start(&server);
-    let result = client.initialize(true);
+    let result = client.initialize_with_root(true, root);
     (client, result)
 }
 
@@ -5713,7 +5716,8 @@ fn nil_end(client: &mut ConformanceClient, token: &str) {
 
 #[test]
 fn nil_is_selected_by_server_info_and_declares_document_coverage() {
-    let (mut client, result) = nil_client();
+    let project = support::TempNilProject::new("select-fake");
+    let (mut client, result) = nil_client(&project.root);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"coverage": {"scope": "document", "incomplete": {}}}),
@@ -5726,7 +5730,8 @@ fn nil_is_selected_by_server_info_and_declares_document_coverage() {
 
 #[test]
 fn nil_becomes_ready_only_after_the_end() {
-    let (mut client, _) = nil_client();
+    let project = support::TempNilProject::new("becomes-ready");
+    let (mut client, _) = nil_client(&project.root);
     nil_begin(
         &mut client,
         NIL_LOAD_NIXOS_OPTIONS_TOKEN,
@@ -5743,7 +5748,8 @@ fn nil_becomes_ready_only_after_the_end() {
 
 #[test]
 fn nil_a_later_begin_after_ready_reindexes_spec_7_1_item_3() {
-    let (mut client, _) = nil_client();
+    let project = support::TempNilProject::new("later-begin");
+    let (mut client, _) = nil_client(&project.root);
     nil_begin(
         &mut client,
         NIL_LOAD_NIXOS_OPTIONS_TOKEN,
@@ -5771,9 +5777,10 @@ fn nil_a_later_begin_after_ready_reindexes_spec_7_1_item_3() {
 /// any version).
 #[test]
 fn nil_holds_definition_until_the_load_ends() {
+    let project = support::TempNilProject::new("holds-definition");
     let server = ServerUnderTest::lsp_det_with_fake_nil();
     let mut client = ConformanceClient::start(&server);
-    client.initialize(false);
+    client.initialize_with_root(false, &project.root);
     let id = client.send_definition(&std::path::PathBuf::from("/fake/flake.nix"), 1, 21);
     assert!(
         client.response_within(id, NEGATIVE_WINDOW).is_none(),
@@ -5801,7 +5808,8 @@ fn nil_holds_definition_until_the_load_ends() {
 /// message bodies unchanged, v0.1-design.md 4.4) it still reaches the client unchanged.
 #[test]
 fn nil_show_message_error_moves_health_and_is_forwarded_unchanged() {
-    let (mut client, _) = nil_client();
+    let project = support::TempNilProject::new("show-message-error");
+    let (mut client, _) = nil_client(&project.root);
     client.make_upstream_emit_notification(
         "window/showMessage",
         json!({"type": 1, "message": "Failed to load flake workspace: ..."}),
@@ -5814,6 +5822,33 @@ fn nil_show_message_error_moves_health_and_is_forwarded_unchanged() {
     assert_eq!(
         forwarded["message"], "Failed to load flake workspace: ...",
         "the message body changed: {forwarded}"
+    );
+    client.shutdown();
+}
+
+/// ADR 0021 addendum 2026-09-09, decision (b): a workspace with no `flake.lock` never gets a
+/// `$/progress` begin, so this mapping starts `unknown` instead of `initializing` -- and
+/// `unknown` forwards immediately (spec chapter 8's table), unlike `initializing`
+/// (contrast [`nil_holds_definition_until_the_load_ends`]).
+#[test]
+fn nil_without_a_flake_lock_starts_unknown_and_forwards_without_holding() {
+    let project = support::TempNilProject::without_flake("no-lock-fake");
+    let server = ServerUnderTest::lsp_det_with_fake_nil();
+    let mut client = ConformanceClient::start(&server);
+    client.initialize_with_root(false, &project.root);
+    assert_eq!(
+        client.server_state().readiness,
+        Readiness::Unknown,
+        "no flake.lock at all: nil never sends a begin, so this mapping cannot start \
+         initializing"
+    );
+    let id = client.send_references();
+    let response = client
+        .response_within(id, NEGATIVE_WINDOW)
+        .expect("a client that does not declare the protocol must not be held on unknown");
+    assert!(
+        response.get("result").is_some(),
+        "expected an answer, not an error: {response}"
     );
     client.shutdown();
 }
@@ -6001,8 +6036,12 @@ fn nil_spec_7_1_readiness_definition_and_reload_through_lsp_det_with_real_nil() 
 
 /// 7.1 item 4: a `nixpkgs` input whose store path does not exist (a corrupted `narHash`) never
 /// sends a `$/progress` begin (research doc's "how failures show" section, run 4), only
-/// `window/showMessage` type 2, which this mapping reads as health `warning`. Readiness stays
-/// `initializing`.
+/// `window/showMessage` type 2, which this mapping reads as health `warning` and, since it
+/// arrives before any begin, also moves readiness to `unknown` (ADR 0021 addendum 2026-09-09,
+/// decision point 2; see [`nil_spec_7_1_item_4_health_warning_with_missing_input_through_lsp_det_with_real_nil`]).
+/// This test's own fixture has a `nixpkgs` input to begin with (readiness starts `initializing`,
+/// not `unknown`), so the definition below is held on the ordinary `initializing` -> `indexing`
+/// -> `ready` path, not on this one.
 /// nil answers from its current snapshot and never waits, so a `definition` on a flake input
 /// that reaches it before flake.lock has been read is answered empty (research doc, run 1: no
 /// signal in that window). For a client that does not declare `experimental/serverState`,
@@ -6045,6 +6084,13 @@ fn nil_early_definition_is_held_for_a_client_without_server_state_through_lsp_de
     client.shutdown();
 }
 
+/// 7.1 item 4: a `nixpkgs` input whose store path does not exist (a corrupted `narHash`) never
+/// sends a `$/progress` begin (research doc's "how failures show" section, run 4). Readiness
+/// starts `initializing` (the fixture's `flake.lock` root node does name `nixpkgs`), but the
+/// `window/showMessage` type 2 for the unresolvable store path arrives before any begin, so this
+/// mapping moves readiness to `unknown` in addition to health `warning` (ADR 0021 addendum
+/// 2026-09-09, decision point 2: an observer cannot tell "not indexed yet" from "never will be"
+/// apart once the one signal it had says the load did not start).
 #[test]
 #[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn nil_spec_7_1_item_4_health_warning_with_missing_input_through_lsp_det_with_real_nil() {
@@ -6062,8 +6108,67 @@ fn nil_spec_7_1_item_4_health_warning_with_missing_input_through_lsp_det_with_re
     );
     assert_eq!(
         state.readiness,
-        Readiness::Initializing,
-        "no $/progress begin for a missing store path (research doc)"
+        Readiness::Unknown,
+        "no $/progress begin for a missing store path (research doc), and a type-2 message \
+         before any begin moves readiness to unknown too (ADR 0021 addendum 2026-09-09)"
     );
+    client.shutdown();
+}
+
+/// ADR 0021 addendum 2026-09-09, decision (b): a workspace with only a plain `.nix` file -- no
+/// flake at all -- never gets a `$/progress` begin (real nil's `nix.workspaces` never resolves
+/// one), so this mapping starts `unknown` instead of `initializing`. `unknown` forwards
+/// immediately (spec chapter 8's table) instead of being held, so a client that does not declare
+/// `experimental/serverState` still gets its `didOpen`-then-`references` answered without
+/// waiting on a load that will never begin; `references` remains limited to the requesting
+/// document, same as with a flake (ADR 0021 decision D).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nil_without_a_flake_lock_is_not_held_and_answers_within_the_document_through_lsp_det_with_real_nil()
+ {
+    assert_nix_is_on_path();
+    let project = support::TempNilProject::without_flake("no-lock-real");
+    let default_nix = project.file("default.nix");
+    let mut client = ConformanceClient::start(&real_nil(&project));
+    client.initialize_with_root(false, &project.root);
+    assert_eq!(
+        client.server_state().readiness,
+        Readiness::Unknown,
+        "no flake.lock at all: real nil never sends a begin"
+    );
+
+    client.did_open(&default_nix, "nix");
+    let (line, character) = support::NIL_NO_FLAKE_GREETING_BINDING;
+    let id = client.send_request(
+        "textDocument/references",
+        json!({
+            "textDocument": {"uri": support::file_uri(&default_nix)},
+            "position": {"line": line, "character": character},
+            "context": {"includeDeclaration": false},
+        }),
+    );
+    // Not held (spec chapter 8's table forwards on `unknown`): no `$/progress` that will never
+    // come is waited on, so the answer must arrive within an ordinary round trip.
+    let response = client
+        .response_within(id, NEGATIVE_WINDOW)
+        .expect("a client that does not declare the protocol must not be held on unknown");
+    let locations = response["result"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected an array of locations: {response}"));
+    assert_eq!(
+        locations.len(),
+        2,
+        "expected both uses of \"greeting\" (first and second) within the document: {response}"
+    );
+    let default_nix_uri = support::file_uri(&default_nix);
+    for location in locations {
+        let uri = location["uri"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a location has a uri: {location}"));
+        assert_eq!(
+            uri, default_nix_uri,
+            "expected every location to be in default.nix (document-local references): {response}"
+        );
+    }
     client.shutdown();
 }

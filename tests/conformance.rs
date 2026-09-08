@@ -5819,9 +5819,11 @@ fn nil_spec_7_1_readiness_definition_and_reload_through_lsp_det_with_real_nil() 
         1,
         "expected exactly one definition location: {response}"
     );
+    // `Location` carries `uri`; a `LocationLink` (allowed by LSP) carries `targetUri`.
     let uri = locations[0]["uri"]
         .as_str()
-        .unwrap_or_else(|| panic!("a location has a uri: {response}"));
+        .or_else(|| locations[0]["targetUri"].as_str())
+        .unwrap_or_else(|| panic!("a location has a uri or targetUri: {response}"));
     assert!(
         uri.ends_with("/flake.nix"),
         "expected nixpkgs's own flake.nix, got {uri}"
@@ -5884,9 +5886,11 @@ fn nil_early_definition_is_held_for_a_client_without_server_state_through_lsp_de
         1,
         "expected the held definition to be answered complete after the load: {response}"
     );
+    // `Location` carries `uri`; a `LocationLink` (allowed by LSP) carries `targetUri`.
     let uri = locations[0]["uri"]
         .as_str()
-        .unwrap_or_else(|| panic!("a location has a uri: {response}"));
+        .or_else(|| locations[0]["targetUri"].as_str())
+        .unwrap_or_else(|| panic!("a location has a uri or targetUri: {response}"));
     assert!(
         uri.starts_with("file:///nix/store/") && uri.ends_with("/flake.nix"),
         "expected nixpkgs's own flake.nix in the store, got {uri}"

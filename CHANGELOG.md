@@ -15,6 +15,7 @@
 - **nil**（ADR 0021 追補、PR #81）: begin が一度も来ない workspace（flake がない、flake.lock がない、`nixpkgs` の入力がない、入力の store path がない）の扱いを (a) `initializing` のままから (b) `unknown` に。`initialize` の `workspaceFolders` の `flake.lock` の root の入力に `nixpkgs` があるかで判定し、begin 前の type 2 の `window/showMessage` も readiness を `unknown` にする。ユーザーの決定
 - **clangd**（ADR 0020 追補、PR #82）: compile_commands.json のない workspace の決定 (a) を改め、最初の `didOpen` で観測者が clangd と同じ場所（ファイルのディレクトリから根まで `compile_commands.json` / `build/compile_commands.json` / `compile_flags.txt`。`--compile-commands-dir` があればそこだけ）を探し、見つからなければ `unknown` に。上流の引数を写像に知らせる `learn_upstream_arguments` を追加。ユーザーの決定
 - **仕様 1.0**（ADR 0022、PR #84）: `Status` を安定版にし、仕様に固有の版 1.0 を v0.7.0 で凍結。6 章 4 項にサーバー側の保留との関係（保留は `health` と `freshness` を言えず判断をクライアントから奪う。保留は禁じない）。8.1 の `readiness: "unknown"` に「信号が来ないと観測者が判断した」を含める。11 章に変更記録
+- **英語版と体裁**（ADR 0017 追補 F、PR #86）: README.md から直接リンクする 6 本（vision、v0.1-design、ドッグフーディングの記録、ADR の索引、`scripts/upstream/README.md`、`dogfood/serena/README.md`）は英語が正になり、日本語版は同名の `.ja.md`。`docs/research/README.md` に英語の索引。README にバッジ・導入・License の節。MIT OR Apache-2.0 の二重ライセンス（ユーザーの決定）、Cargo.toml のメタデータ、GitHub の description と topics
 
 ## 0.6.0（2026-09-08）
 

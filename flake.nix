@@ -6,7 +6,7 @@
   # flake.lock を更新して言語サーバーの版が変わったら、実サーバーの結合テスト
   # （cargo test --test conformance -- --ignored）を通してから TESTED_VERSIONS を
   # 動かすこと。守れない保証の宣言は仕様 5.1 違反である。
-  description = "lsp-det の開発環境。default はビルドの道具だけ、servers は言語サーバー全部（準拠テストの実サーバー結合とドッグフーディング用）";
+  description = "lsp-det のパッケージと開発環境。packages.default は lsp-det 本体、devShells の default はビルドの道具だけ、servers は言語サーバー全部（準拠テストの実サーバー結合とドッグフーディング用）";
 
   inputs = {
     # システム構成（~/nix/nixfiles）と同じ rev
@@ -127,6 +127,17 @@
       ];
     in
     {
+      # lsp-det 本体。日常のドッグフーディングはこれを flake input として取り込み
+      # （~/nix/nixfiles）、dogfood/claude-plugin を ~/.claude/skills に置く（dogfood/README.md）。
+      # 版は Cargo.toml から取る。
+      packages.${system}.default = pkgs.rustPlatform.buildRustPackage {
+        pname = "lsp-det";
+        version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
+        src = self;
+        cargoLock.lockFile = ./Cargo.lock;
+        # 単体テストの 1 つ（watched_files）が git ls-files を呼ぶ
+        nativeCheckInputs = [ pkgs.git ];
+      };
       devShells.${system} = {
         default = pkgs.mkShell { packages = tools; };
         servers = pkgs.mkShell { packages = tools ++ servers; };

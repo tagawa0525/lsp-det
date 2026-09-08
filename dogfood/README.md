@@ -29,13 +29,13 @@ A local plugin that makes Claude Code launch rust-analyzer, gopls, pyright, type
 
 ## Daily use (loading the plugin on every launch)
 
-Claude Code loads a plugin placed under `~/.claude/skills/` on every launch (as `<directory name>@skills-dir`), so a symlink from there to `dogfood/claude-plugin` makes lsp-det the LSP path for Rust, Python, TypeScript, Go, and Nix without `--plugin-dir` (ADR 0021 decision F). Three things must hold in the shell that starts Claude Code:
+For everyday use the binary and the plugin come from a pinned revision of this repository, not from a working tree. The flake exports `packages.default` (lsp-det itself), so a NixOS / home-manager configuration takes this repository as a flake input, puts that package on the PATH, and places `dogfood/claude-plugin` from the input's source under `~/.claude/skills/` (Claude Code loads a plugin there on every launch, as `<directory name>@skills-dir`). Updating is `nix flake update lsp-det` and a rebuild (ADR 0021 decision F). Three things must hold:
 
-- `lsp-det` is on the PATH (for example `target/release` of this checkout on the login PATH). It is still the working tree's build, not an installed binary
-- The upstream commands are on the PATH: `rust-analyzer` usually comes from the project's own dev shell (direnv), `nixd` and `pyright-langserver` and `typescript-language-server` must be installed by the user (the official plugins expect them on the PATH too)
+- The upstream commands are on the PATH: `rust-analyzer` usually comes from the project's own dev shell (direnv); `nixd`, `pyright-langserver`, and `typescript-language-server` must be installed by the user (the official plugins expect them on the PATH too)
 - The official `rust-analyzer-lsp`, `pyright-lsp`, and `typescript-lsp` plugins are disabled. When two plugins claim an extension the one registered first wins, and the order between the skills directory and the marketplace is not documented
+- The `--plugin-dir` route above (the working tree's build) is for observing a change before it is on `main`; do not enable both at once, since they claim the same extensions
 
-On NixOS the author does this from home-manager (an out-of-store symlink into `~/.claude/skills`, `home.sessionPath`, and `enabledPlugins`; the configuration lives outside this repository).
+The author's configuration lives outside this repository (home-manager, `~/nix/nixfiles`).
 
 ## What to observe ([docs/v0.1-design.md](../docs/v0.1-design.md), chapter 8)
 

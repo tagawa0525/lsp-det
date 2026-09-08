@@ -1108,6 +1108,23 @@ impl ConformanceClient {
         self.notify("exit", json!(null));
     }
 
+    /// The exit status of the subject if it exits within `window` (checks every 10ms), `None` if
+    /// it is still running at the end. Reaps the child, so use this rather than
+    /// `wait_until_exited` for the subject itself: an exited child that has not been reaped is a
+    /// zombie, which `kill(pid, 0)` still counts as alive.
+    pub fn exit_status_within(&mut self, window: Duration) -> Option<std::process::ExitStatus> {
+        let deadline = std::time::Instant::now() + window;
+        loop {
+            if let Some(status) = self.child.try_wait().expect("cannot query the subject") {
+                return Some(status);
+            }
+            if std::time::Instant::now() >= deadline {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     /// The subject's stderr, read to EOF. Call after `shutdown()`: EOF arrives when the subject
     /// exits, so reading a live subject would hang. The read comes before `wait()`, otherwise a
     /// subject blocked on a full stderr pipe could never exit. The upstream's stderr is relayed

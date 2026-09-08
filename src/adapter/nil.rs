@@ -577,6 +577,29 @@ mod tests {
     }
 
     #[test]
+    fn a_flake_lock_is_read_through_its_root_pointer_not_a_node_named_root() {
+        // flake.lock names its root node in the top-level "root" field; the key is "root" in
+        // practice but nothing in the format requires it.
+        let dir = TempDir::new("renamed-root");
+        let value = serde_json::json!({
+            "nodes": {
+                "top": {"inputs": {"nixpkgs": "nixpkgs-node"}},
+                "root": {"inputs": {}},
+            },
+            "root": "top",
+            "version": 7,
+        });
+        std::fs::write(
+            dir.path.join("flake.lock"),
+            serde_json::to_string_pretty(&value).unwrap(),
+        )
+        .unwrap();
+        let mut m = NilAdapter::new();
+        m.learn_workspace_folders(std::slice::from_ref(&dir.path));
+        assert_eq!(m.initial_state().readiness, Readiness::Initializing);
+    }
+
+    #[test]
     fn a_flake_lock_whose_root_has_no_nixpkgs_input_starts_unknown() {
         let dir = TempDir::new("no-nixpkgs-input");
         dir.write_flake_lock(&["some-other-input"]);

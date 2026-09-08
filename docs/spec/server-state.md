@@ -2,7 +2,7 @@
 
 [日本語](server-state.ja.md)
 
-Status: draft. This document is the normative text of the server state protocol. Where any other document disagrees with it, this document is right. Until the protocol is adopted by LSP itself, it is implemented as an extension under `experimental/` (4.3).
+Status: stable. Specification version 1.0 (frozen at lsp-det v0.7.0). A change after this raises the version and is listed in the change record (chapter 11). This document is the normative text of the server state protocol. Where any other document disagrees with it, this document is right. Until the protocol is adopted by LSP itself, it is implemented as an extension under `experimental/` (4.3).
 
 ## 1. Purpose
 
@@ -169,7 +169,7 @@ A server or observer sends `experimental/serverStateChanged` only when the clien
 1. **Coverage** (when `coverage` is declared): while `readiness` is `"ready"` and `health` is not `"error"`, responses to the methods of 7.0 must be computed over the index of the declared `scope`, and the result of the same query must not grow later as indexing of that scope proceeds. A `scope` of `"workspace"` is the whole workspace; `"openDocuments"` is the documents the client has opened; `"document"` is the document the request names. A method listed in `incomplete` may return an incomplete result when the number of items in the response reached its cap. A method not listed must not be capped
 2. **Freshness** (when `freshness` is declared): while `readiness` is `"ready"` and `health` is not `"error"`, every `textDocument/didChange` received so far, and every `workspace/didChangeWatchedFiles` change of a kind listed in `fileChanges`, must have been incorporated. A change of a kind not listed may still be in the middle of being incorporated after `"ready"` (the server declares this with the awareness that it cannot convey the incorporation through `readiness`). The promise extends only to changes the server was told about; changes the server picked up through its own file watching are outside it (an observer cannot see them and cannot verify them). The substance of this guarantee is cross-file freshness: a query starting from a file other than the changed one sees the change reflected in the index. Most single-file change-then-query sequences are already satisfied by LSP's existing ordering guarantee (on one connection, a later request is processed after an earlier notification)
 3. **Reindexing**: when a reanalysis of the workspace starts (a dependency file changed, a branch was switched, and so on), `readiness` must go back to `"indexing"` and be notified
-4. **Relation to existing mechanisms**: `$/progress` is a progress display for humans and does not replace this protocol. The `ServerCancelled` error forces polling and does not replace this protocol either (see the discussion in LSP issue #1367)
+4. **Relation to existing mechanisms**: `$/progress` is a progress display for humans and does not replace this protocol. The `ServerCancelled` error forces polling and does not replace this protocol either (see the discussion in LSP issue #1367). A server that holds a request of 7.0 itself until its index is complete (Dart, jdtls, gopls, nixd; chapter 10) removes the empty answer of an unfinished index but not the other two lies, and takes a decision away from the client: a hold cannot say whether what is being waited for is an index or a broken server (`health`), cannot say which edits the answer will include (`freshness`), and does not let a client that would rather proceed with a partial answer do so. To the client a held request is indistinguishable from an unresponsive server, and it runs into the client's own timeout with no explanation. This protocol makes the state visible so that waiting becomes the client's decision (chapter 9). It does not forbid a server from holding as well; a server that holds and also speaks this protocol reports `indexing` while it holds
 5. **Expressing failure**: a server must express a failure of indexing (a workspace that cannot be loaded, and so on) through `health` (`"error"` or `"warning"`), not through `readiness`. `readiness` may stay at `"indexing"` or become `"ready"`. While `health` is `"error"`, the guarantees of items 1 and 2 do not apply. Recommended interpretation (non-normative; as chapter 1 says, the client's behavior is not dictated): waiting for `readiness` to become `"ready"` in this situation is against the intent of this protocol. A waiting party looks at `health` and stops waiting
 6. **No use of time**: the values of this protocol are determined by signals alone (a change in the server's state, an observation by an observer). A value must not be changed on the grounds of elapsed time. Synthesizing "no signal for a while, so treat it as `ready`" creates the very silent lie the protocol removes
 
@@ -213,7 +213,7 @@ A party that watches the server from outside does not know what the server knows
 An observer may use the value `"unknown"` for each of `health` and `readiness`.
 
 - `health: "unknown"`: there is no way to observe health, or it has not been observed yet
-- `readiness: "unknown"`: there is no way to observe readiness
+- `readiness: "unknown"`: there is no way to observe readiness, or the observer has determined that no signal is coming in this workspace (chapter 10: nil without a `nixpkgs` input, clangd without a compilation database)
 
 While `unknown`, nothing can be read from that axis. The client decides whether to proceed knowing that the response may be incomplete or to wait on its own (by the forward-compatibility rule of chapter 3, a client that does not know `unknown` ends up treating it the same way).
 
@@ -294,3 +294,9 @@ The caps on `workspace/symbol` (measured on 2026-09-04, [research/workspace-symb
 The name `experimental/serverState` is close to rust-analyzer's `experimental/serverStatus`. This is deliberate and marks the succession. The two are easy to confuse in client logs and settings, so take care when implementing and operating. The upstream proposal states the succession explicitly.
 
 Reusing the same name (repurposing `experimental/serverStatus`) is not adopted. The payloads are incompatible (`quiescent: bool` versus the three values of `readiness`), so existing parsers would receive a different schema under the same name. Moreover a relay passes the upstream's real `serverStatus` through verbatim, so under one name two streams of notifications with different schemas and different senders would flow on one connection and could not be told apart. Under different names the two coexist (the details of the rejection are in ADR 0006, decision 4).
+
+## 11. Change record
+
+| Version | Date       | Change                                                                                                                                                 |
+| ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1.0     | 2026-09-09 | First stable version (lsp-det v0.7.0). The draft had been revised through ADR 0009 to 0022; the decisions and rejected alternatives are in `docs/adr/` |

@@ -5311,6 +5311,28 @@ fn clangd_without_lsp_det_answers_partial_references_while_indexing() {
     client.shutdown();
 }
 
+/// Counts whole-word occurrences of `word` in `text`, splitting on anything that is not part of
+/// a Nix identifier (alphanumeric, `_`, or `'`). Used to derive the expected `references` count
+/// for nixd and nil's 7.2 item 1 tests from the fixture text itself instead of hard-coding it --
+/// a plain substring search would also match "nixpkgs" when `word` is "pkgs".
+fn count_word_occurrences(text: &str, word: &str) -> usize {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '\''))
+        .filter(|token| *token == word)
+        .count()
+}
+
+/// Like [`count_word_occurrences`], but excludes 0-indexed line `skip_line` -- the parameter's
+/// own binding site. Both nixd and nil's `references` return only actual uses, never the
+/// declaration site itself, even with `includeDeclaration: true` (measured against real
+/// servers; nixd's source calls this `uses()`, ADR 0021 decision E answer (b)).
+fn count_word_occurrences_excluding_line(text: &str, word: &str, skip_line: u32) -> usize {
+    text.lines()
+        .enumerate()
+        .filter(|(i, _)| *i as u32 != skip_line)
+        .map(|(_, line)| count_word_occurrences(line, word))
+        .sum()
+}
+
 // ---------------------------------------------------------------------------
 // nixd (M25, ADR 0021 decision C row for nixd). The mapping in
 // research/nixd-readiness-measurement.md: identified by `serverInfo.name` "nixd" exactly (the
@@ -5320,9 +5342,9 @@ fn clangd_without_lsp_det_answers_partial_references_while_indexing() {
 // to the set of unfinished evaluations and moves readiness to `indexing`; the matching end
 // removes it, and readiness becomes `ready` only once the set is empty. A later begin after
 // `ready` (a re-evaluation after `didChangeConfiguration`) goes back to `indexing`. No health
-// signal. No guarantee is declared for any version: ADR 0021 decision E (how to name the
-// document-scoped `references` nixd answers) is pending, so `guarantees()` is
-// `notifications_only()` unconditionally.
+// signal. `coverage: {scope: "document", incomplete: {}}` is declared for tested versions
+// (`references` is limited to the requesting document, ADR 0021 decision E answer (b)); no
+// `freshness` (7.3 needs a cross-file query, which a document-local server cannot take).
 // ---------------------------------------------------------------------------
 
 const NIXD_NIXPKGS_TOKEN: i64 = 1804289383;
@@ -5508,21 +5530,82 @@ fn assert_nix_path_is_set() {
     );
 }
 
-/// Identity and the guarantee declared (none, for any version -- ADR 0021 decision E is
-/// pending).
+/// Identity and the guarantee declared: `coverage: {scope: "document", incomplete: {}}`, no
+/// `freshness` (ADR 0021 decision E, answer (b); 2.9.2 is a tested version).
 #[test]
 #[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
-fn nixd_is_selected_by_its_real_server_info_and_declares_no_guarantee() {
+fn nixd_is_selected_by_its_real_server_info_and_declares_document_coverage() {
     assert_nix_path_is_set();
     let project = support::TempNixdProject::new("select");
     let mut client = ConformanceClient::start(&real_nixd(&project));
     let result = client.initialize_with_root(true, &project.root);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({}),
-        "a guarantee is declared for real nixd, which ADR 0021 decision E has not settled: {result}"
+        json!({"coverage": {"scope": "document", "incomplete": {}}}),
+        "real nixd 2.9.2 must declare document-scoped coverage and no freshness \
+         (ADR 0021 decision E, answer (b)): {result}"
     );
     assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+/// 7.2 item 1: after `ready`, `textDocument/references` on the `pkgs` formal parameter matches
+/// the precomputed complete result within the requesting document (ADR 0021 decision E, answer
+/// (b); the research doc's run 7 -- `references` never crosses into another file even when it
+/// is open). Computes the expected count from the fixture text itself rather than hard-coding
+/// it (excluding the declaration line: nixd's `references` returns only actual uses, never the
+/// parameter's own binding site, even with `includeDeclaration: true`), and asserts it is at
+/// least 2 (the two uses in `NIXD_DEFAULT_NIX`) so the test is not vacuous.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nixd_spec_7_2_item_1_references_are_complete_within_the_document_through_lsp_det_with_real_nixd()
+{
+    assert_nix_path_is_set();
+    let project = support::TempNixdProject::new("references");
+    let default_nix = project.file("default.nix");
+    let mut client = ConformanceClient::start(&real_nixd(&project));
+    client.initialize_with_root(true, &project.root);
+
+    client.did_open(&default_nix, "nix");
+    client.wait_until_ready();
+
+    let (line, character) = support::NIXD_PKGS_PARAMETER;
+    let response = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": {"uri": support::file_uri(&default_nix)},
+            "position": {"line": line, "character": character},
+            "context": {"includeDeclaration": true},
+        }),
+    );
+    let locations = response["result"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected an array of locations: {response}"));
+
+    let expected_count =
+        count_word_occurrences_excluding_line(support::NIXD_DEFAULT_NIX, "pkgs", line);
+    assert!(
+        expected_count >= 2,
+        "the fixture must contain at least 2 uses of \"pkgs\" for this test to be meaningful: \
+         {expected_count}"
+    );
+    assert_eq!(
+        locations.len(),
+        expected_count,
+        "expected every non-declaration \"pkgs\" occurrence in default.nix to be a location: \
+         {response}"
+    );
+    let default_nix_uri = support::file_uri(&default_nix);
+    for location in locations {
+        let uri = location["uri"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a location has a uri: {location}"));
+        assert_eq!(
+            uri, default_nix_uri,
+            "expected every location to be in default.nix (document-local references): \
+             {response}"
+        );
+    }
     client.shutdown();
 }
 
@@ -5595,9 +5678,10 @@ fn nixd_spec_7_1_readiness_and_definition_through_lsp_det_with_real_nixd() {
 // readiness becomes `ready` only once the set is empty. A later begin after `ready` (a reload
 // after a `didChangeWatchedFiles` Changed for flake.lock, or a `didOpen` / `didChange` of
 // flake.nix) goes back to `indexing`. `window/showMessage` type 1 -> `error`, type 2 ->
-// `warning`; the begin of any of the three tokens -> `ok`. No guarantee is declared for any
-// version: ADR 0021 decision E (how to name the document-scoped `references` nil answers too)
-// is pending, so `guarantees()` is `notifications_only()` unconditionally.
+// `warning`; the begin of any of the three tokens -> `ok`. `coverage: {scope: "document",
+// incomplete: {}}` is declared for tested versions (`references` is limited to the requesting
+// document, ADR 0021 decision E answer (b)); no `freshness` (7.3 needs a cross-file query,
+// which a document-local server cannot take).
 // ---------------------------------------------------------------------------
 
 const NIL_LOAD_NIXOS_OPTIONS_TOKEN: &str = "nil/loadNixosOptionsProgress";
@@ -5758,21 +5842,81 @@ fn assert_nix_is_on_path() {
     );
 }
 
-/// Identity and the guarantee declared (none, for any version -- ADR 0021 decision E is
-/// pending).
+/// Identity and the guarantee declared: `coverage: {scope: "document", incomplete: {}}`, no
+/// `freshness` (ADR 0021 decision E, answer (b); 2026-07-23 is a tested version).
 #[test]
 #[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
-fn nil_is_selected_by_its_real_server_info_and_declares_no_guarantee() {
+fn nil_is_selected_by_its_real_server_info_and_declares_document_coverage() {
     assert_nix_is_on_path();
     let project = support::TempNilProject::new("select");
     let mut client = ConformanceClient::start(&real_nil(&project));
     let result = client.initialize_with_root(true, &project.root);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({}),
-        "a guarantee is declared for real nil, which ADR 0021 decision E has not settled: {result}"
+        json!({"coverage": {"scope": "document", "incomplete": {}}}),
+        "real nil 2026-07-23 must declare document-scoped coverage and no freshness \
+         (ADR 0021 decision E, answer (b)): {result}"
     );
     assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+/// 7.2 item 1: after `ready`, `textDocument/references` on the `pkgs` binding matches the
+/// precomputed complete result within the requesting document (ADR 0021 decision E, answer (b);
+/// same reason as nixd, ADR 0021 decision D). Computes the expected count from the fixture's
+/// actual on-disk content (the file is generated with a nixpkgs rev interpolated in, so the
+/// text is not a fixed constant) rather than hard-coding it (excluding the declaration line:
+/// like nixd, nil's `references` returns only actual uses, never the binding's own site, even
+/// with `includeDeclaration: true`), and asserts it is at least 2 (the two uses in
+/// `flake.nix`) so the test is not vacuous.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nil_spec_7_2_item_1_references_are_complete_within_the_document_through_lsp_det_with_real_nil() {
+    assert_nix_is_on_path();
+    let project = support::TempNilProject::new("references");
+    let flake_nix = project.file("flake.nix");
+    let mut client = ConformanceClient::start(&real_nil(&project));
+    client.initialize_with_root(true, &project.root);
+
+    client.did_open(&flake_nix, "nix");
+    client.wait_until_ready();
+
+    let (line, character) = support::NIL_PKGS_BINDING;
+    let response = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": {"uri": support::file_uri(&flake_nix)},
+            "position": {"line": line, "character": character},
+            "context": {"includeDeclaration": true},
+        }),
+    );
+    let locations = response["result"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected an array of locations: {response}"));
+
+    let flake_nix_content = std::fs::read_to_string(&flake_nix).unwrap();
+    let expected_count = count_word_occurrences_excluding_line(&flake_nix_content, "pkgs", line);
+    assert!(
+        expected_count >= 2,
+        "the fixture must contain at least 2 uses of \"pkgs\" for this test to be meaningful: \
+         {expected_count}"
+    );
+    assert_eq!(
+        locations.len(),
+        expected_count,
+        "expected every non-declaration \"pkgs\" occurrence in flake.nix to be a location: \
+         {response}"
+    );
+    let flake_nix_uri = support::file_uri(&flake_nix);
+    for location in locations {
+        let uri = location["uri"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a location has a uri: {location}"));
+        assert_eq!(
+            uri, flake_nix_uri,
+            "expected every location to be in flake.nix (document-local references): {response}"
+        );
+    }
     client.shutdown();
 }
 

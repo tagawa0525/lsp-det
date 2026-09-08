@@ -4,7 +4,7 @@
 
 ## 予定
 
-- 外向きの提出（戦略・順序・規則は `docs/upstream-submissions.md`。文面を作ってユーザーの確認をもらってから出す）: 提出前の準備（済: typescript-language-server のパッチの作り直し（fork の `tsserver-exit-by-signal`、2026-09-09）。残: gopls を health に縮める、rust-analyzer の `serverStatus` への field 追加案、LSP 本体向けの `.proposed.ts`、Serena の再測定）→ 第 1 段（typescript-language-server、Claude Code anthropics/claude-code#76870 への `experimental/serverState` の提案、pyright）→ 第 2 段（Serena の registry、rust-analyzer の両案、gopls の health）→ 第 3 段（12 サーバー、LSP 本体）
+- 外向きの提出（戦略・順序・規則は `docs/upstream-submissions.md`。文面を作ってユーザーの確認をもらってから出す）: 提出前の準備（済: typescript-language-server のパッチの作り直し（fork の `tsserver-exit-by-signal`、2026-09-09。同日 typescript-language-server/typescript-language-server#1125 として提出）。残: gopls を health に縮める、rust-analyzer の `serverStatus` への field 追加案、LSP 本体向けの `.proposed.ts`、Serena の再測定）→ 第 1 段（typescript-language-server、Claude Code anthropics/claude-code#76870 への `experimental/serverState` の提案、pyright）→ 第 2 段（Serena の registry、rust-analyzer の両案、gopls の health）→ 第 3 段（12 サーバー、LSP 本体）
 - 保留の再測定: Kotlin（次の release）、sourcekit-lsp（nixpkgs に 6.x が来たら）
 
 ## 0.7.0（2026-09-09）

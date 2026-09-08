@@ -28,6 +28,9 @@ pub struct Tracker {
     initialization_options: Option<serde_json::Value>,
     /// The `workspaceFolders` of the client's `initialize`, held for the same reason.
     workspace_folders: Vec<std::path::PathBuf>,
+    /// The arguments lsp-det itself launched the upstream with, held for the same reason
+    /// (`Mapping::learn_upstream_arguments`, ADR 0020 addendum 2026-09-09).
+    upstream_arguments: Vec<String>,
 }
 
 impl Default for Tracker {
@@ -46,6 +49,16 @@ impl Tracker {
             named_but_unknown: false,
             initialization_options: None,
             workspace_folders: Vec::new(),
+            upstream_arguments: Vec::new(),
+        }
+    }
+
+    /// Remember the arguments lsp-det itself launched the upstream with, and hand them to the
+    /// mapping if one is already selected (the same pattern as `remember_initialize`).
+    pub fn remember_upstream_arguments(&mut self, args: &[String]) {
+        self.upstream_arguments = args.to_vec();
+        if let Some(adapter) = self.adapter.as_mut() {
+            adapter.learn_upstream_arguments(&self.upstream_arguments);
         }
     }
 
@@ -126,6 +139,7 @@ impl Tracker {
             adapter.learn_initialization_options(options);
         }
         adapter.learn_workspace_folders(&self.workspace_folders);
+        adapter.learn_upstream_arguments(&self.upstream_arguments);
         self.state = adapter.initial_state();
         self.adapter = Some(adapter);
         self.identity = Some(identity);
@@ -420,6 +434,55 @@ mod tests {
             observe(&mut tracker, &status("ok", true)).is_some(),
             "still rust-analyzer's mapping"
         );
+    }
+
+    // --- Upstream arguments (ADR 0020 addendum 2026-09-09) --------------------------------
+
+    #[test]
+    fn upstream_arguments_reach_the_mapping_selected_afterward() {
+        // clangd's mapping reads --compile-commands-dir from the arguments lsp-det itself
+        // launched the upstream with (ADR 0020 addendum 2026-09-09). The opened file's own
+        // directory has a compile_commands.json right beside it, but --compile-commands-dir
+        // points elsewhere (an empty directory): if Tracker does not hand the arguments to the
+        // mapping once selected (`adopt`, the same as workspace_folders and
+        // initializationOptions), the mapping falls back to its own directory walk from the
+        // opened file, finds that database, and never moves to `unknown` -- so this only
+        // passes when the wiring actually reaches the mapping.
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-tracker-upstream-args-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let cdb_dir = root.join("cdb"); // has no database of its own
+        let open_dir = root.join("open");
+        std::fs::create_dir_all(&cdb_dir).unwrap();
+        std::fs::create_dir_all(&open_dir).unwrap();
+        std::fs::write(open_dir.join("compile_commands.json"), "[]").unwrap();
+        let opened = open_dir.join("main.cpp");
+        std::fs::write(&opened, "").unwrap();
+
+        let mut tracker = Tracker::new();
+        tracker.remember_upstream_arguments(&[format!(
+            "--compile-commands-dir={}",
+            cdb_dir.display()
+        )]);
+        tracker.select_mapping(Some(&ServerInfo {
+            name: "clangd".to_string(),
+            version: Some(crate::adapter::clangd::TESTED_VERSIONS[0].to_string()),
+        }));
+        let body = format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}"}}}}}}"#,
+            crate::uri::path_to_uri(&opened)
+        );
+        let view = peek(body.as_bytes()).unwrap();
+        let state = tracker.observe_client(&view, body.as_bytes()).expect(
+            "--compile-commands-dir should have been handed to the mapping, scoping the \
+                 probe to cdb (which has no database) instead of falling back to the opened \
+                 file's own directory (which has one)",
+        );
+        assert_eq!(state.readiness, Readiness::Unknown);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     // --- Starting state ------------------------------------------------------------------

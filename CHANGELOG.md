@@ -10,6 +10,7 @@
 ## 未リリース
 
 - **nil の begin なし workspace**（ADR 0021 追補、2026-09-09）: begin が一度も来ない workspace（flake がない、flake.lock がない、nixpkgs の入力がない、入力の store path がない）の扱いを (a) `initializing` のままから (b) `unknown` に変更。`initialize` の `workspaceFolders` の `flake.lock` の root の入力に `nixpkgs` があるかで判定し、begin 前の type 2 の `window/showMessage` も readiness を `unknown` にする
+- clangd: compile_commands.json のないワークスペースの扱いを、最初の `didOpen` で観測者がデータベースの所在を読み、見つからなければ `unknown` にする決定へ改めた（決定 (a)「`initializing` のまま」からの変更。ADR 0020 追補 2026-09-09）
 
 ## 0.6.0（2026-09-08）
 

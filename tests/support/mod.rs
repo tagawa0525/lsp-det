@@ -1732,6 +1732,22 @@ impl TempClangdProject {
         TempClangdProject { root }
     }
 
+    /// Like [`Self::with_many_callers`], but no `compile_commands.json` (or any other
+    /// compilation database) anywhere in the tree (ADR 0020 addendum 2026-09-09): the
+    /// compilation-database probe on the first `didOpen` finds nothing and settles on
+    /// `unknown`.
+    pub fn without_database(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-clangd-nodb-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("cannot create the temporary project");
+        std::fs::write(root.join("lib.h"), CLANGD_LIB_H).unwrap();
+        std::fs::write(root.join("lib.cpp"), CLANGD_LIB_CPP).unwrap();
+        TempClangdProject { root }
+    }
+
     pub fn file(&self, name: &str) -> PathBuf {
         self.root.join(name)
     }

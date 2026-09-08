@@ -224,7 +224,6 @@ impl Mapping for ClangdAdapter {
         if !view.is_notification() || view.method() != Some(DID_OPEN_METHOD) {
             return None;
         }
-        self.database_probed = true;
         #[derive(Deserialize)]
         struct Document {
             uri: String,
@@ -241,6 +240,9 @@ impl Mapping for ClangdAdapter {
         let envelope = serde_json::from_slice::<Envelope>(body).ok()?;
         let path = uri_to_path(&envelope.params.text_document.uri)?;
         let dir = path.parent()?;
+        // Only a didOpen that names a real path is the probe; one that does not (an untitled
+        // buffer, a non-file scheme) teaches nothing and leaves the probe for the next didOpen.
+        self.database_probed = true;
         let found = match &self.compile_commands_dir {
             Some(cdb_dir) => cdb_dir.join(COMPILE_COMMANDS_JSON).is_file(),
             None => database_reachable_from(dir),

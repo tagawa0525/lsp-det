@@ -5854,6 +5854,46 @@ fn nil_spec_7_1_readiness_definition_and_reload_through_lsp_det_with_real_nil() 
 /// sends a `$/progress` begin (research doc's "失敗の見え方" section, run 4), only
 /// `window/showMessage` type 2, which this mapping reads as health `warning`. Readiness stays
 /// `initializing`.
+/// nil answers from its current snapshot and never waits, so a `definition` on a flake input
+/// that reaches it before flake.lock has been read is answered empty (research doc, run 1: no
+/// signal in that window). For a client that does not declare `experimental/serverState`,
+/// lsp-det holds the request while `initializing` (chapter 9's stand-in) and forwards it once
+/// the load has ended, so the answer is complete. A client that declares the capability is
+/// expected to wait itself (the test above sends after the begin for that reason).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nil_early_definition_is_held_for_a_client_without_server_state_through_lsp_det_with_real_nil() {
+    assert_nix_is_on_path();
+    let project = support::TempNilProject::new("held");
+    let flake_nix = project.file("flake.nix");
+    let mut client = ConformanceClient::start(&real_nil(&project));
+    client.initialize_with_root(false, &project.root);
+
+    client.did_open(&flake_nix, "nix");
+    let (line, character) = support::NIL_NIXPKGS_INPUT_DECLARATION;
+    let id = client.send_definition(&flake_nix, line, character);
+
+    let response = client.await_response_to(id);
+    let locations = match &response["result"] {
+        Value::Array(items) => items.clone(),
+        Value::Null => Vec::new(),
+        single => vec![single.clone()],
+    };
+    assert_eq!(
+        locations.len(),
+        1,
+        "expected the held definition to be answered complete after the load: {response}"
+    );
+    let uri = locations[0]["uri"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a location has a uri: {response}"));
+    assert!(
+        uri.starts_with("file:///nix/store/") && uri.ends_with("/flake.nix"),
+        "expected nixpkgs's own flake.nix in the store, got {uri}"
+    );
+    client.shutdown();
+}
+
 #[test]
 #[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn nil_spec_7_1_item_4_health_warning_with_missing_input_through_lsp_det_with_real_nil() {

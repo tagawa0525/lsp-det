@@ -296,7 +296,7 @@ gopls, rust-analyzer, typescript-language-server, pyright, clangd の 5 つ。
 
 1. 消費者（Claude Code、lsp-det、Serena）を先に立ててから、サーバーの上流に頼む
 2. 相手が既に感じている不具合の修正を先に、プロトコルの提案はその一般化として後に出す。上流が同じ問題に既に別の答えを持っていれば、その上に載せる
-3. LSP 本体（microsoft/language-server-protocol）への proposal は、上流の取り込みを待たず、語彙の乱立の実測（[research/readiness-vocabulary-corpus.md](research/readiness-vocabulary-corpus.md)）を根拠に出す。既存 issue #511 のスレッドに「エージェント用途からの再提案」として接続する。宣言範囲と起動の宣言は凍結中で、この経路の対象外
+3. LSP 本体（microsoft/language-server-protocol）への proposal は、上流の取り込みを待たず、語彙の乱立の実測（[research/readiness-vocabulary-corpus.md](research/readiness-vocabulary-corpus.md)）を根拠に出す。既存 issue microsoft/language-server-protocol#511 のスレッドに「エージェント用途からの再提案」として接続する。宣言範囲と起動の宣言は凍結中で、この経路の対象外
 
 ---
 

@@ -5345,7 +5345,7 @@ fn nixd_begin(client: &mut ConformanceClient, token: i64, title: &str) {
 }
 
 /// Emits the matching end. nixd's end message is "evaluated ..." on both success and failure
-/// (research doc's "失敗の見え方" section); this mapping does not read the message.
+/// (research doc's "how failures show" section); this mapping does not read the message.
 fn nixd_end(client: &mut ConformanceClient, token: i64, message: &str) {
     client.make_upstream_emit_progress(json!({
         "token": token,
@@ -5579,6 +5579,344 @@ fn nixd_spec_7_1_readiness_and_definition_through_lsp_det_with_real_nixd() {
     assert!(
         !uri.starts_with(&root_uri),
         "expected a nixpkgs path outside the workspace, got {uri}"
+    );
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// nil (M26, ADR 0021 decision C row for nil; oxalica/nil). The mapping in
+// research/nil-readiness-measurement.md: identified by `serverInfo.name` "nil" exactly (the
+// version is `serverInfo.version`). flake.lock's own read carries no signal; the first
+// observable event is the begin of one of three fixed-string `$/progress` tokens --
+// `nil/loadNixosOptionsProgress`, `nil/loadInputFlakeProgress`, `nil/flakeArchiveProgress` --
+// each preceded by its own `window/workDoneProgress/create`. A begin adds its token to the set
+// of unfinished loads and moves readiness to `indexing`; the matching end removes it, and
+// readiness becomes `ready` only once the set is empty. A later begin after `ready` (a reload
+// after a `didChangeWatchedFiles` Changed for flake.lock, or a `didOpen` / `didChange` of
+// flake.nix) goes back to `indexing`. `window/showMessage` type 1 -> `error`, type 2 ->
+// `warning`; the begin of any of the three tokens -> `ok`. No guarantee is declared for any
+// version: ADR 0021 decision E (how to name the document-scoped `references` nil answers too)
+// is pending, so `guarantees()` is `notifications_only()` unconditionally.
+// ---------------------------------------------------------------------------
+
+const NIL_LOAD_NIXOS_OPTIONS_TOKEN: &str = "nil/loadNixosOptionsProgress";
+
+fn nil_client() -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_nil();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    (client, result)
+}
+
+/// Emits a load's begin, as a real nil does once flake.lock's own (signal-less) read finishes
+/// (research/nil-readiness-measurement.md).
+fn nil_begin(client: &mut ConformanceClient, token: &str, title: &str) {
+    client.make_upstream_emit_progress(json!({
+        "token": token,
+        "value": {"kind": "begin", "title": title}
+    }));
+}
+
+/// Emits the matching end.
+fn nil_end(client: &mut ConformanceClient, token: &str) {
+    client.make_upstream_emit_progress(json!({
+        "token": token,
+        "value": {"kind": "end"}
+    }));
+}
+
+#[test]
+fn nil_is_selected_by_server_info_and_declares_no_guarantee() {
+    let (mut client, result) = nil_client();
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "nil must declare no guarantee until ADR 0021 decision E is answered: {result}"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+#[test]
+fn nil_becomes_ready_only_after_the_end() {
+    let (mut client, _) = nil_client();
+    nil_begin(
+        &mut client,
+        NIL_LOAD_NIXOS_OPTIONS_TOKEN,
+        "Loading NixOS options from 'nixpkgs'",
+    );
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Indexing);
+    assert_eq!(state.health, Health::Ok);
+    nil_end(&mut client, NIL_LOAD_NIXOS_OPTIONS_TOKEN);
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn nil_a_later_begin_after_ready_reindexes_spec_7_1_item_3() {
+    let (mut client, _) = nil_client();
+    nil_begin(
+        &mut client,
+        NIL_LOAD_NIXOS_OPTIONS_TOKEN,
+        "Loading NixOS options from 'nixpkgs'",
+    );
+    client.await_state_changed();
+    nil_end(&mut client, NIL_LOAD_NIXOS_OPTIONS_TOKEN);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    // A reload after `workspace/didChangeWatchedFiles` Changed for flake.lock (research doc,
+    // run 8).
+    nil_begin(
+        &mut client,
+        NIL_LOAD_NIXOS_OPTIONS_TOKEN,
+        "Loading NixOS options from 'nixpkgs'",
+    );
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    nil_end(&mut client, NIL_LOAD_NIXOS_OPTIONS_TOKEN);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+/// Gate (spec chapter 9) holds this on the client's behalf because it does not declare the
+/// protocol itself (`initialize(false)`); the readiness that drives the hold comes from the nil
+/// mapping's `$/progress` tracking, not from any guarantee nil declares (it declares none for
+/// any version).
+#[test]
+fn nil_holds_definition_until_the_load_ends() {
+    let server = ServerUnderTest::lsp_det_with_fake_nil();
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(false);
+    let id = client.send_definition(&std::path::PathBuf::from("/fake/flake.nix"), 1, 21);
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "forwarded definition before any load began"
+    );
+    nil_begin(
+        &mut client,
+        NIL_LOAD_NIXOS_OPTIONS_TOKEN,
+        "Loading NixOS options from 'nixpkgs'",
+    );
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "forwarded definition while loading"
+    );
+    nil_end(&mut client, NIL_LOAD_NIXOS_OPTIONS_TOKEN);
+    let response = client.await_response_to(id);
+    assert!(
+        response.get("result").is_some(),
+        "did not release the hold once ready: {response}"
+    );
+    client.shutdown();
+}
+
+/// Spec 7.1 item 4: a `window/showMessage` type 1 moves health to `error`, and (a proxy forwards
+/// message bodies unchanged, v0.1-design.md 4.4) it still reaches the client unchanged.
+#[test]
+fn nil_show_message_error_moves_health_and_is_forwarded_unchanged() {
+    let (mut client, _) = nil_client();
+    client.make_upstream_emit_notification(
+        "window/showMessage",
+        json!({"type": 1, "message": "Failed to load flake workspace: ..."}),
+    );
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Error);
+    let forwarded = client
+        .await_notification("window/showMessage")
+        .expect("the showMessage did not arrive");
+    assert_eq!(
+        forwarded["message"], "Failed to load flake workspace: ...",
+        "the message body changed: {forwarded}"
+    );
+    client.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Real nil integration (local only. Not part of CI -- v0.1-design.md chapter 6). Requires nil
+// and a `nix` binary on PATH (`nix develop .#servers`; nixpkgs `nil`).
+// ---------------------------------------------------------------------------
+
+fn real_nil(project: &support::TempNilProject) -> ServerUnderTest {
+    ServerUnderTest {
+        program: support::lsp_det_binary(),
+        args: vec!["--".to_string(), "nil".to_string()],
+        root: project.root.clone(),
+    }
+}
+
+fn assert_nix_is_on_path() {
+    let status = std::process::Command::new("nix")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    assert!(
+        matches!(status, Ok(status) if status.success()),
+        "the real nil tests need a `nix` binary on PATH (nix develop .#servers provides one)"
+    );
+}
+
+/// Identity and the guarantee declared (none, for any version -- ADR 0021 decision E is
+/// pending).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nil_is_selected_by_its_real_server_info_and_declares_no_guarantee() {
+    assert_nix_is_on_path();
+    let project = support::TempNilProject::new("select");
+    let mut client = ConformanceClient::start(&real_nil(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "a guarantee is declared for real nil, which ADR 0021 decision E has not settled: {result}"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+/// 7.1: the readiness sequence `initializing` -> `indexing` -> `ready` (research doc, run 1: the
+/// NixOS options load begins once flake.lock's own signal-less read finishes and ends within
+/// about a second). Unlike nixd, nil does not hold `textDocument/definition` on the `nixpkgs`
+/// input while loading -- it answers from a snapshot right away, complete as soon as flake.lock
+/// itself has been read (the module doc's "no prediction" bullet: the request is sent once the
+/// load's begin has been observed, which is exactly the signal that read finished), resolving
+/// into nixpkgs's own `flake.nix` outside the workspace. Then 7.1 item 3: rewriting flake.lock
+/// and sending `workspace/didChangeWatchedFiles` Changed for it reloads through `indexing` ->
+/// `ready` again.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nil_spec_7_1_readiness_definition_and_reload_through_lsp_det_with_real_nil() {
+    assert_nix_is_on_path();
+    let project = support::TempNilProject::new("readiness");
+    let flake_nix = project.file("flake.nix");
+    let mut client = ConformanceClient::start(&real_nil(&project));
+    client.initialize_with_root(true, &project.root);
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+
+    client.did_open(&flake_nix, "nix");
+
+    let indexing = client.await_state_changed();
+    assert_eq!(
+        indexing.readiness,
+        Readiness::Indexing,
+        "did not observe a load begin: {indexing:?}"
+    );
+
+    // flake.lock has just been read (the begin above is exactly that signal), so this answers
+    // complete even though the NixOS options load it is part of is still running.
+    let (line, character) = support::NIL_NIXPKGS_INPUT_DECLARATION;
+    let id = client.send_definition(&flake_nix, line, character);
+    client.wait_until_ready();
+
+    let response = client.await_response_to(id);
+    let locations = match &response["result"] {
+        Value::Array(items) => items.clone(),
+        Value::Null => Vec::new(),
+        single => vec![single.clone()],
+    };
+    assert_eq!(
+        locations.len(),
+        1,
+        "expected exactly one definition location: {response}"
+    );
+    // `Location` carries `uri`; a `LocationLink` (allowed by LSP) carries `targetUri`.
+    let uri = locations[0]["uri"]
+        .as_str()
+        .or_else(|| locations[0]["targetUri"].as_str())
+        .unwrap_or_else(|| panic!("a location has a uri or targetUri: {response}"));
+    assert!(
+        uri.ends_with("/flake.nix"),
+        "expected nixpkgs's own flake.nix, got {uri}"
+    );
+    assert!(
+        uri.starts_with("file:///nix/store/"),
+        "expected a nix store path, got {uri}"
+    );
+    let root_uri = support::file_uri(&project.root);
+    assert!(
+        !uri.starts_with(&root_uri),
+        "expected a path outside the workspace, got {uri}"
+    );
+
+    // 7.1 item 3: a reload after `workspace/didChangeWatchedFiles` Changed for flake.lock.
+    project.rewrite_flake_lock();
+    client.did_change_watched_files(&[(&project.file("flake.lock"), 2)]);
+    let reloading = client.await_state_changed();
+    assert_eq!(
+        reloading.readiness,
+        Readiness::Indexing,
+        "did not observe a reload begin: {reloading:?}"
+    );
+    client.wait_until_ready();
+
+    client.shutdown();
+}
+
+/// 7.1 item 4: a `nixpkgs` input whose store path does not exist (a corrupted `narHash`) never
+/// sends a `$/progress` begin (research doc's "how failures show" section, run 4), only
+/// `window/showMessage` type 2, which this mapping reads as health `warning`. Readiness stays
+/// `initializing`.
+/// nil answers from its current snapshot and never waits, so a `definition` on a flake input
+/// that reaches it before flake.lock has been read is answered empty (research doc, run 1: no
+/// signal in that window). For a client that does not declare `experimental/serverState`,
+/// lsp-det holds the request while `initializing` (chapter 9's stand-in) and forwards it once
+/// the load has ended, so the answer is complete. A client that declares the capability is
+/// expected to wait itself (the test above sends after the begin for that reason).
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nil_early_definition_is_held_for_a_client_without_server_state_through_lsp_det_with_real_nil() {
+    assert_nix_is_on_path();
+    let project = support::TempNilProject::new("held");
+    let flake_nix = project.file("flake.nix");
+    let mut client = ConformanceClient::start(&real_nil(&project));
+    client.initialize_with_root(false, &project.root);
+
+    client.did_open(&flake_nix, "nix");
+    let (line, character) = support::NIL_NIXPKGS_INPUT_DECLARATION;
+    let id = client.send_definition(&flake_nix, line, character);
+
+    let response = client.await_response_to(id);
+    let locations = match &response["result"] {
+        Value::Array(items) => items.clone(),
+        Value::Null => Vec::new(),
+        single => vec![single.clone()],
+    };
+    assert_eq!(
+        locations.len(),
+        1,
+        "expected the held definition to be answered complete after the load: {response}"
+    );
+    // `Location` carries `uri`; a `LocationLink` (allowed by LSP) carries `targetUri`.
+    let uri = locations[0]["uri"]
+        .as_str()
+        .or_else(|| locations[0]["targetUri"].as_str())
+        .unwrap_or_else(|| panic!("a location has a uri or targetUri: {response}"));
+    assert!(
+        uri.starts_with("file:///nix/store/") && uri.ends_with("/flake.nix"),
+        "expected nixpkgs's own flake.nix in the store, got {uri}"
+    );
+    client.shutdown();
+}
+
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn nil_spec_7_1_item_4_health_warning_with_missing_input_through_lsp_det_with_real_nil() {
+    assert_nix_is_on_path();
+    let project = support::TempNilProject::with_missing_input("missing-input");
+    let mut client = ConformanceClient::start(&real_nil(&project));
+    client.initialize_with_root(true, &project.root);
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+
+    let state = client.await_state_changed();
+    assert_eq!(
+        state.health,
+        Health::Warning,
+        "expected a window/showMessage type 2 for the missing store path: {state:?}"
+    );
+    assert_eq!(
+        state.readiness,
+        Readiness::Initializing,
+        "no $/progress begin for a missing store path (research doc)"
     );
     client.shutdown();
 }

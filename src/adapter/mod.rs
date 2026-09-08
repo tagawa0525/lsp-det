@@ -25,6 +25,7 @@ pub mod haxe_language_server;
 pub mod jdtls;
 pub mod metals;
 pub mod nextflow;
+pub mod nil;
 pub mod nixd;
 pub mod pyright;
 pub mod rust_analyzer;
@@ -120,6 +121,9 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         // The version is not looked at: no guarantee is declared for any version until ADR
         // 0021 decision E is answered.
         nixd::SERVER_NAME => Some(Box::new(nixd::NixdAdapter::new())),
+        // Same reason as nixd: no guarantee is declared for any version until ADR 0021
+        // decision E is answered.
+        nil::SERVER_NAME => Some(Box::new(nil::NilAdapter::new())),
         // The version is not looked at: Expert declares no guarantee for any version.
         "expert" => Some(Box::new(expert::ExpertAdapter::new())),
         // The version is not observable: Nextflow's language server declares no guarantee.
@@ -412,6 +416,12 @@ mod tests {
     fn selects_nixd_by_its_server_info_name() {
         assert!(select("nixd", Some("2.9.2")).is_some());
         assert!(select("nixd", None).is_some());
+    }
+
+    #[test]
+    fn selects_nil_by_its_server_info_name() {
+        assert!(select("nil", Some("2026-07-23")).is_some());
+        assert!(select("nil", None).is_some());
     }
 
     #[test]

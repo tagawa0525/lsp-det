@@ -203,6 +203,14 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("clangd", &["--server-version", CLANGD_TESTED_VERSION])
     }
 
+    /// A fake upstream that calls itself "nixd" version "2.9.2" (as the real nixd does in
+    /// `serverInfo`) + lsp-det. lsp-det selects the nixd mapping, which declares no guarantee
+    /// for any version (M25, research/nixd-readiness-measurement.md; ADR 0021 decision E is
+    /// pending).
+    pub fn lsp_det_with_fake_nixd() -> Self {
+        Self::lsp_det_with_upstream("nixd", &["--server-version", "2.9.2"])
+    }
+
     /// A fake upstream conformant to this protocol + lsp-det. The upstream side becomes the
     /// identity mapping, and the downstream side reads the upstream's state across the boundary
     /// (design 4.1).
@@ -1005,6 +1013,30 @@ impl ConformanceClient {
         );
     }
 
+    /// Only sends `textDocument/definition` (does not wait for the response). Used to check
+    /// holding.
+    pub fn send_definition(&mut self, path: &std::path::Path, line: u32, character: u32) -> i64 {
+        self.send_request(
+            "textDocument/definition",
+            json!({
+                "textDocument": {"uri": file_uri(path)},
+                "position": {"line": line, "character": character},
+            }),
+        )
+    }
+
+    /// `textDocument/definition`. The result can be a single `Location`, a `Location[]`, or
+    /// `LocationLink[]` (LSP); normalized to a `Vec` either way, empty on `null`.
+    pub fn definition(&mut self, path: &std::path::Path, line: u32, character: u32) -> Vec<Value> {
+        let id = self.send_definition(path, line, character);
+        let response = self.await_response_to(id);
+        match &response["result"] {
+            Value::Array(items) => items.clone(),
+            Value::Null => Vec::new(),
+            single => vec![single.clone()],
+        }
+    }
+
     /// `textDocument/references`. Excludes the declaration (counts only the uses).
     pub fn references(&mut self, path: &std::path::Path, line: u32, character: u32) -> Vec<Value> {
         let params = json!({
@@ -1722,6 +1754,50 @@ fn clangd_compile_commands(root: &std::path::Path, sources: &[String]) -> String
         })
         .collect();
     serde_json::to_string_pretty(&entries).unwrap()
+}
+
+/// The fixed content of `default.nix` for [`TempNixdProject`] (M25, the method section of
+/// research/nixd-readiness-measurement.md): `pkgs.hello` is the target of the
+/// `textDocument/definition` conformance test. Requires `NIX_PATH` with a `nixpkgs` entry to
+/// evaluate (`nix develop .#servers` provides `nixpkgs=flake:nixpkgs`).
+pub const NIXD_DEFAULT_NIX: &str =
+    "{ pkgs ? import <nixpkgs> { } }:\nlet\n  greeting = pkgs.hello;\nin\n{ inherit greeting; }\n";
+
+/// `pkgs.hello` on line 2 ("  greeting = pkgs.hello;"), inside the "hello" identifier.
+pub const NIXD_HELLO_DECLARATION: (u32, u32) = (2, 19);
+
+/// A temporary Nix project for nixd: a single `default.nix` importing `<nixpkgs>` and
+/// referencing `pkgs.hello` (M25, the method section of research/nixd-readiness-measurement.md).
+/// nixd's evaluation is not made to take observable time by fixture size (unlike the source-code
+/// mappings): the two default evaluations (nixpkgs entries, NixOS options) always run and take
+/// tens to hundreds of milliseconds regardless of workspace size, so a single small file is
+/// enough to observe the `indexing` -> `ready` transition and the server holding a `definition`
+/// sent before it.
+pub struct TempNixdProject {
+    pub root: PathBuf,
+}
+
+impl TempNixdProject {
+    pub fn new(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-nixd-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("cannot create the temporary project");
+        std::fs::write(root.join("default.nix"), NIXD_DEFAULT_NIX).unwrap();
+        TempNixdProject { root }
+    }
+
+    pub fn file(&self, name: &str) -> PathBuf {
+        self.root.join(name)
+    }
+}
+
+impl Drop for TempNixdProject {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
 }
 
 /// A temporary Haxe project for haxe-language-server. `src/B.hx` calls `A.target()`, and

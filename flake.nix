@@ -122,6 +122,8 @@
         sorbet # M22 の写像 (ADR 0020)。sorbet --lsp。readiness は sorbet/showOperation から
         watchman # Sorbet がディスク上の変更を拾うのに要る（実測記録を参照）
         clang-tools # M24 の写像 (ADR 0020)。clangd。readiness は背景索引の $/progress (title "indexing") から
+        nixd # M25 の写像 (ADR 0021)。readiness は nixpkgs と NixOS のオプションの評価の $/progress（2 本並行）から。<nixpkgs> は NIX_PATH から
+        nil # M26 の写像 (ADR 0021)。flake.lock の読み込みと NixOS のオプションの評価の $/progress から。nix のバイナリはシステムのもの
       ];
     in
     {

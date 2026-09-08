@@ -128,7 +128,9 @@ fn flake_lock_has_nixpkgs_input(path: &Path) -> bool {
     let Ok(value) = serde_json::from_str::<Value>(&contents) else {
         return false;
     };
-    value["nodes"]["root"]["inputs"]
+    // The root node is the one the top-level "root" field names ("root" by convention).
+    let root = value["root"].as_str().unwrap_or("root");
+    value["nodes"][root]["inputs"]
         .get(NIXPKGS_INPUT_NAME)
         .is_some()
 }

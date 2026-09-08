@@ -428,6 +428,21 @@ mod tests {
     }
 
     #[test]
+    fn a_did_open_whose_uri_is_not_a_file_does_not_use_up_the_probe() {
+        // A didOpen that cannot be turned into a path (an untitled buffer, a non-file scheme)
+        // teaches nothing about the workspace; the next didOpen with a real path must still be
+        // probed, or a workspace with no database would stay initializing forever.
+        let fixture = Fixture::new("non-file-uri-first");
+        let opened = fixture.file("main.cpp");
+        let mut m = ClangdAdapter::new();
+        let untitled = r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"untitled:Untitled-1","languageId":"cpp","version":1,"text":""}}}"#;
+        assert!(observe(&mut m, untitled).is_none());
+        let state = observe(&mut m, &did_open(&opened))
+            .expect("the first didOpen with a real path is the one that probes");
+        assert_eq!(state.readiness, Readiness::Unknown);
+    }
+
+    #[test]
     fn a_compile_commands_json_beside_the_opened_file_leaves_readiness_untouched() {
         let fixture = Fixture::new("beside");
         fixture.write("compile_commands.json", "[]");

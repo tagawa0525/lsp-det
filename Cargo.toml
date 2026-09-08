@@ -1,6 +1,6 @@
 [package]
 name = "lsp-det"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2024"
 description = "Transparent LSP proxy that removes language servers' silent lies. Reference implementation of the server state protocol"
 repository = "https://github.com/tagawa0525/lsp-det"

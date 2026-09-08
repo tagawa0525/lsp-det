@@ -4,13 +4,17 @@
 
 ## 予定
 
-- 外向きの提出（戦略・順序・規則は `docs/upstream-submissions.md`。文面を作ってユーザーの確認をもらってから出す）: 提出前の準備（仕様を安定版にする、typescript-language-server のパッチを typescript-language-server/typescript-language-server#305 の取りこぼし修正に作り直す、gopls を health に縮める、rust-analyzer の `serverStatus` への field 追加案、LSP 本体向けの `.proposed.ts`、Serena の再測定）→ 第 1 段（typescript-language-server、Claude Code anthropics/claude-code#76870 への `experimental/serverState` の提案、pyright）→ 第 2 段（Serena の registry、rust-analyzer の両案、gopls の health）→ 第 3 段（12 サーバー、LSP 本体）
+- 外向きの提出（戦略・順序・規則は `docs/upstream-submissions.md`。文面を作ってユーザーの確認をもらってから出す）: 提出前の準備（typescript-language-server のパッチを typescript-language-server/typescript-language-server#305 の取りこぼし修正に作り直す、gopls を health に縮める、rust-analyzer の `serverStatus` への field 追加案、LSP 本体向けの `.proposed.ts`、Serena の再測定）→ 第 1 段（typescript-language-server、Claude Code anthropics/claude-code#76870 への `experimental/serverState` の提案、pyright）→ 第 2 段（Serena の registry、rust-analyzer の両案、gopls の health）→ 第 3 段（12 サーバー、LSP 本体）
 - 保留の再測定: Kotlin（次の release）、sourcekit-lsp（nixpkgs に 6.x が来たら）
 
-## 未リリース
+## 0.7.0（2026-09-09）
 
-- **nil の begin なし workspace**（ADR 0021 追補、2026-09-09）: begin が一度も来ない workspace（flake がない、flake.lock がない、nixpkgs の入力がない、入力の store path がない）の扱いを (a) `initializing` のままから (b) `unknown` に変更。`initialize` の `workspaceFolders` の `flake.lock` の root の入力に `nixpkgs` があるかで判定し、begin 前の type 2 の `window/showMessage` も readiness を `unknown` にする
-- clangd: compile_commands.json のないワークスペースの扱いを、最初の `didOpen` で観測者がデータベースの所在を読み、見つからなければ `unknown` にする決定へ改めた（決定 (a)「`initializing` のまま」からの変更。ADR 0020 追補 2026-09-09）
+外向きの提出に向けた版。対外戦略を決め、begin の来ない workspace で永遠に保留する 2 つの写像を `unknown` に改め、仕様を安定版 1.0 にした。
+
+- **対外戦略**（PR #80、#83）: `docs/upstream-submissions.md` を備忘録から戦略の文書に。別のセッションの批判的レビュー（`docs/research/upstream-strategy-review-2026-09.md`）を受け、上流が既に持っている答え（tsls #305、gopls の `awaitLoaded` と `gopls mcp`、rust-analyzer #10888）の上に載せる順序と規則に改めた。消費者を Claude Code → lsp-det → Serena の順に立てる
+- **nil**（ADR 0021 追補、PR #81）: begin が一度も来ない workspace（flake がない、flake.lock がない、`nixpkgs` の入力がない、入力の store path がない）の扱いを (a) `initializing` のままから (b) `unknown` に。`initialize` の `workspaceFolders` の `flake.lock` の root の入力に `nixpkgs` があるかで判定し、begin 前の type 2 の `window/showMessage` も readiness を `unknown` にする。ユーザーの決定
+- **clangd**（ADR 0020 追補、PR #82）: compile_commands.json のない workspace の決定 (a) を改め、最初の `didOpen` で観測者が clangd と同じ場所（ファイルのディレクトリから根まで `compile_commands.json` / `build/compile_commands.json` / `compile_flags.txt`。`--compile-commands-dir` があればそこだけ）を探し、見つからなければ `unknown` に。上流の引数を写像に知らせる `learn_upstream_arguments` を追加。ユーザーの決定
+- **仕様 1.0**（ADR 0022、PR #84）: `Status` を安定版にし、仕様に固有の版 1.0 を v0.7.0 で凍結。6 章 4 項にサーバー側の保留との関係（保留は `health` と `freshness` を言えず判断をクライアントから奪う。保留は禁じない）。8.1 の `readiness: "unknown"` に「信号が来ないと観測者が判断した」を含める。11 章に変更記録
 
 ## 0.6.0（2026-09-08）
 

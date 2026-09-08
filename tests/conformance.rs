@@ -5191,6 +5191,47 @@ fn clangd_holds_references_until_ready() {
     client.shutdown();
 }
 
+/// The compilation-database probe (ADR 0020 addendum 2026-09-09): a workspace with no
+/// `compile_commands.json` (or `build/compile_commands.json` or `compile_flags.txt`) anywhere
+/// up to the filesystem root settles on `unknown` right at the first `didOpen`. Gate (spec
+/// chapter 9) never holds anything for `unknown` (spec 8.2 item 3, `gate::verdict`), so a
+/// client that does not declare this protocol gets `references` forwarded and answered right
+/// away instead of waiting forever for a background-index token that never arrives (unlike
+/// `clangd_holds_references_until_ready` above, whose workspace has a database).
+#[test]
+fn clangd_without_a_database_is_unknown_and_does_not_hold_references() {
+    let project = support::TempClangdProject::without_database("nodb");
+    let lib = project.file("lib.cpp");
+    let server = ServerUnderTest::lsp_det_with_upstream_flags(
+        "clangd",
+        &[
+            "--server-version",
+            support::CLANGD_TESTED_VERSION,
+            "--references-depend-on-readiness",
+        ],
+    );
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(false);
+    client.did_open(&lib, "cpp");
+    let state = client.server_state();
+    assert_eq!(
+        state.readiness,
+        Readiness::Unknown,
+        "no compilation database anywhere: the probe must settle on unknown"
+    );
+    let id = client.send_references();
+    let response = client.await_response_to(id);
+    assert!(
+        !response["result"]
+            .as_array()
+            .expect("references answers an array")
+            .is_empty(),
+        "references was held (or answered empty) instead of being forwarded right away: \
+         {response}"
+    );
+    client.shutdown();
+}
+
 // ---------------------------------------------------------------------------
 // Real clangd integration (local only. Not part of CI -- v0.1-design.md chapter 6). Requires
 // clangd on PATH (`nix develop .#servers`; nixpkgs `clang-tools`).
@@ -5277,6 +5318,36 @@ fn clangd_spec_7_2_coverage_through_lsp_det_with_real_clangd() {
         found.len(),
         CLANGD_FIXTURE_CALLERS
     );
+    client.shutdown();
+}
+
+/// The compilation-database probe (ADR 0020 addendum 2026-09-09), against a real clangd: a
+/// `.cpp`-only workspace with no `compile_commands.json` settles on `unknown` right after the
+/// first `didOpen` (the research doc's "no compile_commands.json" row: real clangd never sends
+/// the background-index token without a database). `references` is then forwarded and answered
+/// instead of held forever -- `client.references` below would otherwise hang until the subject
+/// goes silent and panic. The count is not asserted: without a database clangd only ever
+/// answers from the single open document (the research doc's "no compile_commands.json" row,
+/// and `clangd_without_lsp_det_answers_partial_references_while_indexing` below), and this
+/// test's point is that lsp-det adds no hold of its own on top of that.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn clangd_without_a_database_is_unknown_with_real_clangd() {
+    let project = support::TempClangdProject::without_database("real-nodb");
+    let lib = project.file("lib.cpp");
+    let mut client = ConformanceClient::start(&real_clangd(&project));
+    client.initialize_with_root(false, &project.root);
+    client.did_open(&lib, "cpp");
+
+    let state = client.server_state();
+    assert_eq!(
+        state.readiness,
+        Readiness::Unknown,
+        "no compile_commands.json in the workspace: the probe must settle on unknown"
+    );
+
+    let (line, character) = support::CLANGD_TARGET_DECLARATION;
+    client.references(&lib, line, character);
     client.shutdown();
 }
 

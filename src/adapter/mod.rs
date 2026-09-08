@@ -78,6 +78,14 @@ pub trait Mapping {
     fn learn_workspace_folders(&mut self, folders: &[std::path::PathBuf]) {
         let _ = folders;
     }
+    /// The arguments lsp-det itself launched the upstream with (its own argv, not the
+    /// client's). Read by a mapping (clangd) that needs to reproduce a piece of the upstream's
+    /// own startup logic (`--compile-commands-dir`, ADR 0020 addendum 2026-09-09) -- a fact
+    /// lsp-det already knows because it is what it spawned, the same basis as
+    /// `upstream_command_basename` (ADR 0020 decision D). Does nothing by default.
+    fn learn_upstream_arguments(&mut self, args: &[String]) {
+        let _ = args;
+    }
     /// Observes a client-to-upstream message. Predicting the start of reindexing from a
     /// notification is allowed only for a mapping that has measured that a completion signal is
     /// always sent (ADR 0014 addendum decision D). Reads nothing by default.

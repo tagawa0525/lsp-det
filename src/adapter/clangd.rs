@@ -155,6 +155,7 @@ mod tests {
     use super::*;
     use crate::peek::peek;
     use crate::state::Health;
+    use crate::uri::path_to_uri;
 
     fn progress(token: &str, kind: &str) -> String {
         format!(
@@ -254,10 +255,176 @@ mod tests {
 
     #[test]
     fn without_any_signal_readiness_stays_initializing() {
-        // No compilation database: the token never arrives at all (decision (a), ADR 0020
-        // addendum M24). This mapping does not distinguish that from "not yet begun".
+        // Before the compilation-database probe runs (no didOpen observed yet), readiness is
+        // still the starting `initializing` -- the probe only ever moves it to `unknown`, never
+        // the reverse.
         let m = ClangdAdapter::new();
         assert_eq!(m.state.readiness, Readiness::Initializing);
+    }
+
+    // --- Compilation-database probe (ADR 0020 addendum 2026-09-09) -------------------------
+
+    fn observe(adapter: &mut ClangdAdapter, body: &str) -> Option<ServerState> {
+        let view = peek(body.as_bytes()).expect("test bodies are valid JSON");
+        adapter.observe_client(&view, body.as_bytes())
+    }
+
+    fn did_open(path: &std::path::Path) -> String {
+        format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"cpp","version":1,"text":""}}}}}}"#,
+            path_to_uri(path)
+        )
+    }
+
+    /// A unique temporary directory tree for one test, removed on drop (no dependency added;
+    /// `std::env::temp_dir()` + a name unique to the test and the process, as `NextflowAdapter`'s
+    /// tests do).
+    struct Fixture {
+        root: std::path::PathBuf,
+    }
+
+    impl Fixture {
+        fn new(tag: &str) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "lsp-det-clangd-adapter-{tag}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            std::fs::create_dir_all(&root).unwrap();
+            Fixture { root }
+        }
+
+        /// Creates (if needed) and returns a subdirectory.
+        fn dir(&self, rel: &str) -> std::path::PathBuf {
+            let d = self.root.join(rel);
+            std::fs::create_dir_all(&d).unwrap();
+            d
+        }
+
+        /// Writes `content` at `rel` (parent directories created as needed).
+        fn write(&self, rel: &str, content: &str) {
+            let f = self.root.join(rel);
+            if let Some(parent) = f.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(&f, content).unwrap();
+        }
+
+        /// An empty file at `rel` (parent directories created as needed), for use as the
+        /// `didOpen`ed document.
+        fn file(&self, rel: &str) -> std::path::PathBuf {
+            self.write(rel, "");
+            self.root.join(rel)
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    #[test]
+    fn a_compile_commands_json_beside_the_opened_file_leaves_readiness_untouched() {
+        let fixture = Fixture::new("beside");
+        fixture.write("compile_commands.json", "[]");
+        let opened = fixture.file("main.cpp");
+        let mut m = ClangdAdapter::new();
+        assert!(
+            observe(&mut m, &did_open(&opened)).is_none(),
+            "a database was found next to the opened file, so nothing should change"
+        );
+        assert_eq!(m.state.readiness, Readiness::Initializing);
+    }
+
+    #[test]
+    fn a_build_compile_commands_json_in_a_parent_directory_leaves_readiness_untouched() {
+        let fixture = Fixture::new("build-parent");
+        fixture.write("build/compile_commands.json", "[]");
+        let opened = fixture.file("src/main.cpp");
+        let mut m = ClangdAdapter::new();
+        assert!(
+            observe(&mut m, &did_open(&opened)).is_none(),
+            "walking up from src/ must reach the parent's build/compile_commands.json"
+        );
+        assert_eq!(m.state.readiness, Readiness::Initializing);
+    }
+
+    #[test]
+    fn a_compile_flags_txt_beside_the_opened_file_leaves_readiness_untouched() {
+        let fixture = Fixture::new("flags");
+        fixture.write("compile_flags.txt", "-std=c++20");
+        let opened = fixture.file("main.cpp");
+        let mut m = ClangdAdapter::new();
+        assert!(observe(&mut m, &did_open(&opened)).is_none());
+        assert_eq!(m.state.readiness, Readiness::Initializing);
+    }
+
+    #[test]
+    fn no_database_anywhere_up_to_the_root_becomes_unknown() {
+        let fixture = Fixture::new("none");
+        let opened = fixture.file("main.cpp");
+        let mut m = ClangdAdapter::new();
+        let state = observe(&mut m, &did_open(&opened))
+            .expect("no database found anywhere is a signal (spec 8.2 item 3)");
+        assert_eq!(state.readiness, Readiness::Unknown);
+        assert_eq!(m.state.readiness, Readiness::Unknown);
+    }
+
+    #[test]
+    fn compile_commands_dir_scopes_the_probe_to_that_one_directory() {
+        let fixture = Fixture::new("cdb-dir");
+        // A database sits right beside the opened file...
+        fixture.write("compile_commands.json", "[]");
+        let opened = fixture.file("main.cpp");
+        // ...but the upstream was launched with --compile-commands-dir pointing elsewhere,
+        // which has no database of its own. clangd itself would look only there, ignoring the
+        // one beside the opened file.
+        let elsewhere = fixture.dir("elsewhere");
+        let mut m = ClangdAdapter::new();
+        m.learn_upstream_arguments(&[format!("--compile-commands-dir={}", elsewhere.display())]);
+        let state = observe(&mut m, &did_open(&opened)).expect(
+            "--compile-commands-dir scopes the probe to its own directory, which has no database",
+        );
+        assert_eq!(state.readiness, Readiness::Unknown);
+    }
+
+    #[test]
+    fn a_begin_after_unknown_still_moves_to_indexing_and_its_end_to_ready() {
+        let fixture = Fixture::new("begin-after-unknown");
+        let opened = fixture.file("main.cpp");
+        let mut m = ClangdAdapter::new();
+        observe(&mut m, &did_open(&opened));
+        assert_eq!(m.state.readiness, Readiness::Unknown);
+        let state = feed(&mut m, &progress(BACKGROUND_INDEX_TOKEN, "begin"))
+            .expect("a begin still moves readiness even after the probe settled on unknown");
+        assert_eq!(state.readiness, Readiness::Indexing);
+        let state = feed(&mut m, &progress(BACKGROUND_INDEX_TOKEN, "end")).unwrap();
+        assert_eq!(state.readiness, Readiness::Ready);
+    }
+
+    #[test]
+    fn a_second_did_open_is_not_read() {
+        let fixture = Fixture::new("second-open");
+        let opened = fixture.file("main.cpp"); // no database anywhere: settles on unknown
+        let mut m = ClangdAdapter::new();
+        observe(&mut m, &did_open(&opened));
+        assert_eq!(m.state.readiness, Readiness::Unknown);
+
+        // A second didOpen, this time of a file right next to a database, must not be read.
+        let with_db = fixture.dir("withdb");
+        std::fs::write(with_db.join("compile_commands.json"), "[]").unwrap();
+        let second = with_db.join("second.cpp");
+        std::fs::write(&second, "").unwrap();
+        assert!(
+            observe(&mut m, &did_open(&second)).is_none(),
+            "a second didOpen must not be read (the judgment is made once)"
+        );
+        assert_eq!(
+            m.state.readiness,
+            Readiness::Unknown,
+            "the first judgment must stick"
+        );
     }
 
     #[test]

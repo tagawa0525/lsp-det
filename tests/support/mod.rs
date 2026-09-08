@@ -1824,6 +1824,17 @@ pub const NIL_NIXPKGS_INPUT_DECLARATION: (u32, u32) = (2, 21);
 /// not cross into other files even when they are open (M26, ADR 0021 decision E answer (b)).
 pub const NIL_PKGS_BINDING: (u32, u32) = (4, 6);
 
+/// A plain `.nix` file for [`TempNilProject::without_flake`]: a `let`-bound `greeting` used
+/// twice, with no flake wrapping it at all (ADR 0021 addendum 2026-09-09).
+const NIL_NO_FLAKE_DEFAULT_NIX: &str =
+    "let\n  greeting = \"hi\";\nin\n{\n  first = greeting;\n  second = greeting;\n}\n";
+
+/// The `greeting` binding on line 1 ("  greeting = \"hi\";"), inside the "greeting" identifier
+/// (ADR 0021 addendum 2026-09-09). `greeting` is used twice (`first` and `second`) so
+/// `references` here has more than one use to find, the same shape as [`NIL_PKGS_BINDING`] but
+/// in a workspace with no flake at all.
+pub const NIL_NO_FLAKE_GREETING_BINDING: (u32, u32) = (1, 2);
+
 /// `pkgs` is used twice (`pkgs.hello` and `pkgs.hello.name`) so `references` on the `pkgs`
 /// binding has more than one use to find (M26, ADR 0021 decision E answer (b)).
 fn nil_flake_nix(nixpkgs_rev: &str) -> String {
@@ -1870,6 +1881,22 @@ impl TempNilProject {
                 json!("sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
             node
         })
+    }
+
+    /// A workspace with no flake at all: only a plain `.nix` file, no `flake.nix`, no
+    /// `flake.lock` (ADR 0021 addendum 2026-09-09, decision (b)). nil never sends a
+    /// `$/progress` begin here, so this mapping's readiness starts `unknown` instead of
+    /// `initializing`; `references` on the `greeting` binding
+    /// ([`NIL_NO_FLAKE_GREETING_BINDING`]) still stays document-local (ADR 0021 decision D).
+    pub fn without_flake(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-nil-no-flake-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("cannot create the temporary project");
+        std::fs::write(root.join("default.nix"), NIL_NO_FLAKE_DEFAULT_NIX).unwrap();
+        TempNilProject { root }
     }
 
     fn build(tag: &str, transform_nixpkgs_node: impl FnOnce(&Value) -> Value) -> Self {

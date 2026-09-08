@@ -16,12 +16,23 @@
 //!   after `ready` -- a reload nil starts on its own after a `workspace/didChangeWatchedFiles`
 //!   Changed for flake.lock, or a `didOpen` / `didChange` of flake.nix -- goes back to
 //!   `indexing`. Other tokens, `report` values, and ends of tokens not in the open set are
-//!   ignored: an end of an unknown token must never make the state `ready` by itself. A
-//!   workspace with no flake, no flake.lock, no `nixpkgs` input, or no store path for it sends
-//!   no begin at all, and this mapping stays `initializing` (choice (a) of the record's
-//!   "mapping (design) and open points" section, like clangd without a compilation database, ADR 0020
-//!   decision (a) -- the alternative, `unknown` until the first begin, is not implemented; the
-//!   choice between them is pending the user's decision)
+//!   ignored: an end of an unknown token must never make the state `ready` by itself.
+//!
+//!   A workspace with no flake, no flake.lock, no `nixpkgs` input, or no store path for it sends
+//!   no begin at all. `learn_workspace_folders` reads the client's `initialize`
+//!   `workspaceFolders` once, at mapping selection, and looks for a `flake.lock` whose root
+//!   node's inputs name `nixpkgs` (the default `nix.nixpkgsInputName`; lsp-det does not read
+//!   configuration for a rename -- Claude Code does not support `workspace/configuration`).
+//!   Finding one starts readiness at `initializing`, as above; finding none -- the file is
+//!   missing, unreadable, not JSON, or its root node has no `nixpkgs` input -- starts it at
+//!   `unknown` instead (decision (b), ADR 0021 addendum 2026-09-09; the alternative, keeping
+//!   `initializing` forever like clangd without a compilation database, ADR 0020 decision (a),
+//!   was rejected as unusable for a plain Nix directory with no flake at all). A
+//!   `window/showMessage` type 2 that arrives before any begin has ever been observed (a
+//!   missing input's store path never starts a load) moves readiness to `unknown` for the same
+//!   reason; once a begin has been observed, a later type 2 only moves health (see below). From
+//!   `unknown`, a begin still moves readiness to `indexing` and its end to `ready`, exactly as
+//!   from `initializing`.
 //! - **no prediction** (`observe_client` is not implemented): the only 7.0 method that depends
 //!   on flake information is `textDocument/definition` on an input, and unlike nixd, nil does
 //!   not hold it -- it answers from a snapshot right away. Right after flake.lock's own
@@ -30,11 +41,15 @@
 //!   research doc, "startup and index-dependent requests" section), so once a begin has been observed the answer
 //!   can be trusted; a request sent in the brief window before the first begin (before
 //!   flake.lock is read) answers empty instead -- a real gap this mapping does not predict its
-//!   way around. It is covered by the observer's own hold (spec chapter 9), driven by this
-//!   mapping's readiness staying `initializing` until that first begin, for a client that has
-//!   not declared the protocol itself. `textDocument/references` is limited to the requesting
-//!   document's own uses (Nix name resolution does not follow `import` across files, ADR 0021
-//!   decision D), so there is nothing else index-dependent to predict from `didChange` /
+//!   way around. For a workspace whose readiness starts `initializing` (a `nixpkgs` flake.lock
+//!   is present), that gap is covered by the observer's own hold (spec chapter 9), driven by
+//!   this mapping's readiness staying `initializing` until the first begin, for a client that
+//!   has not declared the protocol itself. A workspace that starts `unknown` never had that
+//!   hold to begin with (spec chapter 8's table forwards on `unknown`): nothing this mapping
+//!   holds requests for is lost, because there was nothing to predict from in that workspace
+//!   either way. `textDocument/references` is limited to the requesting document's own uses
+//!   (Nix name resolution does not follow `import` across files, ADR 0021 decision D), so there
+//!   is nothing else index-dependent to predict from `didChange` /
 //!   `workspace/didChangeWatchedFiles` (nil registers and reads the latter for flake.nix and
 //!   flake.lock itself, and re-emits begin / end on a change)
 //! - **health**: `window/showMessage` type 1 -> `error`, type 2 -> `warning` (only the type is
@@ -50,7 +65,10 @@
 //! inherently cross-file, which cannot be constructed for a document-local server (`didChange`
 //! is already covered by LSP's own ordering guarantee).
 
+use std::path::{Path, PathBuf};
+
 use serde::Deserialize;
+use serde_json::Value;
 
 use super::Mapping;
 use crate::peek::MessageView;
@@ -88,6 +106,35 @@ const KNOWN_TOKENS: &[&str] = &[
 /// Record of versions passed: "2026-07-23" (nixpkgs `nil`, flake.nix `servers`), 2026-09-08.
 pub const TESTED_VERSIONS: &[&str] = &["2026-07-23"];
 
+/// nil's default name for the `nixpkgs` input (`nix.nixpkgsInputName`). lsp-det does not read
+/// the client's configuration for a rename (Claude Code does not support
+/// `workspace/configuration`, ADR 0021 addendum 2026-09-09): a workspace using a different name
+/// starts `unknown` instead of `initializing`, same as one with no `nixpkgs` input at all.
+const NIXPKGS_INPUT_NAME: &str = "nixpkgs";
+
+/// Whether any of the client's `workspaceFolders` has a `flake.lock` whose root node's inputs
+/// name `nixpkgs` (ADR 0021 addendum 2026-09-09). A missing, unreadable, or non-JSON file, or a
+/// root node with no `nixpkgs` input, counts as no for that folder.
+fn any_folder_has_a_nixpkgs_flake_lock(folders: &[PathBuf]) -> bool {
+    folders
+        .iter()
+        .any(|folder| flake_lock_has_nixpkgs_input(&folder.join("flake.lock")))
+}
+
+fn flake_lock_has_nixpkgs_input(path: &Path) -> bool {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&contents) else {
+        return false;
+    };
+    // The root node is the one the top-level "root" field names ("root" by convention).
+    let root = value["root"].as_str().unwrap_or("root");
+    value["nodes"][root]["inputs"]
+        .get(NIXPKGS_INPUT_NAME)
+        .is_some()
+}
+
 #[derive(Deserialize)]
 struct ProgressParams {
     token: String,
@@ -114,6 +161,10 @@ pub struct NilAdapter {
     /// Tokens among [`KNOWN_TOKENS`] that began and have not yet ended. `ready` only once this
     /// is empty.
     open: Vec<String>,
+    /// Whether a begin of a known token has ever been observed. A type-2 `window/showMessage`
+    /// before the first one moves readiness to `unknown` (ADR 0021 addendum 2026-09-09); after
+    /// it, a type-2 message only moves health.
+    has_begun: bool,
 }
 
 impl Default for NilAdapter {
@@ -135,6 +186,7 @@ impl NilAdapter {
             version_is_tested,
             state: ServerState::initializing(),
             open: Vec::new(),
+            has_begun: false,
         }
     }
 
@@ -145,6 +197,7 @@ impl NilAdapter {
                 if !KNOWN_TOKENS.contains(&token.as_str()) {
                     return None;
                 }
+                self.has_begun = true;
                 self.open.push(token);
                 let next = ServerState {
                     readiness: Readiness::Indexing,
@@ -176,11 +229,19 @@ impl NilAdapter {
             SHOW_MESSAGE_WARNING => Health::Warning,
             _ => return None,
         };
-        let next = ServerState {
+        let mut next = ServerState {
             health,
             message: Some(params.message),
             ..self.state.clone()
         };
+        // A type-2 message before any begin means the load never started (a missing input's
+        // store path, research doc's "how failures show" section): this observer can no longer
+        // tell "not indexed yet" from "never will be" apart, so readiness follows health to
+        // `unknown` (ADR 0021 addendum 2026-09-09, decision point 2). Once a begin has been
+        // observed, a later type-2 message only moves health.
+        if params.kind == SHOW_MESSAGE_WARNING && !self.has_begun {
+            next.readiness = Readiness::Unknown;
+        }
         if next == self.state {
             return None;
         }
@@ -190,8 +251,11 @@ impl NilAdapter {
 }
 
 impl Mapping for NilAdapter {
+    /// `initializing`, unless [`learn_workspace_folders`](Mapping::learn_workspace_folders) has
+    /// already found no `nixpkgs` flake.lock in any workspace folder, in which case it is
+    /// `unknown` (ADR 0021 addendum 2026-09-09, decision (b)).
     fn initial_state(&self) -> ServerState {
-        ServerState::initializing()
+        self.state.clone()
     }
 
     /// The guarantee to declare (spec chapter 5). Declared only for [`TESTED_VERSIONS`] (spec
@@ -203,6 +267,16 @@ impl Mapping for NilAdapter {
             ServerStateProvider::document_only(&[])
         } else {
             ServerStateProvider::notifications_only()
+        }
+    }
+
+    /// Reads the client's `workspaceFolders` once, at mapping selection (before
+    /// [`initial_state`](Mapping::initial_state) is read), to tell a workspace nil will index
+    /// (a `nixpkgs` flake.lock is present) from one where no begin will ever arrive (ADR 0021
+    /// addendum 2026-09-09, decision (b)).
+    fn learn_workspace_folders(&mut self, folders: &[PathBuf]) {
+        if !any_folder_has_a_nixpkgs_flake_lock(folders) {
+            self.state.readiness = Readiness::Unknown;
         }
     }
 
@@ -234,9 +308,54 @@ impl Mapping for NilAdapter {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use serde_json::Value;
+
     use super::*;
     use crate::peek::peek;
     use crate::state::{Health, Readiness};
+
+    /// A throwaway directory for a fake workspace folder, cleaned up on drop. No dependency is
+    /// added for this (`CLAUDE.md`'s absolute constraint): `std::env::temp_dir()` plus a name
+    /// unique to the test and the process.
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("lsp-det-nil-adapter-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("cannot create the temporary directory");
+            TempDir { path }
+        }
+
+        /// Writes a `flake.lock` whose root node's inputs are exactly `names`.
+        fn write_flake_lock(&self, names: &[&str]) {
+            let mut inputs = serde_json::Map::new();
+            for name in names {
+                inputs.insert((*name).to_string(), Value::String(format!("{name}-node")));
+            }
+            let value = serde_json::json!({
+                "nodes": {"root": {"inputs": Value::Object(inputs)}},
+                "root": "root",
+                "version": 7,
+            });
+            std::fs::write(
+                self.path.join("flake.lock"),
+                serde_json::to_string_pretty(&value).unwrap(),
+            )
+            .unwrap();
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 
     /// The three fixed `$/progress` tokens a real nil was observed to send
     /// (research/nil-readiness-measurement.md): NixOS options evaluation, input flake
@@ -435,5 +554,102 @@ mod tests {
             json.contains("coverage"),
             "nil must declare coverage: {json}"
         );
+    }
+
+    // ADR 0021 addendum 2026-09-09, decision (b): a workspace whose `flake.lock` root node has
+    // no `nixpkgs` input never sends a `$/progress` begin, so this mapping starts `unknown`
+    // instead of `initializing` there.
+
+    #[test]
+    fn a_workspace_folder_with_a_nixpkgs_flake_lock_starts_initializing() {
+        let dir = TempDir::new("with-nixpkgs");
+        dir.write_flake_lock(&["nixpkgs"]);
+        let mut m = NilAdapter::new();
+        m.learn_workspace_folders(std::slice::from_ref(&dir.path));
+        assert_eq!(m.initial_state().readiness, Readiness::Initializing);
+        assert_eq!(m.initial_state().health, Health::Unknown);
+    }
+
+    #[test]
+    fn a_workspace_folder_without_a_flake_lock_starts_unknown() {
+        let dir = TempDir::new("no-flake-lock");
+        let mut m = NilAdapter::new();
+        m.learn_workspace_folders(std::slice::from_ref(&dir.path));
+        assert_eq!(m.initial_state().readiness, Readiness::Unknown);
+    }
+
+    #[test]
+    fn a_flake_lock_is_read_through_its_root_pointer_not_a_node_named_root() {
+        // flake.lock names its root node in the top-level "root" field; the key is "root" in
+        // practice but nothing in the format requires it.
+        let dir = TempDir::new("renamed-root");
+        let value = serde_json::json!({
+            "nodes": {
+                "top": {"inputs": {"nixpkgs": "nixpkgs-node"}},
+                "root": {"inputs": {}},
+            },
+            "root": "top",
+            "version": 7,
+        });
+        std::fs::write(
+            dir.path.join("flake.lock"),
+            serde_json::to_string_pretty(&value).unwrap(),
+        )
+        .unwrap();
+        let mut m = NilAdapter::new();
+        m.learn_workspace_folders(std::slice::from_ref(&dir.path));
+        assert_eq!(m.initial_state().readiness, Readiness::Initializing);
+    }
+
+    #[test]
+    fn a_flake_lock_whose_root_has_no_nixpkgs_input_starts_unknown() {
+        let dir = TempDir::new("no-nixpkgs-input");
+        dir.write_flake_lock(&["some-other-input"]);
+        let mut m = NilAdapter::new();
+        m.learn_workspace_folders(std::slice::from_ref(&dir.path));
+        assert_eq!(m.initial_state().readiness, Readiness::Unknown);
+    }
+
+    #[test]
+    fn a_type_2_show_message_before_any_begin_moves_readiness_to_unknown_too() {
+        let mut m = NilAdapter::new();
+        let state = feed(
+            &mut m,
+            &show_message(2, "Some flake inputs are not available"),
+        )
+        .expect("a type 2 message is a signal");
+        assert_eq!(state.readiness, Readiness::Unknown);
+        assert_eq!(state.health, Health::Warning);
+    }
+
+    #[test]
+    fn unknown_from_a_workspace_without_a_nixpkgs_flake_lock_still_indexes_and_becomes_ready_on_a_begin()
+     {
+        let dir = TempDir::new("no-flake-lock-then-begin");
+        let mut m = NilAdapter::new();
+        m.learn_workspace_folders(std::slice::from_ref(&dir.path));
+        assert_eq!(m.initial_state().readiness, Readiness::Unknown);
+        let state = feed(&mut m, &progress(LOAD_NIXOS_OPTIONS_TOKEN, "begin"))
+            .expect("a begin is a signal even from a workspace that started unknown");
+        assert_eq!(state.readiness, Readiness::Indexing);
+        let state = feed(&mut m, &progress(LOAD_NIXOS_OPTIONS_TOKEN, "end"))
+            .expect("the matching end is a signal");
+        assert_eq!(state.readiness, Readiness::Ready);
+    }
+
+    #[test]
+    fn unknown_from_a_pre_begin_show_message_still_indexes_and_becomes_ready_on_a_begin() {
+        let mut m = NilAdapter::new();
+        feed(
+            &mut m,
+            &show_message(2, "Some flake inputs are not available"),
+        );
+        assert_eq!(m.state.readiness, Readiness::Unknown);
+        let state = feed(&mut m, &progress(LOAD_NIXOS_OPTIONS_TOKEN, "begin"))
+            .expect("a begin is a signal even from unknown");
+        assert_eq!(state.readiness, Readiness::Indexing);
+        let state = feed(&mut m, &progress(LOAD_NIXOS_OPTIONS_TOKEN, "end"))
+            .expect("the matching end is a signal");
+        assert_eq!(state.readiness, Readiness::Ready);
     }
 }

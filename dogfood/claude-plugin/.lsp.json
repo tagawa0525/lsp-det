@@ -1,22 +1,43 @@
 {
   "rust-analyzer-via-lsp-det": {
     "command": "lsp-det",
-    "args": ["--", "rust-analyzer"],
-    "extensionToLanguage": { ".rs": "rust" }
+    "args": [
+      "--",
+      "rust-analyzer"
+    ],
+    "extensionToLanguage": {
+      ".rs": "rust"
+    }
   },
   "gopls-via-lsp-det": {
     "command": "lsp-det",
-    "args": ["--", "gopls"],
-    "extensionToLanguage": { ".go": "go" }
+    "args": [
+      "--",
+      "gopls"
+    ],
+    "extensionToLanguage": {
+      ".go": "go"
+    }
   },
   "pyright-via-lsp-det": {
     "command": "lsp-det",
-    "args": ["--", "pyright-langserver", "--stdio"],
-    "extensionToLanguage": { ".py": "python", ".pyi": "python" }
+    "args": [
+      "--",
+      "pyright-langserver",
+      "--stdio"
+    ],
+    "extensionToLanguage": {
+      ".py": "python",
+      ".pyi": "python"
+    }
   },
   "typescript-language-server-via-lsp-det": {
     "command": "lsp-det",
-    "args": ["--", "typescript-language-server", "--stdio"],
+    "args": [
+      "--",
+      "typescript-language-server",
+      "--stdio"
+    ],
     "extensionToLanguage": {
       ".ts": "typescript",
       ".tsx": "typescriptreact",
@@ -26,6 +47,16 @@
       ".jsx": "javascriptreact",
       ".mjs": "javascript",
       ".cjs": "javascript"
+    }
+  },
+  "nixd-via-lsp-det": {
+    "command": "lsp-det",
+    "args": [
+      "--",
+      "nixd"
+    ],
+    "extensionToLanguage": {
+      ".nix": "nix"
     }
   }
 }

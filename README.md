@@ -2,7 +2,7 @@
 
 [日本語](README.ja.md)
 
-[![CI](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml/badge.svg)](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/tagawa0525/lsp-det?display_name=tag)](https://github.com/tagawa0525/lsp-det/releases)
+[![CI](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml/badge.svg)](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/tagawa0525/lsp-det?display_name=tag)](https://github.com/tagawa0525/lsp-det/releases) [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
 A reference implementation of the server state protocol, which removes the "silent lies" of language servers.
 
@@ -193,3 +193,7 @@ The spec and this README are in English and have Japanese versions alongside. Th
 ## Status
 
 v0.1 (rust-analyzer and gopls) and v0.2 (pyright, typescript-language-server, Serena integration) are complete. Next are the upstream submissions.
+
+## License
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT) at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this work by you shall be dual licensed as above, without any additional terms or conditions.

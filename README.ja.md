@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-[![CI](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml/badge.svg)](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/tagawa0525/lsp-det?display_name=tag)](https://github.com/tagawa0525/lsp-det/releases)
+[![CI](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml/badge.svg)](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/tagawa0525/lsp-det?display_name=tag)](https://github.com/tagawa0525/lsp-det/releases) [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#ライセンス)
 
 言語サーバーの「無言の嘘」を消す、サーバー状態プロトコルの参照実装。
 
@@ -190,3 +190,7 @@ cargo test --test conformance -- --ignored   # 実サーバー結合 36 件（�
 ## 現在地
 
 v0.1（rust-analyzer と gopls）と v0.2（pyright、typescript-language-server、Serena 統合）は完了している。次は上流への提出。
+
+## ライセンス
+
+[Apache License, Version 2.0](LICENSE-APACHE) または [MIT license](LICENSE-MIT) のいずれか、利用者の選択による。明示的に別の意思表示がない限り、この作品への貢献として意図的に提出されたものは、追加の条項なしに上記の二重ライセンスとする。

@@ -5,6 +5,7 @@ edition = "2024"
 description = "Transparent LSP proxy that removes language servers' silent lies. Reference implementation of the server state protocol"
 repository = "https://github.com/tagawa0525/lsp-det"
 readme = "README.md"
+license = "MIT OR Apache-2.0"
 keywords = ["lsp", "language-server", "proxy", "agents"]
 categories = ["development-tools"]
 

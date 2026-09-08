@@ -110,8 +110,12 @@ interface ServerCapabilities {
          * "openDocuments": only the documents the client has opened. The
          *                  contents of files that are not open do not
          *                  appear in responses
+         * "document":      only the document the request names. Uses in
+         *                  other files, open or not, do not appear in
+         *                  responses (a server whose name resolution is
+         *                  per document)
          */
-        scope: "workspace" | "openDocuments";
+        scope: "workspace" | "openDocuments" | "document";
         /**
          * The methods whose results are capped at a number of items, and
          * the cap. A response that reached the cap may be incomplete.
@@ -162,7 +166,7 @@ A server or observer sends `experimental/serverStateChanged` only when the clien
 
 ## 6. Semantics
 
-1. **Coverage** (when `coverage` is declared): while `readiness` is `"ready"` and `health` is not `"error"`, responses to the methods of 7.0 must be computed over the index of the declared `scope`, and the result of the same query must not grow later as indexing of that scope proceeds. A `scope` of `"workspace"` is the whole workspace; `"openDocuments"` is the documents the client has opened. A method listed in `incomplete` may return an incomplete result when the number of items in the response reached its cap. A method not listed must not be capped
+1. **Coverage** (when `coverage` is declared): while `readiness` is `"ready"` and `health` is not `"error"`, responses to the methods of 7.0 must be computed over the index of the declared `scope`, and the result of the same query must not grow later as indexing of that scope proceeds. A `scope` of `"workspace"` is the whole workspace; `"openDocuments"` is the documents the client has opened; `"document"` is the document the request names. A method listed in `incomplete` may return an incomplete result when the number of items in the response reached its cap. A method not listed must not be capped
 2. **Freshness** (when `freshness` is declared): while `readiness` is `"ready"` and `health` is not `"error"`, every `textDocument/didChange` received so far, and every `workspace/didChangeWatchedFiles` change of a kind listed in `fileChanges`, must have been incorporated. A change of a kind not listed may still be in the middle of being incorporated after `"ready"` (the server declares this with the awareness that it cannot convey the incorporation through `readiness`). The promise extends only to changes the server was told about; changes the server picked up through its own file watching are outside it (an observer cannot see them and cannot verify them). The substance of this guarantee is cross-file freshness: a query starting from a file other than the changed one sees the change reflected in the index. Most single-file change-then-query sequences are already satisfied by LSP's existing ordering guarantee (on one connection, a later request is processed after an earlier notification)
 3. **Reindexing**: when a reanalysis of the workspace starts (a dependency file changed, a branch was switched, and so on), `readiness` must go back to `"indexing"` and be notified
 4. **Relation to existing mechanisms**: `$/progress` is a progress display for humans and does not replace this protocol. The `ServerCancelled` error forces polling and does not replace this protocol either (see the discussion in LSP issue #1367)
@@ -188,7 +192,7 @@ A method whose results are capped at a number of items (`workspace/symbol` is a 
 
 ### 7.2 With `coverage` declared
 
-1. `textDocument/references` after `"ready"` matches the precomputed complete result (within the open documents when `scope` is `"openDocuments"`)
+1. `textDocument/references` after `"ready"` matches the precomputed complete result (within the open documents when `scope` is `"openDocuments"`, within the requesting document when it is `"document"`)
 2. For a query with more matches than the cap, a method listed in `incomplete` returns the capped number of items (so the cap is as declared). A method not listed returns all of them
 
 ### 7.3 With `freshness` declared

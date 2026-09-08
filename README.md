@@ -2,6 +2,8 @@
 
 [日本語](README.ja.md)
 
+[![CI](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml/badge.svg)](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/tagawa0525/lsp-det?display_name=tag)](https://github.com/tagawa0525/lsp-det/releases)
+
 A reference implementation of the server state protocol, which removes the "silent lies" of language servers.
 
 LSP gives a client no machine-readable way to learn whether the server can fully answer a request. As a result, the client accepts an empty array from an unfinished index, a successful-looking response from a broken server, or a result that ignores recent edits, all as legitimate answers. In editors, human eyes and a sense of timing compensated for this. Coding agents do not compensate. They send `textDocument/references` right after `initialize`, read the empty array as "no references", and go ahead with the rename or the deletion.
@@ -88,6 +90,16 @@ client ──[plain LSP]── downstream side ──[LSP + server state protoco
 Notifications, single-file queries (hover, completion, documentSymbol and so on), lifecycle messages, and everything from server to client pass straight through. A `$/cancelRequest` or `shutdown` received while holding answers the held requests with an error before being forwarded. No request is left without a response.
 
 Message bodies are forwarded as the original bytes. Only the notifications a mapping needs and the `initialize` exchange are parsed.
+
+## Install
+
+Pick one.
+
+- **Release binaries**: each `v*` tag attaches a static binary per platform to [GitHub Releases](https://github.com/tagawa0525/lsp-det/releases) (`lsp-det-x86_64-unknown-linux-gnu`, `lsp-det-aarch64-unknown-linux-gnu`, `lsp-det-x86_64-apple-darwin`, `lsp-det-aarch64-apple-darwin`, `lsp-det-x86_64-pc-windows-msvc.exe`). Download the one for your platform, rename it to `lsp-det` (`lsp-det.exe` on Windows), make it executable, and put it on `PATH`
+- **Cargo**: `cargo install --git https://github.com/tagawa0525/lsp-det` (stable Rust, edition 2024; no build-time dependencies beyond `serde`, `serde_json`, `thiserror`, and `libc`)
+- **Nix**: `nix profile install github:tagawa0525/lsp-det`, or add `github:tagawa0525/lsp-det` as a flake input and take `packages.${system}.default` (this is how the author's home-manager configuration consumes it; see [dogfood/README.md](dogfood/README.md))
+
+lsp-det has no configuration file and no flags. It is a transparent proxy: put it in front of the language server command, as in the next section.
 
 ## Usage
 

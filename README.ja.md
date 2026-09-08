@@ -2,6 +2,8 @@
 
 [English](README.md)
 
+[![CI](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml/badge.svg)](https://github.com/tagawa0525/lsp-det/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/tagawa0525/lsp-det?display_name=tag)](https://github.com/tagawa0525/lsp-det/releases)
+
 言語サーバーの「無言の嘘」を消す、サーバー状態プロトコルの参照実装。
 
 LSP には、サーバーが要求に完全に答えられる状態かをクライアントが機械的に知る手段がない。その結果、インデックス未完了の空配列・壊れたサーバーの成功風の応答・編集を織り込まない結果を、クライアントは正当な答えとして受け取る。エディタでは人間の目とタイミング感覚がこれを補っていた。コーディングエージェントは補わない。`initialize` の直後に `textDocument/references` を投げ、空配列を「参照なし」と読み、そのままリネームや削除を実行する。
@@ -87,6 +89,16 @@ interface ServerState {
 通知・単一ファイルの問い合わせ（hover / completion / documentSymbol 等）・ライフサイクル・サーバーからクライアントへの方向はすべて素通しする。保留中に `$/cancelRequest` や `shutdown` を受けたら、保留分にエラーを応答してから流す。応答を返さない要求は作らない。
 
 メッセージのボディは原文バイトのまま転送する。写像に要る通知と `initialize` の往復だけをパースする。
+
+## 導入
+
+いずれか 1 つ。
+
+- **Release のバイナリ**: `v*` の tag ごとに [GitHub Releases](https://github.com/tagawa0525/lsp-det/releases) にプラットフォームごとの静的バイナリが付く（`lsp-det-x86_64-unknown-linux-gnu`、`lsp-det-aarch64-unknown-linux-gnu`、`lsp-det-x86_64-apple-darwin`、`lsp-det-aarch64-apple-darwin`、`lsp-det-x86_64-pc-windows-msvc.exe`）。自分のプラットフォームのものを落とし、`lsp-det`（Windows は `lsp-det.exe`）に改名して実行権限を付け、`PATH` に置く
+- **Cargo**: `cargo install --git https://github.com/tagawa0525/lsp-det`（stable の Rust、edition 2024。ビルド時の依存は `serde`、`serde_json`、`thiserror`、`libc` だけ）
+- **Nix**: `nix profile install github:tagawa0525/lsp-det`。または `github:tagawa0525/lsp-det` を flake input にして `packages.${system}.default` を取る（作者の home-manager の構成はこの形。[dogfood/README.md](dogfood/README.md)）
+
+lsp-det に設定ファイルとフラグはない。透過プロキシなので、次の節のとおり言語サーバーのコマンドの前に置くだけでよい。
 
 ## 使い方
 

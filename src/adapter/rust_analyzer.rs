@@ -70,7 +70,7 @@ impl From<UpstreamHealth> for Health {
 /// Record of versions passed:
 /// - `1.98.0 (88d9e12 2026-08-18)` (rustup stable), 2026-08-29 and 2026-09-03
 /// - `2026-08-03` (nixpkgs, flake.nix dev environment), 2026-09-03
-pub const TESTED_VERSIONS: &[&str] = &["1.98.0", "2026-08-03"];
+pub const TESTED_VERSIONS: &[&str] = &["1.97.1", "1.98.0", "2026-08-03"];
 
 /// The leading token of `serverInfo.version`. Drops a trailing hash or date.
 fn leading_token(version: &str) -> &str {

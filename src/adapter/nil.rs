@@ -116,6 +116,12 @@ impl NilAdapter {
         }
     }
 
+    // TODO(GREEN): look at TESTED_VERSIONS and declare document_only(&[]) for a tested version
+    // (ADR 0021 decision E, answer (b)).
+    pub fn for_version(_version: Option<&str>) -> Self {
+        Self::new()
+    }
+
     fn on_progress(&mut self, params: ProgressParams) -> Option<ServerState> {
         let ProgressParams { token, value } = params;
         match value.kind.as_str() {
@@ -386,6 +392,36 @@ mod tests {
         assert_eq!(
             NilAdapter::new().guarantees(),
             ServerStateProvider::notifications_only()
+        );
+    }
+
+    #[test]
+    fn declares_a_guarantee_only_for_the_tested_version() {
+        let tested = NilAdapter::for_version(Some("2026-07-23"));
+        assert_eq!(tested.guarantees(), ServerStateProvider::document_only(&[]));
+        let untested = NilAdapter::for_version(Some("2026-07-22"));
+        assert_eq!(
+            untested.guarantees(),
+            ServerStateProvider::notifications_only()
+        );
+        let unversioned = NilAdapter::new();
+        assert_eq!(
+            unversioned.guarantees(),
+            ServerStateProvider::notifications_only()
+        );
+    }
+
+    #[test]
+    fn a_tested_guarantee_declares_no_freshness() {
+        let tested = NilAdapter::for_version(Some("2026-07-23"));
+        let json = serde_json::to_string(&tested.guarantees()).unwrap();
+        assert!(
+            !json.contains("freshness"),
+            "nil must not declare freshness: {json}"
+        );
+        assert!(
+            json.contains("coverage"),
+            "nil must declare coverage: {json}"
         );
     }
 }

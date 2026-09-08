@@ -147,6 +147,12 @@ impl ServerStateProvider {
             freshness: None,
         }
     }
+
+    // TODO(GREEN): declare CoverageScope::Document and use it here instead of forwarding to
+    // coverage_only (ADR 0021 decision E, answer (b)).
+    pub fn document_only(incomplete: &[(&str, u64)]) -> Self {
+        Self::coverage_only(incomplete)
+    }
 }
 
 impl ServerState {
@@ -367,6 +373,19 @@ mod tests {
         assert_eq!(
             json,
             r#"{"coverage":{"scope":"workspace","incomplete":{"workspace/symbol":100}}}"#
+        );
+    }
+
+    #[test]
+    fn document_only_declares_the_document_scope_and_omits_freshness() {
+        // nixd and nil (ADR 0021 decision E, answer (b)): references is limited to the
+        // requesting document, so scope must be "document", and no freshness (7.3 needs a
+        // cross-file query, which cannot be constructed for a document-local server).
+        let json = serde_json::to_string(&ServerStateProvider::document_only(&[])).unwrap();
+        assert_eq!(json, r#"{"coverage":{"scope":"document","incomplete":{}}}"#);
+        assert!(
+            !json.contains("freshness"),
+            "document_only must not declare a freshness key: {json}"
         );
     }
 }

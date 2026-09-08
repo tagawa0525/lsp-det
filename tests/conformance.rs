@@ -5354,12 +5354,13 @@ fn nixd_end(client: &mut ConformanceClient, token: i64, message: &str) {
 }
 
 #[test]
-fn nixd_is_selected_by_server_info_and_declares_no_guarantee() {
+fn nixd_is_selected_by_server_info_and_declares_document_coverage() {
     let (mut client, result) = nixd_client();
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({}),
-        "nixd must declare no guarantee until ADR 0021 decision E is answered: {result}"
+        json!({"coverage": {"scope": "document", "incomplete": {}}}),
+        "nixd (2.9.2, a tested version) must declare document-scoped coverage and no freshness \
+         (ADR 0021 decision E, answer (b)): {result}"
     );
     assert_eq!(client.server_state().readiness, Readiness::Initializing);
     client.shutdown();
@@ -5626,12 +5627,13 @@ fn nil_end(client: &mut ConformanceClient, token: &str) {
 }
 
 #[test]
-fn nil_is_selected_by_server_info_and_declares_no_guarantee() {
+fn nil_is_selected_by_server_info_and_declares_document_coverage() {
     let (mut client, result) = nil_client();
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
-        json!({}),
-        "nil must declare no guarantee until ADR 0021 decision E is answered: {result}"
+        json!({"coverage": {"scope": "document", "incomplete": {}}}),
+        "nil (2026-07-23, a tested version) must declare document-scoped coverage and no \
+         freshness (ADR 0021 decision E, answer (b)): {result}"
     );
     assert_eq!(client.server_state().readiness, Readiness::Initializing);
     client.shutdown();

@@ -1110,8 +1110,8 @@ impl ConformanceClient {
 
     /// The exit status of the subject if it exits within `window` (checks every 10ms), `None` if
     /// it is still running at the end. Reaps the child, so use this rather than
-    /// `wait_until_exited` for the subject itself: an exited child that has not been reaped is a
-    /// zombie, which `kill(pid, 0)` still counts as alive.
+    /// `wait_until_exited` for the subject itself: on Unix an exited child that has not been
+    /// reaped is a zombie, which the `kill(pid, 0)` probe still counts as alive.
     pub fn exit_status_within(&mut self, window: Duration) -> Option<std::process::ExitStatus> {
         let deadline = std::time::Instant::now() + window;
         loop {

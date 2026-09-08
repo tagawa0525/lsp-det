@@ -292,10 +292,11 @@ gopls, rust-analyzer, typescript-language-server, pyright, clangd の 5 つ。
 
 ## 5. 上流への提案経路
 
-1. 5 言語のプロキシと準拠テストを公開
-2. 各上流に「`declarationRange` と `workspace/serverState` を実装すれば、プロキシの補正コードが N 行消える」という issue を実測付きで立てる。gopls と rust-analyzer を先に
-3. 上流が 1 つでも取り込んだら、LSP 本体（microsoft/language-server-protocol）に proposal を出す。サーバー状態は既存 issue #511 のスレッドに「エージェント用途からの再提案」として接続し、宣言範囲は新規 issue とする。`proposed` 状態の拡張として `3.18` 以降のサイクルに載せることを目標にする。起動の宣言は LSP 本体の対象外なので別仕様として出す
-4. LSAP 等の上位レイヤーには、本仕様を前提とすることで自前の補正を消せることを提示し、依存してもらう
+現在の戦略（順序、規則、提出物の一覧）は [upstream-submissions.md](upstream-submissions.md)。要点は次の 3 つ。
+
+1. 消費者（Claude Code、lsp-det、Serena）を先に立ててから、サーバーの上流に頼む
+2. 相手が既に感じている不具合の修正を先に、プロトコルの提案はその一般化として後に出す。上流が同じ問題に既に別の答えを持っていれば、その上に載せる
+3. LSP 本体（microsoft/language-server-protocol）への proposal は、上流の取り込みを待たず、語彙の乱立の実測（[research/readiness-vocabulary-corpus.md](research/readiness-vocabulary-corpus.md)）を根拠に出す。既存 issue microsoft/language-server-protocol#511 のスレッドに「エージェント用途からの再提案」として接続する。宣言範囲と起動の宣言は凍結中で、この経路の対象外
 
 ---
 

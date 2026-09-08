@@ -71,5 +71,38 @@ lsp-det 経由（`lsp-det -- typescript-language-server --stdio`）で `tests/co
 
 - 0 件になる窓（約 0.3 秒）は 2 ファイルの fixture と本機の速さでの値。大規模プロジェクトでは長くなる
 - クラッシュはロード完了後に測った。ロード中のクラッシュで progress の end とログのどちらが先に届くかは測っていない（写像はどちらの順でも `error` に落ち着く。end で `ok` にしてもその後の "Exited." で `error` になる）
-- exit code が非 0 のクラッシュでは言語サーバー自身が落ちて接続が閉じる（ソースの読み。実測は SIGKILL のみ）。その場合は EOF で伝わる（ADR 0009 決定 C-3）
+- exit code が非 0 のクラッシュでは言語サーバー自身が落ちて接続が閉じる（ソースの読み。実測は SIGKILL のみ）。その場合は EOF で伝わる（ADR 0009 決定 C-3）。signal で死んだ場合（code null）に生き残るのは 6.0.0 でも同じで、修正を fork に用意した（下の節）
 - 7.2 / 7.3 は 2 ファイルの fixture で測った。大規模プロジェクトでのロード中の応答が空になる窓は同じ構造だが、本文書の測定範囲外
+
+## 6.0.0 での再測定と修正（2026-09-09、提出前の準備 2）
+
+対外戦略（[../upstream-submissions.md](../upstream-submissions.md)）の準備 2 として、上流 HEAD（`19fce01`。`src` は v6.0.0 と同一、同梱の TypeScript は 6.0.3）をソースビルドして tsserver のクラッシュを測り直し、上流 typescript-language-server/typescript-language-server#302 / #305 の設計（tsserver が死んだら言語サーバー本体を落とし、クライアントに再起動させる）に沿った修正を fork に用意した。却下した案（`RequestFailed` の経路）と入れ替える。
+
+### 素の 6.0.0
+
+| 項目                                               | 実測                                                                                                                                 |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| tsserver 2 プロセス（semantic / syntax）に SIGKILL | 言語サーバーは 10 秒後も生きている。stderr には何も出ない（"[tsserver] Exited. Code: null. Signal: SIGKILL" はクライアントへのログ） |
+| 直後の `references`                                | `{"result": []}`（5.3.0 と同じ）                                                                                                     |
+
+### 取りこぼしの経緯（上流の履歴）
+
+- #305（2021-11）: tsserver の exit で無条件に `process.exit(1)`。#302 の実装
+- #536（2022-07）: `process.exit(1)` を `shutdown()` に置き換え（テストの後始末と、プログラムからの利用のため）
+- 507db40（2022-07）: ログを `if (exitCode)` の中に入れる。当時の `tsp-client.ts` は `on('exit')` を外さずに自分の shutdown で tsserver を SIGTERM で殺していたので、自分の shutdown でも `onExit` が `(null, 'SIGTERM')` で呼ばれ、それを黙らせるための条件
+- #585（2022-09）: VS Code 由来の `SingleTsServer` に移行。`kill()` が先に `dispose()` で exit handler を消すので、自分の shutdown は `onExit` に届かなくなった
+- #624（2022-11）: `if (exitCode)` の中で `throw`（言語サーバー本体を明示的に落とす）。条件はそのまま残った
+
+条件の理由は #585 で消えたが、効果（signal で死んだ tsserver では落ちない）が残った。Node の子プロセスの `exit` イベントは SIGKILL・SIGTERM で `code: null` になり、Node 自身の OOM（`--max-old-space-size` 超過の abort）でも `{code: null, signal: 'SIGABRT'}`（Linux、node 24.19.0 で実測）。#302 が挙げた OOM そのものが今の条件では拾えない。
+
+### 修正（fork `tagawa0525/typescript-language-server` の `tsserver-exit-by-signal`）
+
+`lsp-server.ts` の `onExit` から `if (exitCode)` を外し、常に `throw` する。`ts-client.test.ts` に「signal で殺した tsserver は `onExit` に `exitCode: null` で届く」「`shutdown()` は `onExit` に届かない」の 2 件。vitest 141 件、lint、typecheck 通過。fork の CI（Linux / macOS / Windows × Node 22 / 24）は fork の PR #1 で回した。
+
+| 経路                                                                                               | 結果                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 直結（パッチ版）                                                                                   | SIGKILL の直後に言語サーバーが code 1 で終了。stderr に "Error: tsserver process has exited (exit code: null, signal: SIGKILL). Stopping the server." とスタックトレース                                                                                                                                      |
+| 受け入れ条件 `typescript_language_server_exits_when_tsserver_is_killed`（`tests/upstream_dev.rs`） | 素の 6.0.0 で失敗、パッチ版で通過                                                                                                                                                                                                                                                                             |
+| lsp-det 経由の準拠テスト（パッチ版）                                                               | `typescript_language_server_tsserver_crash_becomes_health_error_with_real_server` は言語サーバーごと落ちて lsp-det も終了し、書き込みが Broken pipe で失敗（上流消失。仕様 8 章）。`spec_7_1` は同梱の TypeScript 6.0.3 が `TESTED_VERSIONS` にないので保証なし `{}`。他 5 件は通過。どちらの失敗も想定どおり |
+
+harness の落とし穴: 被験者そのものの終了を `wait_until_exited`（`kill(pid, 0)`）で見ると、刈り取っていない zombie が生きていると見えて「生き残った」と誤判定する。`Child::try_wait` で刈り取る `exit_status_within` を足した。

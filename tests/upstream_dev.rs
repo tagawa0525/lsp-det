@@ -20,6 +20,9 @@
 //!   Path 2 of vision.md chapter 5). Once they do, the upstream side of lsp-det becomes the
 //!   identity mapping (spec 8.2 item 6, 8.4 item 2), and the upstream's declaration and state
 //!   flow through as they are
+//! - typescript-language-server: exit when tsserver is killed by a signal, as it already does
+//!   for a non-zero exit code (upstream #302 / #305). Once it does, a dead tsserver reaches
+//!   lsp-det as the exit of the upstream (spec chapter 8) instead of empty answers
 
 mod support;
 
@@ -213,16 +216,18 @@ fn gopls_speaks_the_server_state_protocol() {
 }
 
 // ---------------------------------------------------------------------------
-// Bug fix: a request without a tsserver is an error, not an empty success
+// Bug fix: the language server exits when tsserver is killed by a signal
 // ---------------------------------------------------------------------------
 
-/// typescript-language-server: after tsserver has exited, a request is answered with an error
-/// (`RequestFailed`, -32803, the reason in the message) instead of an empty array reported as
-/// success (docs/research/typescript-language-server-readiness-measurement.md: the language server
-/// survives a SIGKILL of tsserver and answers `references` with `[]`).
+/// typescript-language-server: when tsserver dies, the language server exits so that the client
+/// restarts it (upstream #302, the design of #305). The exit is honoured only for a non-zero
+/// exit code, so a tsserver killed by a signal (`exitCode: null`: SIGKILL from the OOM killer,
+/// SIGABRT from Node's own out-of-memory abort) leaves the language server alive, answering
+/// `references` with `[]` (docs/research/typescript-language-server-readiness-measurement.md).
+/// Passes once the language server exits on that too.
 #[test]
 #[ignore = "acceptance condition for an upstream change. Local only. Put target/upstream/bin in PATH and run cargo test --test upstream_dev -- --ignored"]
-fn typescript_language_server_fails_requests_after_tsserver_exit() {
+fn typescript_language_server_exits_when_tsserver_is_killed() {
     let project = support::TempTsProject::with_cross_file_reference("upstream-dev-crash");
     let a = project.file("a.ts");
     let mut client = ConformanceClient::start(&direct(
@@ -252,46 +257,23 @@ fn typescript_language_server_fails_requests_after_tsserver_exit() {
         !killed.is_empty(),
         "the tsserver grandchild process was not found"
     );
-    // The language server notices the exit and logs it ("[tsserver] Exited. Code: ..."). Send
-    // the request only after that, so the test does not depend on the order of the kill and the
-    // request. Other log messages may arrive first, so the wait is bounded as a whole.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-        assert!(
-            !remaining.is_zero(),
-            "the exit of tsserver is not logged within 10 seconds"
-        );
-        let log = client
-            .await_notification_within("window/logMessage", remaining)
-            .expect("the exit of tsserver is not logged within 10 seconds");
-        if log["message"]
-            .as_str()
-            .is_some_and(|m| m.contains("Exited. Code:"))
-        {
-            break;
-        }
-    }
 
-    let id = client.send_request(
-        "textDocument/references",
-        json!({
-            "textDocument": {"uri": support::file_uri(&a)},
-            "position": {"line": 0, "character": 16},
-            "context": {"includeDeclaration": false},
-        }),
-    );
-    let response = client.await_response_to(id);
-    assert_eq!(
-        response["error"]["code"],
-        json!(-32803),
-        "a request without a tsserver is not RequestFailed: {response}"
-    );
+    // The language server notices the exit through the `exit` event of the child process and
+    // stops itself with a non-zero exit code, so that the client restarts it. The wait only
+    // bounds how long the test looks.
+    let status = client
+        .exit_status_within(std::time::Duration::from_secs(10))
+        .expect(
+            "the language server survived the death of tsserver (a request would now be \
+             answered with an empty success)",
+        );
     assert!(
-        response["error"]["message"]
-            .as_str()
-            .is_some_and(|m| m.contains("tsserver exited")),
-        "the reason is not in the message: {response}"
+        !status.success(),
+        "the language server exited as if nothing happened: {status}"
     );
-    client.shutdown();
+    let log = client.stderr_after_exit();
+    assert!(
+        log.contains("tsserver process has exited"),
+        "the reason for stopping is not on stderr: {log}"
+    );
 }

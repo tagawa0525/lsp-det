@@ -1,6 +1,6 @@
 # 上流への提出
 
-lsp-det の最終目標は、サーバー状態プロトコルを言語サーバーとクライアントの本体に入れ、最後に LSP 本体へ提案することである。本文書はそのための外向きの提出（PR、issue、報告）の戦略と一覧。**いずれもユーザーの確認をもらってから出す**。fork の準備と受け入れ条件の回し方は [scripts/upstream/README.md](../scripts/upstream/README.md)。
+lsp-det の最終目標は、サーバー状態プロトコルを言語サーバーとクライアントの本体に入れ、最後に LSP 本体へ提案することである。本文書はそのための外向きの提出（PR、issue、報告）の戦略と一覧。**いずれもユーザーの確認をもらってから出す**。fork の準備と受け入れ条件の回し方は [scripts/upstream/README.md](../scripts/upstream/README.md)。この戦略は別のセッションによる批判的レビューを経ていて、レビューの全文と採否は [research/upstream-strategy-review-2026-09.md](research/upstream-strategy-review-2026-09.md)。
 
 ## 位置づけ
 

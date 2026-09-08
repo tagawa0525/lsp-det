@@ -213,7 +213,7 @@ anthropics/claude-code にはタイトルに LSP を含む issue が 279 件(202
 
 | 拡張        | カバーされる不満(代表出典)                                                                                                                                                                                       |
 | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A: 宣言範囲 | Serena #1529 / #1484 / #1498 / #1697、Serena の 12 言語分シンボル補正コード([serena-solidlsp.md](serena-solidlsp.md))、gopls の `type` キーワード欠落([vision.md](../vision.ja.md) 1.1)                          |
+| A: 宣言範囲 | Serena #1529 / #1484 / #1498 / #1697、Serena の 12 言語分シンボル補正コード([serena-solidlsp.md](serena-solidlsp.md))、gopls の `type` キーワード欠落([vision.ja.md](../vision.ja.md) 1.1)                       |
 | B: 準備完了 | Serena #1937 / #1858 / #1923 / #1871 / #937 / #1390 / #1789 / #634、cclsp #27 / #30 / #26、boostvolt #14、LSAI の言語別 AsyncReady 設定、solidlsp の 6 類型 readiness 近似。空応答と「結果なし」の区別不能が根本 |
 | C: 起動     | Serena #1469 / #1798 / #1838、boostvolt #32 / #30、Piebald #72 / #69 / #67 / #62、claude-code #78188 / #79690、20 超言語の起動前 CLI 実行、LSAI の「manual setup per language」批判                              |
 

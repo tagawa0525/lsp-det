@@ -50,7 +50,7 @@ M6（typescript-language-server の写像、ADR 0010）の前提を実サーバ�
 - **名乗り**: `$/typescriptVersion` は typescript-language-server 固有の通知で、これを名乗りとして写像を選ぶ。版はワイヤに出る tsserver（TypeScript）の版で突き合わせる。typescript-language-server 自身の版は出ないので、テスト済みの版の一覧は「TypeScript の版」で持ち、その注意を一覧に書く。`serverInfo` を足す上流 PR の候補（pyright と同じ）
 - **readiness**: `initializing` から始め、"Initializing JS/TS language features…" の begin で `indexing`、そのトークンの end で `ready`。逐次ロードなので同時に複数のトークンは開かないが、gopls と同じく begin で覚えたトークンがすべて end したら `ready` にする
 - **health**: 最初の end で `ok`（ロードの成功を観測した）。"[tsserver] Exited. Code:" のログ（error）で `error`。再起動はないので `error` は戻らない。クラッシュ後の references は空配列を成功として返すので、下流側の拒否（RequestFailed）が「壊れたサーバーの成功風応答」を消す
-- **限界**: ファイルを開くまでプロジェクトをロードしないので、`didOpen` を送らずに横断リクエストだけを送るクライアントでは `initializing` のまま保留が解けない（保留がロードの契機を奪う）。Claude Code は `didOpen` の後に横断リクエストを送る（[research/claude-code-dogfooding.md](claude-code-dogfooding.ja.md)）。Serena は M7 で観測する。根本の解決は typescript-language-server が本プロトコルを話すこと
+- **限界**: ファイルを開くまでプロジェクトをロードしないので、`didOpen` を送らずに横断リクエストだけを送るクライアントでは `initializing` のまま保留が解けない（保留がロードの契機を奪う）。Claude Code は `didOpen` の後に横断リクエストを送る（[research/claude-code-dogfooding.ja.md](claude-code-dogfooding.ja.md)）。Serena は M7 で観測する。根本の解決は typescript-language-server が本プロトコルを話すこと
 
 ## M6 の結果（2026-09-03、写像実装後）
 

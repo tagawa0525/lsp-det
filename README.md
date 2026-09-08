@@ -96,7 +96,7 @@ Message bodies are forwarded as the original bytes. Only the notifications a map
 Pick one.
 
 - **Release binaries**: each `v*` tag attaches a static binary per platform to [GitHub Releases](https://github.com/tagawa0525/lsp-det/releases) (`lsp-det-x86_64-unknown-linux-gnu`, `lsp-det-aarch64-unknown-linux-gnu`, `lsp-det-x86_64-apple-darwin`, `lsp-det-aarch64-apple-darwin`, `lsp-det-x86_64-pc-windows-msvc.exe`). Download the one for your platform, rename it to `lsp-det` (`lsp-det.exe` on Windows), make it executable, and put it on `PATH`
-- **Cargo**: `cargo install --git https://github.com/tagawa0525/lsp-det` (stable Rust, edition 2024; no build-time dependencies beyond `serde`, `serde_json`, `thiserror`, and `libc`)
+- **Cargo**: `cargo install --git https://github.com/tagawa0525/lsp-det` (stable Rust, edition 2024; the only dependencies are `serde`, `serde_json`, `thiserror`, and `libc`, with no non-Rust toolchain needed)
 - **Nix**: `nix profile install github:tagawa0525/lsp-det`, or add `github:tagawa0525/lsp-det` as a flake input and take `packages.${system}.default` (this is how the author's home-manager configuration consumes it; see [dogfood/README.md](dogfood/README.md))
 
 lsp-det has no configuration file and no flags. It is a transparent proxy: put it in front of the language server command, as in the next section.

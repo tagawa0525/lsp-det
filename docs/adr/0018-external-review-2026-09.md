@@ -2,7 +2,7 @@
 
 - 日付: 2026-09-06
 - 状態: 採用
-- 関連: [research/external-review-2026-09.md](../research/external-review-2026-09.md)（レビュー本文）、[ADR 0006](0006-external-review-fixes.md)（前回の外部レビュー）、[ADR 0009](0009-success-criterion-and-two-sided-reference.md) 決定 C-4（時間判定の排除）、[ADR 0016](0016-declaration-shape.md)、[ADR 0017](0017-languages-of-documents-and-code.md)、[ADR 0019](0019-v0.4-corpus-and-counterexamples.md)（本 ADR で決めた検証の範囲）、[research/claude-code-dogfooding.md](../research/claude-code-dogfooding.ja.md) 第 5 回
+- 関連: [research/external-review-2026-09.md](../research/external-review-2026-09.md)（レビュー本文）、[ADR 0006](0006-external-review-fixes.md)（前回の外部レビュー）、[ADR 0009](0009-success-criterion-and-two-sided-reference.md) 決定 C-4（時間判定の排除）、[ADR 0016](0016-declaration-shape.md)、[ADR 0017](0017-languages-of-documents-and-code.md)、[ADR 0019](0019-v0.4-corpus-and-counterexamples.md)（本 ADR で決めた検証の範囲）、[research/claude-code-dogfooding.ja.md](../research/claude-code-dogfooding.ja.md) 第 5 回
 
 ## 経緯
 

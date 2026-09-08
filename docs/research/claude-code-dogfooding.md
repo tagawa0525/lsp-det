@@ -180,6 +180,38 @@ ADR 0015 の代行 2 つ（`workspace/didChangeWatchedFiles` の代行、重複�
 - CC への報告と上流の文面には、指示した版の 2 例（応答の原文、削除後のビルドエラー）を添え、自然な版は「同じ嘘でも害が偶然に消える例」として併記する
 - 保留の開始と解放のログ（ADR 0018 決定 A-1）は `claude --debug` のログにそのまま残り、保留時間（0.244 秒、0.029 秒）が読める
 
+## 第 7 回（2026-09-08）: 日常の環境から 3 言語。Nix の経路の成立
+
+0.6.0（ADR 0021 決定 F）。`--plugin-dir` ではなく、nixfiles が lsp-det を flake input として取り込み、`packages.default` を PATH に、`dogfood/claude-plugin` を `~/.claude/skills/lsp-det-dogfood` に置いた環境（nixfiles PR #180、rebuild 済み）。CC は `lsp-det-dogfood` を skills-as-plugins として読み、LSP サーバー 5 つを登録した（`--debug` ログの "Loaded 1 skills-as-plugins" と "Loaded 5 LSP server(s) from plugin: lsp-det-dogfood"）。公式の `rust-analyzer-lsp` は無効にしてある。
+
+### 方法
+
+- 被験者: 入れ子の非対話 CC 2.1.263（`claude -p "<findReferences を 1 回投げて結果をそのまま書け。ファイルは読むな>" --debug-file <ログ> --output-format json --allowedTools LSP --model sonnet`。`--plugin-dir` なし）。cwd を各リポジトリにして起動
+- 被験体: Nix は `~/nix/nixfiles`（`modules/home/parts/claude-code.nix` の `claudeCodeStaticSettings`。使用は 1 箇所）、Rust は `~/github/cc-bar`（rust-overlay の rust-analyzer 1.97.1。`nix develop` の中で起動）の `src/chart.rs` の `colors_for_model`、Python は `~/github/almanaut`（`.claude/hooks/guard-migrations.py` の `main`）
+- lsp-det: 最初の 3 走行は、本リポジトリを cwd にした親のシェルの direnv が PATH の先頭に足した作業木のビルド（main `41860e3`、決定 E 入り）を CC が拾った。profile の `lsp-det`（nixfiles の lock の `649528f`、決定 E の前）で Nix と Python を取り直した。保留と解放は同じ
+
+### 結果
+
+| 言語   | 名乗りと宣言                                                                                                                            | 保留                                                                                              | 結果                                                                                                                      |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Nix    | nixd 2.9.2。`{"coverage":{"scope":"document","incomplete":{}}}`（`649528f` では `{}`）                                                  | `didOpen` の 1 ms 後の `references` を 2 本の評価の間（`indexing`）0.386 秒保留し、`ready` で解放 | 1 件（272 行）。正しい                                                                                                    |
+| Rust   | rust-analyzer 1.97.1 (8bab26f 2026-07-14)。`coverage: {scope: "workspace", incomplete: {"workspace/symbol": 128}}`、`freshness` は 3 種 | 18.4 秒保留（`indexing` → `ready`）                                                               | 6 件（宣言 + 5）                                                                                                          |
+| Python | pyright 1.1.412（起動ログから）。`coverage: {scope: "workspace", incomplete: {}}`、`freshness: {fileChanges: ["Changed"]}`              | `initializing` で 0.25 秒保留                                                                     | 2 件（宣言 + 1）。最初の走行は列の指定が 1 つずれ（`def` の直後の空白）て 0 件だった。CC の LSP ツールの行と列は 1 始まり |
+
+CC の挙動:
+
+- **`workspace/configuration` を CC は支持しない**。nixd のログに "workspace/configuration: client does not support workspace configuration"。nixd は既定の式で評価するので影響はない。nil は設定を受けられず既定のまま動く
+- `window/workDoneProgress/create` には CC が答える（nixd の "<-- reply(1)"）。`$/progress` は CC が受け取って捨てる（"Received notification '$/progress'"）
+- `shutdown` の `params: {}`（第 3 回）は 2.1.263 でも残っていて、rust-analyzer 1.97.1 が "invalid type: map, expected unit" で拒否し CC が ERROR を出す。nixd と pyright は受け入れる
+
+費用: 6 走行。
+
+### 結論
+
+- **Nix の経路が日常の環境で成立した**。nixd の 2 本の評価の間の `references` が保留され、解放後の答えは文書内の完全な結果
+- **skills-as-plugins と flake input で 3 言語が lsp-det 経由になる**。`--plugin-dir` は要らない。direnv が作業木のビルドを PATH の先頭に足すディレクトリ（本リポジトリ）では作業木のビルドが勝ち、経路は同じ
+- 未観測: nil の `window/showMessageRequest` に CC が答えるか（日常の経路は nixd なので優先は低い）
+
 ## 一般化してはならない点
 
 - 「最初の LSP ツール呼び出しで起動」「`initialize` の直後に横断リクエストを投げる」は CC のこの版での観測。CC の版が変われば変わり得る（実際、Write の再 `didOpen` は 2.1.259 で観測し 2.1.261 で消えた）

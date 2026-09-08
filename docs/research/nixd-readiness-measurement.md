@@ -64,8 +64,8 @@ health の信号はない。`window/showMessage` も `window/logMessage` も使�
 - **readiness**: `initializing` から、title が "evaluating " で始まる `$/progress` の begin で token を未完了に加えて `indexing`、その token の end で外し、未完了が 0 になったら `ready`。token は整数なので JSON の値のまま比べる。以後の begin（`didChangeConfiguration` の再評価）で `indexing`、全部の end で `ready`。他の title の token は読まない
 - **先読み**: しない。サーバーが要求を待たせるので、評価中に転送しても古い答えは返らない。lsp-det の保留は結果を変えず、`ready` の後に転送する順序を保証するだけ
 - **health**: 信号がなく `unknown`。失敗の end は成功と区別できず、終了だけが見える
-- **coverage / freshness**: ADR 0021 決定 E の答えが出るまで宣言しない（`notifications_only()`）。`references` が文書に閉じるので `coverage.scope` の 2 値では名指しできず、7.3 は構成できない。決定 E で (b) が採られたら `coverage: {scope: "document", incomplete: {}}` を宣言し、7.2 の 1 を文書内の結果で当てる
-- **実サーバーの結合テスト**: 7.1（識別、`initializing` から 2 本の begin と end を経て `ready`、評価中に送った `definition` が `ready` の後に nixpkgs の `hello/package.nix` を指して返る）。`NIX_PATH` が要る（開発環境の `nixpkgs=flake:nixpkgs` で足りる）
+- **coverage / freshness**: 決定 E の答え（(b)）により、通した版（2.9.2）に `coverage: {scope: "document", incomplete: {}}` を宣言する。`freshness` は宣言しない: 7.3 は横断（別のファイルからの問い合わせ）を要し、文書に閉じるサーバーでは構成できない（`didChange` は LSP の順序の保証で足りる）
+- **実サーバーの結合テスト**: 7.1（識別、`initializing` から 2 本の begin と end を経て `ready`、評価中に送った `definition` が `ready` の後に nixpkgs の `hello/package.nix` を指して返る）と 7.2 の 1（`ready` の後の `references` が文書内の結果に一致すること。`includeDeclaration: true` でも `pkgs` 仮引数自身の宣言位置は返らず、実際の使用箇所だけが返る）。`NIX_PATH` が要る（開発環境の `nixpkgs=flake:nixpkgs` で足りる）
 - **上流に求めること**（`docs/upstream-submissions.md` の候補）: (1) 評価の失敗を end の message か `window/showMessage` で区別できるようにする（今は成功と同じ "evaluated …"）、(2) worker の死で nixd 自身が SIGPIPE で落ちないようにする（SIGPIPE を無視して RPC のエラーとして返す）、(3) `workspace/didChangeWatchedFiles` を登録なしで受けても stderr に出さず黙って無視する（既にエラーではないので優先は低い）
 
 ## コーパスへの反映

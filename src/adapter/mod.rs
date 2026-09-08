@@ -118,12 +118,8 @@ pub fn select(server_name: &str, version: Option<&str>) -> Option<Box<dyn Mappin
         dart::SERVER_NAME => Some(Box::new(dart::DartAdapter::for_version(version))),
         jdtls::SERVER_NAME => Some(Box::new(jdtls::JdtlsAdapter::for_version(version))),
         clangd::SERVER_NAME => Some(Box::new(clangd::ClangdAdapter::for_version(version))),
-        // The version is not looked at: no guarantee is declared for any version until ADR
-        // 0021 decision E is answered.
-        nixd::SERVER_NAME => Some(Box::new(nixd::NixdAdapter::new())),
-        // Same reason as nixd: no guarantee is declared for any version until ADR 0021
-        // decision E is answered.
-        nil::SERVER_NAME => Some(Box::new(nil::NilAdapter::new())),
+        nixd::SERVER_NAME => Some(Box::new(nixd::NixdAdapter::for_version(version))),
+        nil::SERVER_NAME => Some(Box::new(nil::NilAdapter::for_version(version))),
         // The version is not looked at: Expert declares no guarantee for any version.
         "expert" => Some(Box::new(expert::ExpertAdapter::new())),
         // The version is not observable: Nextflow's language server declares no guarantee.

@@ -81,6 +81,10 @@ pub enum CoverageScope {
     Workspace,
     /// Only the documents the client has open.
     OpenDocuments,
+    /// Only the document the request names. Uses in other files, open or not, do not appear in
+    /// responses (a server whose name resolution is per document, spec chapter 5; ADR 0021
+    /// decision E, answer (b)).
+    Document,
 }
 
 /// The kinds of `workspace/didChangeWatchedFiles` changes incorporated when `ready`.
@@ -139,6 +143,27 @@ impl ServerStateProvider {
         ServerStateProvider {
             coverage: Some(Coverage {
                 scope: CoverageScope::Workspace,
+                incomplete: incomplete
+                    .iter()
+                    .map(|(method, limit)| (method.to_string(), *limit))
+                    .collect(),
+            }),
+            freshness: None,
+        }
+    }
+
+    /// `coverage` based on the index of the requesting document only (with the list of methods
+    /// that cap, if any), with no `freshness` claim -- for a server whose name resolution does
+    /// not follow references across files (nixd, nil; ADR 0021 decision E, answer (b)). 7.3's
+    /// freshness guarantee is inherently cross-file (a query starting from a file other than
+    /// the changed one sees the change), which cannot be constructed for a document-local
+    /// server, so `freshness` is never declared here -- LSP's own ordering guarantee already
+    /// covers a single-file change-then-query sequence. Like [`Self::coverage_only`], this
+    /// omits the `freshness` key from the wire format entirely.
+    pub fn document_only(incomplete: &[(&str, u64)]) -> Self {
+        ServerStateProvider {
+            coverage: Some(Coverage {
+                scope: CoverageScope::Document,
                 incomplete: incomplete
                     .iter()
                     .map(|(method, limit)| (method.to_string(), *limit))
@@ -367,6 +392,19 @@ mod tests {
         assert_eq!(
             json,
             r#"{"coverage":{"scope":"workspace","incomplete":{"workspace/symbol":100}}}"#
+        );
+    }
+
+    #[test]
+    fn document_only_declares_the_document_scope_and_omits_freshness() {
+        // nixd and nil (ADR 0021 decision E, answer (b)): references is limited to the
+        // requesting document, so scope must be "document", and no freshness (7.3 needs a
+        // cross-file query, which cannot be constructed for a document-local server).
+        let json = serde_json::to_string(&ServerStateProvider::document_only(&[])).unwrap();
+        assert_eq!(json, r#"{"coverage":{"scope":"document","incomplete":{}}}"#);
+        assert!(
+            !json.contains("freshness"),
+            "document_only must not declare a freshness key: {json}"
         );
     }
 }

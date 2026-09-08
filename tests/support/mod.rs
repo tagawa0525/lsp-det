@@ -1765,13 +1765,20 @@ fn clangd_compile_commands(root: &std::path::Path, sources: &[String]) -> String
 
 /// The fixed content of `default.nix` for [`TempNixdProject`] (M25, the method section of
 /// research/nixd-readiness-measurement.md): `pkgs.hello` is the target of the
-/// `textDocument/definition` conformance test. Requires `NIX_PATH` with a `nixpkgs` entry to
-/// evaluate (`nix develop .#servers` provides `nixpkgs=flake:nixpkgs`).
-pub const NIXD_DEFAULT_NIX: &str =
-    "{ pkgs ? import <nixpkgs> { } }:\nlet\n  greeting = pkgs.hello;\nin\n{ inherit greeting; }\n";
+/// `textDocument/definition` conformance test, and `pkgs` is used twice (`pkgs.hello` on line 2
+/// and `pkgs.hello.name` on line 3) so `references` on the `pkgs` parameter has more than one
+/// use to find. Requires `NIX_PATH` with a `nixpkgs` entry to evaluate (`nix develop .#servers`
+/// provides `nixpkgs=flake:nixpkgs`).
+pub const NIXD_DEFAULT_NIX: &str = "{ pkgs ? import <nixpkgs> { } }:\nlet\n  greeting = \
+     pkgs.hello;\n  label = pkgs.hello.name;\nin\n{ inherit greeting label; }\n";
 
 /// `pkgs.hello` on line 2 ("  greeting = pkgs.hello;"), inside the "hello" identifier.
 pub const NIXD_HELLO_DECLARATION: (u32, u32) = (2, 19);
+
+/// The `pkgs` formal parameter on line 0 ("{ pkgs ? import <nixpkgs> { } }:"), inside the
+/// "pkgs" identifier. `references` here is document-local (ADR 0021 decision D): it must not
+/// cross into other files even when they are open (M25, ADR 0021 decision E answer (b)).
+pub const NIXD_PKGS_PARAMETER: (u32, u32) = (0, 3);
 
 /// A temporary Nix project for nixd: a single `default.nix` importing `<nixpkgs>` and
 /// referencing `pkgs.hello` (M25, the method section of research/nixd-readiness-measurement.md).
@@ -1812,9 +1819,16 @@ impl Drop for TempNixdProject {
 /// research/nil-readiness-measurement.md).
 pub const NIL_NIXPKGS_INPUT_DECLARATION: (u32, u32) = (2, 21);
 
+/// The `pkgs` binding on line 4 ("      pkgs = nixpkgs.legacyPackages.x86_64-linux;"), inside
+/// the "pkgs" identifier. `references` here is document-local (ADR 0021 decision D): it must
+/// not cross into other files even when they are open (M26, ADR 0021 decision E answer (b)).
+pub const NIL_PKGS_BINDING: (u32, u32) = (4, 6);
+
+/// `pkgs` is used twice (`pkgs.hello` and `pkgs.hello.name`) so `references` on the `pkgs`
+/// binding has more than one use to find (M26, ADR 0021 decision E answer (b)).
 fn nil_flake_nix(nixpkgs_rev: &str) -> String {
     format!(
-        "{{\n  inputs.nixpkgs.url = \"github:NixOS/nixpkgs/{nixpkgs_rev}\";\n  outputs = {{ self, nixpkgs }}:\n    let\n      pkgs = nixpkgs.legacyPackages.x86_64-linux;\n    in\n    {{\n      packages.x86_64-linux.default = pkgs.hello;\n    }};\n}}\n"
+        "{{\n  inputs.nixpkgs.url = \"github:NixOS/nixpkgs/{nixpkgs_rev}\";\n  outputs = {{ self, nixpkgs }}:\n    let\n      pkgs = nixpkgs.legacyPackages.x86_64-linux;\n    in\n    {{\n      packages.x86_64-linux.default = pkgs.hello;\n      packages.x86_64-linux.label = pkgs.hello.name;\n    }};\n}}\n"
     )
 }
 

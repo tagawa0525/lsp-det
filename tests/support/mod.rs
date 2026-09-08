@@ -211,6 +211,13 @@ impl ServerUnderTest {
         Self::lsp_det_with_upstream("nixd", &["--server-version", "2.9.2"])
     }
 
+    /// A fake upstream that calls itself "nil" version "2026-07-23" (as the real nil does in
+    /// `serverInfo`) + lsp-det. lsp-det selects the nil mapping, which declares no guarantee for
+    /// any version (M26, research/nil-readiness-measurement.md; ADR 0021 decision E is pending).
+    pub fn lsp_det_with_fake_nil() -> Self {
+        Self::lsp_det_with_upstream("nil", &["--server-version", "2026-07-23"])
+    }
+
     /// A fake upstream conformant to this protocol + lsp-det. The upstream side becomes the
     /// identity mapping, and the downstream side reads the upstream's state across the boundary
     /// (design 4.1).

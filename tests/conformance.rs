@@ -5582,3 +5582,151 @@ fn nixd_spec_7_1_readiness_and_definition_through_lsp_det_with_real_nixd() {
     );
     client.shutdown();
 }
+
+// ---------------------------------------------------------------------------
+// nil (M26, ADR 0021 decision C row for nil; oxalica/nil). The mapping in
+// research/nil-readiness-measurement.md: identified by `serverInfo.name` "nil" exactly (the
+// version is `serverInfo.version`). flake.lock's own read carries no signal; the first
+// observable event is the begin of one of three fixed-string `$/progress` tokens --
+// `nil/loadNixosOptionsProgress`, `nil/loadInputFlakeProgress`, `nil/flakeArchiveProgress` --
+// each preceded by its own `window/workDoneProgress/create`. A begin adds its token to the set
+// of unfinished loads and moves readiness to `indexing`; the matching end removes it, and
+// readiness becomes `ready` only once the set is empty. A later begin after `ready` (a reload
+// after a `didChangeWatchedFiles` Changed for flake.lock, or a `didOpen` / `didChange` of
+// flake.nix) goes back to `indexing`. `window/showMessage` type 1 -> `error`, type 2 ->
+// `warning`; the begin of any of the three tokens -> `ok`. No guarantee is declared for any
+// version: ADR 0021 decision E (how to name the document-scoped `references` nil answers too)
+// is pending, so `guarantees()` is `notifications_only()` unconditionally.
+// ---------------------------------------------------------------------------
+
+const NIL_LOAD_NIXOS_OPTIONS_TOKEN: &str = "nil/loadNixosOptionsProgress";
+
+fn nil_client() -> (ConformanceClient, Value) {
+    let server = ServerUnderTest::lsp_det_with_fake_nil();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize(true);
+    (client, result)
+}
+
+/// Emits a load's begin, as a real nil does once flake.lock's own (signal-less) read finishes
+/// (research/nil-readiness-measurement.md).
+fn nil_begin(client: &mut ConformanceClient, token: &str, title: &str) {
+    client.make_upstream_emit_progress(json!({
+        "token": token,
+        "value": {"kind": "begin", "title": title}
+    }));
+}
+
+/// Emits the matching end.
+fn nil_end(client: &mut ConformanceClient, token: &str) {
+    client.make_upstream_emit_progress(json!({
+        "token": token,
+        "value": {"kind": "end"}
+    }));
+}
+
+#[test]
+fn nil_is_selected_by_server_info_and_declares_no_guarantee() {
+    let (mut client, result) = nil_client();
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        json!({}),
+        "nil must declare no guarantee until ADR 0021 decision E is answered: {result}"
+    );
+    assert_eq!(client.server_state().readiness, Readiness::Initializing);
+    client.shutdown();
+}
+
+#[test]
+fn nil_becomes_ready_only_after_the_end() {
+    let (mut client, _) = nil_client();
+    nil_begin(
+        &mut client,
+        NIL_LOAD_NIXOS_OPTIONS_TOKEN,
+        "Loading NixOS options from 'nixpkgs'",
+    );
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Indexing);
+    assert_eq!(state.health, Health::Ok);
+    nil_end(&mut client, NIL_LOAD_NIXOS_OPTIONS_TOKEN);
+    let state = client.await_state_changed();
+    assert_eq!(state.readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
+fn nil_a_later_begin_after_ready_reindexes_spec_7_1_item_3() {
+    let (mut client, _) = nil_client();
+    nil_begin(
+        &mut client,
+        NIL_LOAD_NIXOS_OPTIONS_TOKEN,
+        "Loading NixOS options from 'nixpkgs'",
+    );
+    client.await_state_changed();
+    nil_end(&mut client, NIL_LOAD_NIXOS_OPTIONS_TOKEN);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    // A reload after `workspace/didChangeWatchedFiles` Changed for flake.lock (research doc,
+    // run 8).
+    nil_begin(
+        &mut client,
+        NIL_LOAD_NIXOS_OPTIONS_TOKEN,
+        "Loading NixOS options from 'nixpkgs'",
+    );
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    nil_end(&mut client, NIL_LOAD_NIXOS_OPTIONS_TOKEN);
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+/// Gate (spec chapter 9) holds this on the client's behalf because it does not declare the
+/// protocol itself (`initialize(false)`); the readiness that drives the hold comes from the nil
+/// mapping's `$/progress` tracking, not from any guarantee nil declares (it declares none for
+/// any version).
+#[test]
+fn nil_holds_definition_until_the_load_ends() {
+    let server = ServerUnderTest::lsp_det_with_fake_nil();
+    let mut client = ConformanceClient::start(&server);
+    client.initialize(false);
+    let id = client.send_definition(&std::path::PathBuf::from("/fake/flake.nix"), 1, 21);
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "forwarded definition before any load began"
+    );
+    nil_begin(
+        &mut client,
+        NIL_LOAD_NIXOS_OPTIONS_TOKEN,
+        "Loading NixOS options from 'nixpkgs'",
+    );
+    assert!(
+        client.response_within(id, NEGATIVE_WINDOW).is_none(),
+        "forwarded definition while loading"
+    );
+    nil_end(&mut client, NIL_LOAD_NIXOS_OPTIONS_TOKEN);
+    let response = client.await_response_to(id);
+    assert!(
+        response.get("result").is_some(),
+        "did not release the hold once ready: {response}"
+    );
+    client.shutdown();
+}
+
+/// Spec 7.1 item 4: a `window/showMessage` type 1 moves health to `error`, and (a proxy forwards
+/// message bodies unchanged, v0.1-design.md 4.4) it still reaches the client unchanged.
+#[test]
+fn nil_show_message_error_moves_health_and_is_forwarded_unchanged() {
+    let (mut client, _) = nil_client();
+    client.make_upstream_emit_notification(
+        "window/showMessage",
+        json!({"type": 1, "message": "Failed to load flake workspace: ..."}),
+    );
+    let state = client.await_state_changed();
+    assert_eq!(state.health, Health::Error);
+    let forwarded = client
+        .await_notification("window/showMessage")
+        .expect("the showMessage did not arrive");
+    assert_eq!(
+        forwarded["message"], "Failed to load flake workspace: ...",
+        "the message body changed: {forwarded}"
+    );
+    client.shutdown();
+}

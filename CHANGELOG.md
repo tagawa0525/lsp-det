@@ -4,7 +4,7 @@
 
 ## 予定
 
-- 外向きの提出（`docs/upstream-submissions.md` の順。文面を作ってユーザーの確認をもらってから出す）: typescript-language-server の不具合修正 PR、Claude Code への報告（既存 issue 3 件へのコメントと新規 2 件。`workspace/configuration` の未支持と `shutdown` の `params: {}` を含む）、Serena の不具合と提案、fork の 4 パッチ、0.4.0〜0.6.0 で見つけた 12 サーバー分の提案
+- 外向きの提出（戦略・順序・規則は `docs/upstream-submissions.md`。文面を作ってユーザーの確認をもらってから出す）: 提出前の準備（仕様を安定版にする、typescript-language-server のパッチを #305 の取りこぼし修正に作り直す、gopls を health に縮める、rust-analyzer の `serverStatus` への field 追加案、LSP 本体向けの `.proposed.ts`、Serena の再測定）→ 第 1 段（typescript-language-server、Claude Code #76870 への `experimental/serverState` の提案、pyright）→ 第 2 段（Serena の registry、rust-analyzer の両案、gopls の health）→ 第 3 段（12 サーバー、LSP 本体）
 - 保留の再測定: Kotlin（次の release）、sourcekit-lsp（nixpkgs に 6.x が来たら）
 
 ## 0.6.0（2026-09-08）

@@ -105,7 +105,7 @@ fn is_fully_ready(&self) -> bool {
 `scripts/rust-analyzer/status-probe.py <rust-analyzer> [--empty]`。偽クライアントが stdio で rust-analyzer を起動し、`experimental.serverStatusNotification` を宣言して `initialize` → `initialized` を送り、`experimental/serverStatus` を時刻付きで全部記録する。`--empty` は Cargo.toml のない空のディレクトリ。時間で判定はしない。
 
 - 素の版: nixpkgs の `2026-08-03`（flake の開発環境）
-- field 版: fork `tagawa0525/rust-analyzer` の `server-status-readiness`（719b151b、上流 master 70d74f4 起点）を `scripts/upstream/build-rust-analyzer.sh` で組んだもの。`serverInfo.version` は `0.0.0 (719b151b70 2026-09-09)`
+- field 版: fork `tagawa0525/rust-analyzer` の `server-status-readiness`（測定時は 719b151b。その後、文書の無関係なフェンスの差分を除いて 3aa54eb2 に amend。コードは同じ。上流 master 70d74f4 起点）を `scripts/upstream/build-rust-analyzer.sh` で組んだもの。`serverInfo.version` は `0.0.0 (719b151b70 2026-09-09)`
 
 ### 結果
 

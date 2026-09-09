@@ -436,6 +436,15 @@ mod tests {
     }
 
     #[test]
+    fn ignores_a_status_whose_readiness_is_null() {
+        // `null` is not a value of the protocol either. Reading it as "absent" would fall back
+        // to `quiescent`, which is the reading the field exists to replace.
+        let mut adapter = RustAnalyzerAdapter::new();
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"readiness":null}}"#;
+        assert!(interpret(&mut adapter, body).is_none());
+    }
+
+    #[test]
     fn carries_health_through_unchanged() {
         // Failure arrives via health (spec chapter 6 item 5). Even with error, quiescent is
         // read independently.

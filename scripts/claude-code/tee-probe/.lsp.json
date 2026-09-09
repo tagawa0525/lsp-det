@@ -1,0 +1,7 @@
+{
+  "rust-analyzer-tee": {
+    "command": "python3",
+    "args": ["${CLAUDE_PLUGIN_ROOT}/tee.py", "/tmp/claude-code-tee-rust-analyzer.log", "rust-analyzer"],
+    "extensionToLanguage": { ".rs": "rust" }
+  }
+}

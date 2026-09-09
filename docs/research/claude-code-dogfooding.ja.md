@@ -212,6 +212,19 @@ CC の挙動:
 - **skills-as-plugins と flake input で 3 言語が lsp-det 経由になる**。`--plugin-dir` は要らない。direnv が作業木のビルドを PATH の先頭に足すディレクトリ（本リポジトリ）では作業木のビルドが勝ち、経路は同じ
 - 未観測: nil の `window/showMessageRequest` に CC が答えるか（日常の経路は nixd なので優先は低い）
 
+## 提出前の再測定（2026-09-09、CC 2.1.266）
+
+第 1 段の提出（`docs/upstream-submissions.md`）の直前に、報告する事実が最新の CC に残っているかを確かめた。道具は `scripts/claude-code/tee-probe/`（言語サーバーの位置に置く記録ラッパーのプラグイン。第 4 回以降の ad hoc なラッパーを保存したもの）。被験体は `cargo init` 直後の crate に `pub fn target()` と、それを 2 回呼ぶ `caller()` を置いたもの。入れ子の非対話 CC 2.1.266（`claude -p … --plugin-dir scripts/claude-code/tee-probe --allowedTools LSP --model sonnet`）に `findReferences` を 1 回投げさせた。rust-analyzer 2026-08-03、直接（lsp-det なし）。2 走行で同じ結果。
+
+| 項目                       | 2.1.266 での観測                                                                                                                                                                                                                                        | 前回                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| 最初の横断リクエストの時点 | `initialize` の応答（19 ms）の直後、`initialized` → `didOpen` → `references` を 1 ms 以内に連続で送る（記録ラッパーの時刻で 5.2 ms、5.2 ms、5.4 ms）。rust-analyzer は 2 ms で `[]` を返し、CC のツール結果は "No references found …"（実際は 2 箇所）  | 第 2 回: 6 ms 後       |
+| `initialize` の capability | `workspace: {configuration: false, workspaceFolders: false}`。`didChangeWatchedFiles` なし。`textDocument.synchronization` は `{dynamicRegistration: false, willSave: false, willSaveWaitUntil: false, didSave: true}`。`window` と `experimental` なし | 第 4 回・第 5 回と同じ |
+| 送った通知                 | `initialized`、`textDocument/didOpen` だけ。`didClose` は送らない                                                                                                                                                                                       | 第 4 回と同じ          |
+| `shutdown`                 | `params: {}`。rust-analyzer が "Failed to deserialize shutdown: invalid type: map, expected unit" で拒み、CC は "Failed to stop LSP server" の ERROR を出して `exit` を送らずに切断                                                                     | 第 3 回・第 7 回と同じ |
+
+第 1 段で報告する 5 点（起動直後の横断リクエスト、`didChangeWatchedFiles` の欠落、`didClose` を送らないこと、`workspace/configuration` を支持しないこと、`shutdown` の `params: {}`）はすべて 2.1.266 に残っている。
+
 ## 一般化してはならない点
 
 - 「最初の LSP ツール呼び出しで起動」「`initialize` の直後に横断リクエストを投げる」は CC のこの版での観測。CC の版が変われば変わり得る（実際、Write の再 `didOpen` は 2.1.259 で観測し 2.1.261 で消えた）

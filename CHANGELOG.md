@@ -9,7 +9,7 @@
 
 ## 0.7.1（2026-09-09）
 
-Release の Linux バイナリを直す版。提出前の準備はすべて済み、次は第 1 段の提出。
+Release の Linux バイナリを直す版。提出前の準備はすべて済み、同日に第 1 段を提出した（予定の節）。
 
 - **Linux の Release バイナリ**（ADR 0012 追補、PR #97）: v0.7.0 までの `*-unknown-linux-gnu` はランナーの glibc 2.39 に動的リンクされ、Ubuntu 22.04 や Debian 12 では起動できなかった。`x86_64-unknown-linux-musl` と `aarch64-unknown-linux-musl` の静的リンクに切り替え、ワークフローに静的であることの確認を足した。README の導入手順を事実に合わせ（バイナリの名前、署名なしの macOS の隔離、引数なしの起動での確認）、`scripts/check-targets.sh` に musl を足した
 - **提出前の準備**（PR #91、#92、#94、#96）: rust-analyzer の `serverStatus` への field 追加案（fork の `server-status-readiness`）、LSP 本体向けの `proposed.serverState.ts`（fork `tagawa0525/vscode-languageserver-node` の `server-state`）、Serena の上流 HEAD での再測定とクラッシュ検知の修正（fork の `tsserver-crash-on-request-path`）。草案は `docs/upstream-submissions.md`

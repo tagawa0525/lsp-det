@@ -1,0 +1,5 @@
+{
+  "name": "tee-probe",
+  "description": "record what Claude Code sends to a language server",
+  "version": "0.1.0"
+}

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Serena (solidlsp) を被験者にして、lsp-det 経由の言語サーバーで references を取る。
 
-上流への提案 (Serena が experimental/serverState を読む変更) をローカルで
-確かめるための道具。reference/serena の環境で動かす:
+上流への提案をローカルで確かめるための道具。fork の tsserver-crash-on-request-path
+の受け入れ条件は、CRASH=1 VIA_LSP_DET=0 で tsserver を落とした直後の references が
+TypeScriptServerCrashedError になること (素の上流は 0 件を成功として返す)。
+reference/serena の環境で動かす:
 
     cd reference/serena && uv run --frozen python ../../scripts/serena/probe.py \\
         python  /path/to/repo a.py 0 4

@@ -54,7 +54,7 @@ lsp-det の最終目標は、サーバー状態プロトコルを言語サーバ
 
 1. Serena: 再測定の結果が残る不具合の issue と、registry に lsp-det を載せる提案
 2. rust-analyzer: issue で両案（`serverStatus` への field 追加、別通知の `experimental/serverState`）を並べる。PR は相手が選んだ方を出す
-3. gopls: golang/go#78273 に fallback の severity のコメント、回復後の go.mod 変更の窓は新規 issue。fixture と実測ログ付き（2026-09-09 に提出済み: #78273 のコメントと golang/go#81400）
+3. gopls: golang/go#78273 に fallback の severity のコメント、回復後の go.mod 変更の窓は新規 issue。fixture と実測ログ付き（2026-09-09 に提出済み: golang/go#78273 のコメントと golang/go#81400）
 
 第 3 段（第 2 段のどれかに反応があってから）:
 

@@ -43,8 +43,10 @@ def main() -> int:
                 # writes so the client is not blocked on a full pipe.
                 log.write(b"\n### server closed its stdin; recording only\n")
                 forwarding = False
-        if forwarding:
+        try:
             server.stdin.close()
+        except BrokenPipeError:
+            pass  # closing flushes; nothing is listening any more
         return server.wait()
 
 

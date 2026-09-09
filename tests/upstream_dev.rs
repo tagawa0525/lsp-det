@@ -210,10 +210,10 @@ fn rust_analyzer_speaks_the_server_state_protocol() {
 }
 
 /// rust-analyzer, the field-addition alternative (docs/upstream-submissions.md, preparation 4):
-/// `experimental/serverStatus` carries `readiness` next to `quiescent`. `quiescent` answers
-/// "is background work pending?", which is trivially false before the first load, so a client
-/// reading it as "ready" is wrong exactly then; the field spells out `initializing` / `indexing`
-/// / `ready`. Passes once every status notification carries the field consistently with
+/// `experimental/serverStatus` carries `readiness` next to `quiescent`. `quiescent` means "no
+/// background work is pending", which is trivially `true` before the first load (nothing is in
+/// flight yet), so a client reading it as "ready" is wrong exactly then; the field spells out
+/// `initializing` / `indexing` / `ready`. Passes once every status notification carries the field consistently with
 /// `quiescent` and the first load ends in `ready`.
 #[test]
 #[ignore = "acceptance condition for an upstream change. Local only. Put target/upstream/bin in PATH and run cargo test --test upstream_dev -- --ignored"]

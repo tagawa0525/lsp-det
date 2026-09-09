@@ -7,6 +7,14 @@
 - 外向きの提出（戦略・順序・規則は `docs/upstream-submissions.md`。文面を作ってユーザーの確認をもらってから出す）: 提出前の準備（済: typescript-language-server のパッチの作り直し（fork の `tsserver-exit-by-signal`、2026-09-09。同日 typescript-language-server/typescript-language-server#1125 として提出）。gopls を health に縮める（2026-09-09、`docs/research/gopls-health-measurement.md`。同日 golang/go#78273 へのコメントと golang/go#81400 として提出）。rust-analyzer の `serverStatus` への field 追加案（2026-09-09、fork の `server-status-readiness`。issue の草案は両案を並べる）。LSP 本体向けの `proposed.serverState.ts`（2026-09-09、fork `tagawa0525/vscode-languageserver-node` の `server-state`。#511 へのコメントと proposal issue の草案も）。Serena の再測定（2026-09-09、上流 HEAD `701e7c84` で前回と同じ結果。クラッシュ検知の穴の修正は fork の `tsserver-crash-on-request-path`、不具合 4 件は HEAD に残る。PR・issue・registry への提案の草案も）。README の Nix を使わない導入手順の点検（2026-09-09。Linux の Release バイナリを musl の静的リンクに。ADR 0012 追補））→ 第 1 段（typescript-language-server、Claude Code anthropics/claude-code#76870 への `experimental/serverState` の提案、pyright）→ 第 2 段（Serena の registry、rust-analyzer の両案、gopls の health）→ 第 3 段（12 サーバー、LSP 本体）
 - 保留の再測定: Kotlin（次の release）、sourcekit-lsp（nixpkgs に 6.x が来たら）
 
+## 0.7.1（2026-09-09）
+
+Release の Linux バイナリを直す版。提出前の準備はすべて済み、次は第 1 段の提出。
+
+- **Linux の Release バイナリ**（ADR 0012 追補、PR #97）: v0.7.0 までの `*-unknown-linux-gnu` はランナーの glibc 2.39 に動的リンクされ、Ubuntu 22.04 や Debian 12 では起動できなかった。`x86_64-unknown-linux-musl` と `aarch64-unknown-linux-musl` の静的リンクに切り替え、ワークフローに静的であることの確認を足した。README の導入手順を事実に合わせ（バイナリの名前、署名なしの macOS の隔離、引数なしの起動での確認）、`scripts/check-targets.sh` に musl を足した
+- **提出前の準備**（PR #91、#92、#94、#96）: rust-analyzer の `serverStatus` への field 追加案（fork の `server-status-readiness`）、LSP 本体向けの `proposed.serverState.ts`（fork `tagawa0525/vscode-languageserver-node` の `server-state`）、Serena の上流 HEAD での再測定とクラッシュ検知の修正（fork の `tsserver-crash-on-request-path`）。草案は `docs/upstream-submissions.md`
+- 実サーバー結合テストと lsp-det の挙動は 0.7.0 から変わらない
+
 ## 0.7.0（2026-09-09）
 
 外向きの提出に向けた版。対外戦略を決め、begin の来ない workspace で永遠に保留する 2 つの写像を `unknown` に改め、仕様を安定版 1.0 にした。

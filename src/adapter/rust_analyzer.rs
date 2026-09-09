@@ -39,8 +39,10 @@ pub const SERVER_STATUS_METHOD: &str = "experimental/serverStatus";
 struct ServerStatusParams {
     health: UpstreamHealth,
     quiescent: bool,
-    /// The proposed field. Absent from every released rust-analyzer so far.
-    #[serde(default)]
+    /// The proposed field. Absent from every released rust-analyzer so far. When present it
+    /// must be a value of the protocol: `null` is not read as "absent" (that would fall back to
+    /// `quiescent`, the reading the field exists to replace).
+    #[serde(default, deserialize_with = "present_readiness")]
     readiness: Option<UpstreamReadiness>,
     #[serde(default)]
     message: Option<String>,
@@ -55,6 +57,15 @@ enum UpstreamReadiness {
     Initializing,
     Indexing,
     Ready,
+}
+
+/// Deserializes a `readiness` that is present. Only a missing field is `None` (via
+/// `#[serde(default)]`); a present `null` or anything else outside the protocol is an error.
+fn present_readiness<'de, D>(deserializer: D) -> Result<Option<UpstreamReadiness>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    UpstreamReadiness::deserialize(deserializer).map(Some)
 }
 
 impl From<UpstreamReadiness> for Readiness {

@@ -3,8 +3,9 @@
 
 What does gopls tell a client when the workspace fails to load, and what do requests
 return meanwhile? Drives a real `gopls serve` over stdio with a two-file module and prints
-every server-to-client message with a timestamp. Nothing is judged by time; the waits only
-bound how long the probe looks.
+the server-to-client messages with a timestamp (`window/logMessage` lines that mention
+neither "error" nor "loading" are dropped to keep the trace readable). Nothing is judged by
+time; the waits only bound how long the probe looks.
 
 usage: health-probe.py --scenario NAME [--observe SECS]
 
@@ -12,8 +13,8 @@ scenarios:
   broken-start   go.mod has a syntax error from the start
   nowdp          same, but the client declares no window.workDoneProgress
   break-later    healthy load, then go.mod is broken on disk (+didChangeWatchedFiles), then fixed
-  reload-window  healthy load, then go.mod changes; references polled every 50ms
-  recover-window healthy, broken, fixed; then go.mod changes; references polled every 50ms
+  reload-window  healthy load, then go.mod changes; references repeated with 50ms pauses
+  recover-window healthy, broken, fixed; then go.mod changes; references repeated with 50ms pauses
   missing-dep    go.mod requires a module that cannot be fetched (GOPROXY=off)
 """
 
@@ -181,10 +182,11 @@ def go_mod_changed(content):
 
 
 def poll(label, content, method="textDocument/references", params=None):
-    """Change go.mod, then send `method` every 50ms and print the runs of outcomes."""
+    """Change go.mod, then repeat `method` (waiting for each answer and pausing 50ms between
+    attempts) and print the runs of outcomes."""
     params = params or REFS
     print(
-        f"=== go.mod change ({label}) + didChangeWatchedFiles, then {method} every 50ms"
+        f"=== go.mod change ({label}) + didChangeWatchedFiles, then {method} repeated with 50ms pauses"
     )
     tc = time.time()
     go_mod_changed(content)

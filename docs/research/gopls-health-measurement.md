@@ -67,17 +67,17 @@
 [15.058s] -> references → 1 件（b.go の呼び出し）
 ```
 
-`recover-window`（回復後に go.mod を変え、50 ms ごとに要求。2 走行とも同じ）:
+`recover-window`（回復後に go.mod を変え、応答を待って 50 ms 置いて要求を繰り返す。2 走行とも同じ）:
 
 ```text
-=== go.mod change (comment after recovery) → references every 50ms
+=== go.mod change (comment after recovery) → references repeated
    t+0.001s ERR: no package metadata for file …
    t+1.017s OK n=1
 === second comment → t+0.001s ERR … t+1.014s OK
 === third change, definition → t+0.001s ERR … t+1.013s OK
 ```
 
-`reload-window`（一度も壊していない。同じ変更を 50 ms ごとに要求）:
+`reload-window`（一度も壊していない。同じ変更の後、同じ繰り返し）:
 
 ```text
 === go.mod change (comment) → t+0.016s OK n=1（以後ずっと OK）

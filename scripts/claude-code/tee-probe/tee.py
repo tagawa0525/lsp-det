@@ -25,6 +25,9 @@ def main() -> int:
     # someone else planted there.
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(sys.argv[1], flags, 0o600)
+    # The mode above applies only when the file is created; an existing file
+    # (a left-over under /tmp) keeps its mode, so set it explicitly.
+    os.fchmod(fd, 0o600)
     with open(fd, "ab", buffering=0) as log:
         server = subprocess.Popen(sys.argv[2:], stdin=subprocess.PIPE)
         if server.stdin is None:

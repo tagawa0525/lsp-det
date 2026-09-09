@@ -12,6 +12,7 @@ usage: status-probe.py RUST_ANALYZER [--empty]
 
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
@@ -78,7 +79,7 @@ def main():
                     "pub fn alpha() -> u32 { 1 }\npub fn beta() -> u32 { alpha() + 1 }\n"
                 )
         server = Server(program, root)
-        uri = "file://" + root
+        uri = pathlib.Path(root).as_uri()
         server.send(
             {
                 "jsonrpc": "2.0",

@@ -1,5 +1,7 @@
 # v* のタグで各 OS のリリースビルドを作り、GitHub Release に添付する
 # （ADR 0012 決定 E）。バイナリの名前は lsp-det-<target>（Windows は .exe）。
+# Linux は musl の静的リンク（ADR 0012 追補 2026-09-09。gnu だとランナーの
+# glibc 2.39 が下限になり、Ubuntu 22.04 や Debian 12 で動かない）。
 # テストは CI（main への push と PR）が 3 OS で回しているので、ここでは
 # ビルドだけを行う。
 name: Release
@@ -18,9 +20,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
           - os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
           - os: macos-latest
             target: x86_64-apple-darwin
           - os: macos-latest
@@ -41,6 +43,11 @@ jobs:
           ext=""
           case "${{ matrix.target }}" in *windows*) ext=".exe" ;; esac
           cp "target/${{ matrix.target }}/release/lsp-det$ext" "dist/lsp-det-${{ matrix.target }}$ext"
+      - name: Confirm the Linux binary is statically linked
+        if: contains(matrix.target, 'linux')
+        run: |
+          file "dist/lsp-det-${{ matrix.target }}"
+          file "dist/lsp-det-${{ matrix.target }}" | grep -q 'static'
       - uses: actions/upload-artifact@v4
         with:
           name: lsp-det-${{ matrix.target }}

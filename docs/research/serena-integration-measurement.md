@@ -93,7 +93,7 @@ oraios/serena#1978 でも変わらない理由: #1978 は latch（`_has_waited_f
 
 ### (a) の修正（fork の `tsserver-crash-on-request-path`）
 
-`_wait_for_cross_file_references_if_needed` の冒頭、latch の前で `_raise_if_crashed()` を呼ぶ。1 行と、latch 後にクラッシュを観測した状態で例外になるテスト 1 件（`test_wait_for_cross_file_references_raises_after_the_latch_when_a_crash_was_observed`）、CHANGELOG の 1 項目。上流 HEAD で `test_typescript_timeout_policy.py` 30 件、`test/solidlsp/typescript` 20 件、ruff と ty が通る。probe の `CRASH=1 VIA_LSP_DET=0` は 0.880 s に `TypeScriptServerCrashedError`（"tsserver exited abnormally: … Signal: SIGKILL"）になる。#1978 の上に同じ 1 行を置いても成立する（32 件通過、probe は同じ例外）。同じ関数を触るので、提出は #1978 の帰趨を見てから rebase する。
+`_wait_for_cross_file_references_if_needed` の冒頭、latch の前で `_raise_if_crashed()` を呼ぶ。1 行と、latch 後にクラッシュを観測した状態で例外になるテスト 1 件（`test_wait_for_cross_file_references_raises_after_the_latch_when_a_crash_was_observed`）、CHANGELOG の 1 項目。上流 HEAD で `test_typescript_timeout_policy.py` 30 件、`test/solidlsp/typescript` 20 件、ruff と ty が通る。probe の `CRASH=1 VIA_LSP_DET=0` は 0.880 s に `TypeScriptServerCrashedError`（"tsserver exited abnormally: … Signal: SIGKILL"）になりコード 0 で終わる（素の HEAD では "NO ERROR SURFACED" でコード 1。この終了コードが受け入れ条件）。#1978 の上に同じ 1 行を置いても成立する（32 件通過、probe は同じ例外）。同じ関数を触るので、提出は #1978 の帰趨を見てから rebase する。
 
 `TypeScriptServerCrashedError` は `is_language_server_terminated()` が偽なので、この修正でも Serena は再起動しない（以後のツールは理由付きで失敗し続ける）。typescript-language-server 側の修正（typescript-language-server/typescript-language-server#1125）が通れば LS 本体が tsserver と一緒に落ちて `LanguageServerTerminatedException` の経路に乗り、Serena が再起動する。2 つは補い合う。
 

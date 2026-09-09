@@ -2,8 +2,9 @@
 """Serena (solidlsp) を被験者にして、lsp-det 経由の言語サーバーで references を取る。
 
 上流への提案をローカルで確かめるための道具。fork の tsserver-crash-on-request-path
-の受け入れ条件は、CRASH=1 VIA_LSP_DET=0 で tsserver を落とした直後の references が
-TypeScriptServerCrashedError になること (素の上流は 0 件を成功として返す)。
+の受け入れ条件は、CRASH=1 VIA_LSP_DET=0 がコード 0 で終わること (tsserver を落とした
+直後の references が TypeScriptServerCrashedError になる)。素の上流は 0 件を成功として
+返し、CRASH=1 のとき例外が出なければこのスクリプトはコード 1 で終わる。
 reference/serena の環境で動かす:
 
     cd reference/serena && uv run --frozen python ../../scripts/serena/probe.py \\
@@ -14,7 +15,8 @@ reference/serena の環境で動かす:
 環境変数:
     VIA_LSP_DET=0  lsp-det を挟まず上流を直接起動する (比較用)
     CRASH=1        references の後に tsserver を SIGKILL し、直後の references の
-                   見え方を出す (typescript のみ意味がある)
+                   見え方を出す (typescript のみ意味がある)。例外が出なければ
+                   コード 1 で終わる
 
 lsp-det と上流 (pyright-langserver / typescript-language-server) は PATH で
 解決される。target/upstream/bin を先頭に置けばソースビルドの上流を使う。
@@ -116,6 +118,7 @@ def run(
         print(f"[{time.time() - t0:7.3f}] PROBE {message}", flush=True)
 
     log(f"base_cmd={base_cmd}")
+    surfaced = True
     with ls.start_server_context():
         log("server started (Serena's readiness wait finished)")
         refs = ls.request_references(rel, line, col)
@@ -130,12 +133,16 @@ def run(
             time.sleep(0.5)
             try:
                 refs2 = ls.request_references(rel, line, col)
+            except SolidLSPException as e:
+                log(f"references after crash raised {type(e).__name__}: {str(e)[:900]}")
+            else:
                 log(
                     f"references after crash -> {len(refs2)} locations (NO ERROR SURFACED)"
                 )
-            except SolidLSPException as e:
-                log(f"references after crash raised {type(e).__name__}: {str(e)[:900]}")
+                surfaced = False
     log("done")
+    if not surfaced:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ lsp-det の最終目標は、サーバー状態プロトコルを言語サーバ
 
 第 1 段（準備の 1、2、7 の後。相互に依存しない）:
 
-1. typescript-language-server: typescript-language-server/typescript-language-server#305 の取りこぼし修正の PR（typescript-language-server/typescript-language-server#1125 として提出済み、2026-09-09）。続けて `server-info` の PR
+1. typescript-language-server: typescript-language-server/typescript-language-server#305 の取りこぼし修正の PR（typescript-language-server/typescript-language-server#1125 として提出済み、2026-09-09。Copilot の指摘 2 件（同期の throw が exit handler の残りを飛ばす、テストの private 連鎖に実行時チェック）には fork の 6c21094 で同日対応済み。[research/typescript-language-server-readiness-measurement.md](research/typescript-language-server-readiness-measurement.md) の末尾）。続けて `server-info` の PR
 2. Claude Code: anthropics/claude-code#76870 に「待つべき信号は `experimental/serverState`。lsp-det が今日の橋」を提案し、第 1〜7 回の実測を添える。anthropics/claude-code#82416 に tsls の PR へのリンクと再現。anthropics/claude-code#85225 に第 5 回の観測。`didClose` は anthropics/claude-code#64276、`workspace/configuration` は anthropics/claude-code#16360 へのコメント。新規は `shutdown` の `params: {}` の 1 件
 3. pyright: `serverInfo` の enhancement request（issue）。PR は返事の後
 
@@ -112,7 +112,7 @@ lsp-det の最終目標は、サーバー状態プロトコルを言語サーバ
 
 ### typescript-language-server: `fix: stop the server when tsserver is killed by a signal`
 
-PR 先: `typescript-language-server/typescript-language-server`（master）。ブランチ: `tagawa0525/typescript-language-server` の `tsserver-exit-by-signal`（1 コミット、`src/lsp-server.ts` と `src/ts-client.test.ts`。fork の PR #1 で CI を通してある）。見出しは `## Summary / ## Changes / ## Tests`（PR 本文の見出しは常に英語。ユーザーの決定、2026-09-09）。文面は 2026-09-09 にユーザーの確認済み。同日 typescript-language-server/typescript-language-server#1125 として提出。
+PR 先: `typescript-language-server/typescript-language-server`（master）。ブランチ: `tagawa0525/typescript-language-server` の `tsserver-exit-by-signal`（2 コミット。修正本体と Copilot の指摘への対応 6c21094、`src/lsp-server.ts` と `src/ts-client.test.ts`。fork の PR #1 で CI を通してある）。見出しは `## Summary / ## Changes / ## Tests`（PR 本文の見出しは常に英語。ユーザーの決定、2026-09-09）。文面は 2026-09-09 にユーザーの確認済み。同日 typescript-language-server/typescript-language-server#1125 として提出。
 
 本文:
 

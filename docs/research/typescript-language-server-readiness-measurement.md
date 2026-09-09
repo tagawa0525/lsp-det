@@ -106,3 +106,12 @@ lsp-det 経由（`lsp-det -- typescript-language-server --stdio`）で `tests/co
 | lsp-det 経由の準拠テスト（パッチ版）                                                               | `typescript_language_server_tsserver_crash_becomes_health_error_with_real_server` は言語サーバーごと落ちて lsp-det も終了し、書き込みが Broken pipe で失敗（上流消失。仕様 8 章）。`spec_7_1` は同梱の TypeScript 6.0.3 が `TESTED_VERSIONS` にないので保証なし `{}`。他 5 件は通過。どちらの失敗も想定どおり |
 
 harness の落とし穴: 被験者そのものの終了を `wait_until_exited`（`kill(pid, 0)`）で見ると、刈り取っていない zombie が生きていると見えて「生き残った」と誤判定する。`Child::try_wait` で刈り取る `exit_status_within` を足した。
+
+### レビューへの対応（2026-09-09）
+
+上流の PR typescript-language-server/typescript-language-server#1125 に付いた Copilot の指摘 2 件に、fork の追加コミット 6c21094 で対応した。
+
+- `onExit` の中で同期的に throw すると、`SingleTsServer` の exit handler の残り（保留中の要求を "server exited" で reject する `_callbacks.destroy`）が飛ばされる。#624 以来の形だが指摘のとおりなので、throw を `queueMicrotask` に包んだ。exit handler と後片付けが走ってから未捕捉のエラーで落ちる。外から見える挙動は変わらず、受け入れ条件 `typescript_language_server_exits_when_tsserver_is_killed` を再度当てて通過（code 非 0 で終了、stderr に "tsserver process has exited"）
+- テストが private 状態を辿る連鎖（`serverState.server._process._process`）は、取り出した値が `ChildProcess` でなければ期待した経路を名指しした Error を投げるようにした。内部の改名で `TypeError` になるのを避ける
+
+vitest 141 件、typecheck、lint は通過。Copilot の再レビューの依頼は保守者の操作（API は fork の側に書き込み権限がなく 404）。

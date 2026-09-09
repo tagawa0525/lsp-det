@@ -1,6 +1,6 @@
 # Nextflow 言語サーバーの readiness の実測（M12）
 
-ADR 0019 決定 F の M12。コーパス（[readiness-vocabulary-corpus.md](readiness-vocabulary-corpus.md)）は Nextflow を「`references` は都度同期する（per-request の同期）」型に置き、グローバルな readiness なしで済むかを疑問にしていた。実測とソースで、**`references` は同期しない**（`updateNow()` も `awaitUpdate()` も呼ばない。同期するのは completion と formatting だけ）。走査は `$/progress` "Initializing" の中では走らず、その後の最初の更新で走り、完了の信号は「ワークスペースの全ファイルに `publishDiagnostics` が出る」ことだけ。観測者はワークスペースのファイル集合を自分で再現すれば時間なしで写像できる。版は語彙に現れないので保証は宣言しない。
+ADR 0019 決定 F の M12。コーパス（[readiness-vocabulary-corpus.md](readiness-vocabulary-corpus.ja.md)）は Nextflow を「`references` は都度同期する（per-request の同期）」型に置き、グローバルな readiness なしで済むかを疑問にしていた。実測とソースで、**`references` は同期しない**（`updateNow()` も `awaitUpdate()` も呼ばない。同期するのは completion と formatting だけ）。走査は `$/progress` "Initializing" の中では走らず、その後の最初の更新で走り、完了の信号は「ワークスペースの全ファイルに `publishDiagnostics` が出る」ことだけ。観測者はワークスペースのファイル集合を自分で再現すれば時間なしで写像できる。版は語彙に現れないので保証は宣言しない。
 
 ## 方法
 

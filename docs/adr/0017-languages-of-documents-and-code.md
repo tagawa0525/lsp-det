@@ -88,3 +88,14 @@
 | 英語版を `.en.md` にして日本語を正に | `README.md` と仕様が英語を正にしている形と揃えない理由がない。リンク先の既定が英語になる |
 
 影響: `CLAUDE.md` の言語の節、日本語の文書から 6 本へのリンク（`.ja.md` に付け替え）、`docs/research/README.md` の新設
+
+## 追補（2026-09-10）: 提出物がリンクで指す調査報告は個別に英語が正にする
+
+追補 F の「個々の調査報告は日本語のまま。必要になったものだけ個別に訳す」の最初の適用（ユーザーの依頼）。
+
+### G. LSP 本体への proposal と仕様が根拠として指す 2 本
+
+- 対象: `docs/research/readiness-vocabulary-corpus.md`（proposal issue の「新しい語彙ではない」の根拠。`docs/vision.md` からもリンク）と `docs/research/workspace-symbol-truncation-measurement.md`（仕様 6 章の `workspace/symbol` の上限の根拠）。英語版を元のパスに置き、日本語版を同名の `.ja.md` に改名した。維持の規則は決定 B と同じ（同じコミットで追従、見出しの構成を 1 対 1、レビューは日本語版で）
+- 理由: 第 1 段・第 2 段の提出（2026-09-09〜10）と第 3 段の草案が、根拠としてこの 2 本の URL を本文に置く。提案を読みに来る人（LSP のメンテナ、各上流のメンテナ）がそこで止まらないようにする
+- 英語の文書（仕様、`docs/vision.md`、`docs/research/README.md`）からのリンクは "(Japanese)" の札を外し、日本語の文書（ADR、他の調査報告、`docs/upstream-submissions.md`）からのリンクは `.ja.md` に付け替えた
+- 次に訳す候補は、提出物や英語の文書が新たに根拠として指すものに限る。全部を訳さない理由は追補 F の却下した案のとおり

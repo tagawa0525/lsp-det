@@ -1,33 +1,35 @@
-# `workspace/symbol` の打ち切りの実測（2026-09-04）
+# Measurement of `workspace/symbol` capping (2026-09-04)
 
-ADR 0013 の根拠。本プロトコルの `completeness`（当時の名前）は 7.0 の 11 メソッドに `workspace/symbol` を含めて「応答が完全である」と約束していた。Serena の調査（[serena-processing-around-lsp.md](serena-processing-around-lsp.md) 4 章）で rust-analyzer に `limit: 128` を渡していることが分かり、4 サーバーで打ち切りの有無を測った。
+[日本語](workspace-symbol-truncation-measurement.ja.md)
 
-## 結論
+Basis for ADR 0013. The protocol's `completeness` field (the name at the time) promised that the response is complete for the 11 methods listed in 7.0, including `workspace/symbol`. Serena's investigation ([serena-processing-around-lsp.md](serena-processing-around-lsp.md) (Japanese), chapter 4) found that it passes `limit: 128` to rust-analyzer, so we measured whether capping occurs across 4 servers.
 
-| サーバー                   | 版                        | 一致する 300 個への応答 | 打ち切り                                                                     |
-| -------------------------- | ------------------------- | ----------------------- | ---------------------------------------------------------------------------- |
-| rust-analyzer              | 2026-08-03（nixpkgs）     | 128                     | **あり**。`workspace.symbol.search.limit` の既定 128。1000 にすると 300      |
-| gopls                      | 0.23.0                    | 100                     | **あり**。`workspace_symbol.go:29` の `maxSymbols = 100`。設定で変えられない |
-| pyright                    | 1.1.412                   | 300                     | なし                                                                         |
-| typescript-language-server | 5.3.0（TypeScript 5.9.3） | 300                     | なし                                                                         |
+## Conclusion
 
-打ち切ったサーバーはそれを一切伝えない。応答は普通の `result` 配列で、`isIncomplete` に当たるものは `workspace/symbol` には存在しない（LSP にあるのは completion だけ）。ログも出ない。
+| Server                     | Version                  | Response to 300 matches | Cap                                                                                      |
+| -------------------------- | ------------------------ | ----------------------- | ---------------------------------------------------------------------------------------- |
+| rust-analyzer              | 2026-08-03 (nixpkgs)     | 128                     | **Yes.** Default of `workspace.symbol.search.limit` is 128. Setting it to 1000 gives 300 |
+| gopls                      | 0.23.0                   | 100                     | **Yes.** `maxSymbols = 100` at `workspace_symbol.go:29`. Not configurable                |
+| pyright                    | 1.1.412                  | 300                     | None                                                                                     |
+| typescript-language-server | 5.3.0 (TypeScript 5.9.3) | 300                     | None                                                                                     |
 
-## 上限の理由（ソース）
+Servers that cap the result never report it. The response is an ordinary `result` array, and nothing corresponding to `isIncomplete` exists for `workspace/symbol` (LSP has that only for completion). No log is emitted either.
 
-- rust-analyzer `crates/rust-analyzer/src/config.rs:1068-1071`: 「VS Code のようなクライアントは結果の絞り込みのたびに検索を出し直すので、最初の検索で全結果を要らない。全結果を先に要るクライアントは上限を上げる必要があるかもしれない」
-- gopls `gopls/internal/golang/workspace_symbol.go:27-29`: 「クライアントに送るべき結果の最大数」。fuzzy のスコア順に上位 100 件を固定長の配列で保持する。同ファイルの注釈に「LSP の `workspace/symbol` はサーバー側のフィルタを持たない（microsoft/language-server-protocol#941）」
+## Reason for the limit (source)
 
-どちらもエディタのピッカー向けの、スコア順のあいまい検索として作られている。列挙の契約は最初からない。
+- rust-analyzer `crates/rust-analyzer/src/config.rs:1068-1071`: a client like VS Code reissues the search every time the results are narrowed, so the first search does not need every result; a client that wants every result up front may need to raise the limit.
+- gopls `gopls/internal/golang/workspace_symbol.go:27-29`: the maximum number of results to send to the client. It keeps the top 100 by fuzzy score in a fixed-length array. A comment in the same file notes that LSP's `workspace/symbol` has no server-side filter (microsoft/language-server-protocol#941).
 
-## 測定方法
+Both are built as a score-ordered fuzzy search for an editor picker. There was never a contract to enumerate everything.
 
-各言語で、接頭辞 `wsymprobe` を共有する 300 個のトップレベルのシンボル（3 ファイル × 100）を持つ fixture を作り、サーバーを lsp-det を挟まずに直接起動して `initialize` → `initialized` → readiness の信号（rust-analyzer は `quiescent: true`、gopls は "Setting up workspace" の end、pyright は "Found 3 source files"、tsls は `didOpen` 後の "Initializing JS/TS language features" の end）を待ってから `workspace/symbol` に `{"query": "wsymprobe"}` を送り、結果のうち名前に `wsymprobe` を含むものを数えた。rust-analyzer は `initializationOptions.workspace.symbol.search.limit = 1000` でも測った。
+## Measurement method
 
-空の query（`""`）の応答も記録した: rust-analyzer は crate のルート 6 個、gopls は `null`、pyright は `[]`、tsls は 300。
+For each language, we built a fixture with 300 top-level symbols (3 files x 100) sharing the prefix `wsymprobe`, launched the server directly without lsp-det in front of it, sent `initialize` → `initialized`, and waited for the readiness signal (rust-analyzer: `quiescent: true`; gopls: the end of "Setting up workspace"; pyright: "Found 3 source files"; tsls: the end of "Initializing JS/TS language features" after `didOpen`) before sending `workspace/symbol` with `{"query": "wsymprobe"}` and counting the results whose name contains `wsymprobe`. rust-analyzer was also measured with `initializationOptions.workspace.symbol.search.limit = 1000`.
 
-## 一般化してはならない点
+We also recorded the response to an empty query (`""`): rust-analyzer returned the 6 crate roots, gopls returned `null`, pyright returned `[]`, and tsls returned 300.
 
-- 測ったのは flake.nix が固定する版だけ。上限は版で変わりうる（rust-analyzer は設定でも変わる）
-- 4 サーバー以外（jdtls、clangd 等）は未測定
-- 打ち切りの有無を測っただけで、スコア順の並びが「エージェントの欲しい順」かは別の問題
+## What not to generalize
+
+- Only the versions pinned by flake.nix were measured. The limit can change across versions (and for rust-analyzer, also with configuration)
+- Servers other than these 4 (jdtls, clangd, etc.) were not measured
+- We measured only whether capping occurs. Whether the score-ordered ranking matches what an agent wants is a separate question

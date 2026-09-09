@@ -1,6 +1,6 @@
 # Metals の readiness の実測（M9）
 
-ADR 0019 決定 F の M9。コーパス（[readiness-vocabulary-corpus.md](readiness-vocabulary-corpus.md)）で唯一「時間でしか終わりを言えない」と見た Metals を、実サーバーで測った。結論は**時間なしで写像できる**。Serena の静穏期間（3 秒）が埋めていたのは、トークンの隙間を「未完了トークン 0 = ready」と読む誤りであり、規則を「最初の "Indexing" の end まで ready を言わない」と「build ファイルとソースの変更の通知から再インデックスを先読みする」に変えれば消える。
+ADR 0019 決定 F の M9。コーパス（[readiness-vocabulary-corpus.md](readiness-vocabulary-corpus.ja.md)）で唯一「時間でしか終わりを言えない」と見た Metals を、実サーバーで測った。結論は**時間なしで写像できる**。Serena の静穏期間（3 秒）が埋めていたのは、トークンの隙間を「未完了トークン 0 = ready」と読む誤りであり、規則を「最初の "Indexing" の end まで ready を言わない」と「build ファイルとソースの変更の通知から再インデックスを先読みする」に変えれば消える。
 
 ## 方法
 

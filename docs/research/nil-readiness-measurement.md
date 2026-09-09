@@ -78,4 +78,4 @@ flake.nix のない普通のディレクトリでも同じで、信号は 1 つ�
 
 ## コーパスへの反映
 
-`readiness-vocabulary-corpus.md` に nil の行を足す（Serena の一覧にない）。信号は `$/progress`（固定 token 3 つ）、flake.lock の読み込みには信号なし、health は `window/showMessage` type 1 / 2、`references` は単一文書。
+`readiness-vocabulary-corpus.ja.md` に nil の行を足す（Serena の一覧にない）。信号は `$/progress`（固定 token 3 つ）、flake.lock の読み込みには信号なし、health は `window/showMessage` type 1 / 2、`references` は単一文書。

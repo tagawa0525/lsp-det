@@ -25,7 +25,7 @@
 
 ## 言語（ADR 0017）
 
-- 英語が正: `README.md`、`docs/spec/server-state.md`、そして `README.md` から直接リンクする 6 本（`docs/vision.md`、`docs/v0.1-design.md`、`docs/research/claude-code-dogfooding.md`、`docs/adr/README.md`、`scripts/upstream/README.md`、`dogfood/serena/README.md`。追補 F）。日本語版（同名の `.ja.md`）は**同じコミット**で追従させ、見出しの構成を 1 対 1 に保つ。レビューは日本語版で行う
+- 英語が正: `README.md`、`docs/spec/server-state.md`、そして `README.md` から直接リンクする 6 本（`docs/vision.md`、`docs/v0.1-design.md`、`docs/research/claude-code-dogfooding.md`、`docs/adr/README.md`、`scripts/upstream/README.md`、`dogfood/serena/README.md`。追補 F）、および提出物がリンクで指す調査報告 2 本（`docs/research/readiness-vocabulary-corpus.md`、`docs/research/workspace-symbol-truncation-measurement.md`。追補 G）。日本語版（同名の `.ja.md`）は**同じコミット**で追従させ、見出しの構成を 1 対 1 に保つ。レビューは日本語版で行う
 - 英語のみ: `src` / `tests` / `examples` のコメントとテスト名、実行時のメッセージ、`dogfood/README.md`、`docs/research/README.md`（調査報告の索引）
 - 日本語: 個々の ADR、`docs/research/` の各報告、`scripts/serena/README.md` 等の upstream 以外の `scripts/*/README.md`、本ファイル、コミットメッセージ、PR 本文、CHANGELOG。英語の文書からこれらへリンクするときはリンクテキストに "(Japanese)" を付ける
 - 訳語は `docs/glossary.md` に合わせる。変えるときは表を先に直す

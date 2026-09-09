@@ -15,9 +15,12 @@ import time
 
 
 def main() -> int:
+    if len(sys.argv) < 3:
+        sys.exit("usage: tee.py <log file> <server command> [args...]")
     with open(sys.argv[1], "ab", buffering=0) as log:
         server = subprocess.Popen(sys.argv[2:], stdin=subprocess.PIPE)
-        assert server.stdin is not None
+        if server.stdin is None:
+            raise RuntimeError("the server's stdin is not a pipe")
         t0 = time.monotonic()
         while True:
             chunk = sys.stdin.buffer.read1(65536)

@@ -2,7 +2,7 @@
 
 - 日付: 2026-09-06
 - 状態: 採用
-- 関連: [ADR 0003](0003-extension-s-zero-based.md) 決定 3、[ADR 0004](0004-spec-grilling.md) 決定 3、[ADR 0009](0009-success-criterion-and-two-sided-reference.md) 決定 B（造語を避け LSP の語彙に合わせる）、[ADR 0013](0013-coverage-instead-of-completeness.md) 決定 B（置き換える）、[ADR 0014](0014-freshness-covers-watched-file-changes.md) 追補、[research/workspace-symbol-truncation-measurement.md](../research/workspace-symbol-truncation-measurement.md)、[research/disk-edit-propagation-measurement.md](../research/disk-edit-propagation-measurement.md)、[research/serena-solidlsp.md](../research/serena-solidlsp.md)
+- 関連: [ADR 0003](0003-extension-s-zero-based.md) 決定 3、[ADR 0004](0004-spec-grilling.md) 決定 3、[ADR 0009](0009-success-criterion-and-two-sided-reference.md) 決定 B（造語を避け LSP の語彙に合わせる）、[ADR 0013](0013-coverage-instead-of-completeness.md) 決定 B（置き換える）、[ADR 0014](0014-freshness-covers-watched-file-changes.md) 追補、[research/workspace-symbol-truncation-measurement.ja.md](../research/workspace-symbol-truncation-measurement.ja.md)、[research/disk-edit-propagation-measurement.md](../research/disk-edit-propagation-measurement.md)、[research/serena-solidlsp.md](../research/serena-solidlsp.md)
 
 ## 経緯
 

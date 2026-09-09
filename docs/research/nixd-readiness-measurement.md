@@ -70,4 +70,4 @@ health の信号はない。`window/showMessage` も `window/logMessage` も使�
 
 ## コーパスへの反映
 
-`readiness-vocabulary-corpus.md` の nixd の行を「確認済み」から「実測済み」に更新する。信号は 2 本並行の `$/progress`（title "evaluating …"、token は乱数の整数）、索引に依る要求はサーバー自身が待たせる、health の信号はなし、`references` は単一文書。
+`readiness-vocabulary-corpus.ja.md` の nixd の行を「確認済み」から「実測済み」に更新する。信号は 2 本並行の `$/progress`（title "evaluating …"、token は乱数の整数）、索引に依る要求はサーバー自身が待たせる、health の信号はなし、`references` は単一文書。

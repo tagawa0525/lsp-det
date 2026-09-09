@@ -2,7 +2,7 @@
 
 - 日付: 2026-09-04
 - 状態: 採用
-- 関連: [ADR 0004](0004-spec-grilling.md) 決定 3（名前を置き換える）、[ADR 0009](0009-success-criterion-and-two-sided-reference.md) 決定 B（造語を避け内容そのものの名前で呼ぶ）、[research/workspace-symbol-truncation-measurement.md](../research/workspace-symbol-truncation-measurement.md)、[research/serena-processing-around-lsp.md](../research/serena-processing-around-lsp.md) 4 章
+- 関連: [ADR 0004](0004-spec-grilling.md) 決定 3（名前を置き換える）、[ADR 0009](0009-success-criterion-and-two-sided-reference.md) 決定 B（造語を避け内容そのものの名前で呼ぶ）、[research/workspace-symbol-truncation-measurement.ja.md](../research/workspace-symbol-truncation-measurement.ja.md)、[research/serena-processing-around-lsp.md](../research/serena-processing-around-lsp.md) 4 章
 
 ## 経緯
 

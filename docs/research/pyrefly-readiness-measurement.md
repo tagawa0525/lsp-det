@@ -1,6 +1,6 @@
 # pyrefly の readiness の実測（M16）
 
-ADR 0019 決定 F の M16。コーパス（[readiness-vocabulary-corpus.md](readiness-vocabulary-corpus.md)）は pyrefly を「起動時の走査が無音で再チェックだけ進捗」型に置き、「再チェックの進捗だけで `ready` を言えるか」を疑問にしていた。実測とソースで、**起動時の索引（populate）はプロトコルに何も出さない**（stderr の INFO だけ）。`$/progress` "Pyrefly: Rechecking" は開いているファイルの型検査で、索引を覆わない。索引の前後で `references` は空配列 → 部分 → 完全と変わり、区別する信号がない。設定の壊れも stderr だけで health の信号もない。写像は書けず、両軸 `unknown`（仕様 8.2 の 3）が正直。変更の取り込み（`didChange`、監視対象の Changed）は同期に近く速い。
+ADR 0019 決定 F の M16。コーパス（[readiness-vocabulary-corpus.ja.md](readiness-vocabulary-corpus.ja.md)）は pyrefly を「起動時の走査が無音で再チェックだけ進捗」型に置き、「再チェックの進捗だけで `ready` を言えるか」を疑問にしていた。実測とソースで、**起動時の索引（populate）はプロトコルに何も出さない**（stderr の INFO だけ）。`$/progress` "Pyrefly: Rechecking" は開いているファイルの型検査で、索引を覆わない。索引の前後で `references` は空配列 → 部分 → 完全と変わり、区別する信号がない。設定の壊れも stderr だけで health の信号もない。写像は書けず、両軸 `unknown`（仕様 8.2 の 3）が正直。変更の取り込み（`didChange`、監視対象の Changed）は同期に近く速い。
 
 ## 方法
 

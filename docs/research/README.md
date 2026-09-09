@@ -1,8 +1,9 @@
 # Research notes
 
 These are records of measurement and investigation. Following `CLAUDE.md`'s reading
-order, read them after the spec and the design doc. Most are in Japanese; only
-`claude-code-dogfooding.md` also has an English version. They follow the policy of
+order, read them after the spec and the design doc. Most are in Japanese; `claude-code-dogfooding.md`,
+`readiness-vocabulary-corpus.md` and `workspace-symbol-truncation-measurement.md` are in
+English with a Japanese version (`.ja.md`). They follow the policy of
 confirming a server's own signals from its documentation and real measurement before
 writing a mapping (ADR 0018 decision C).
 
@@ -40,7 +41,7 @@ writing a mapping (ADR 0018 decision C).
 | [agent-bridges.md](agent-bridges.md)                             | Japanese | Surveys six agent-facing LSP bridges (LSAP, lsai-protocol, cclsp, mcpls, codex-lsp, claude-code-lsps) and finds none correctly waits for readiness; empty responses during indexing pass through to the agent unchanged in every one (2026-08).                     |
 | [lspmux-current.md](lspmux-current.md)                           | Japanese | Compares lspmux's current release against ra-multiplex and finds the `$/cancelRequest` no-op problem still unfixed, the pre-initialize handshake bug fixed but not forwarded, and full-reparse framing unchanged (2026-08-28).                                      |
 | [proxy-implementations.md](proxy-implementations.md)             | Japanese | Reads ra-multiplex, emacs-lsp-booster, and lsp-devtools and finds their framing spans full-parse, one-directional-parse, and no-parse designs, recommending lsp-det parse only headers and peek `method`/`id` while passing the body verbatim.                      |
-| [readiness-vocabulary-corpus.md](readiness-vocabulary-corpus.md) | Japanese | Maps Serena's 70 supported language servers to lsp-det's readiness vocabulary from each server's own documentation and source, producing the list of servers whose mapping is in question and candidates for real-server measurement (2026-09-06).                  |
+| [readiness-vocabulary-corpus.md](readiness-vocabulary-corpus.md) | English  | Maps Serena's 70 supported language servers to lsp-det's readiness vocabulary from each server's own documentation and source, producing the list of servers whose mapping is in question and candidates for real-server measurement (2026-09-06).                  |
 | [server-readiness.md](server-readiness.md)                       | Japanese | Reads pyright, typescript-language-server, and eclipse.jdt.ls source to find how each exposes readiness: work-done progress tied precisely to file counts for pyright, and a tsserver project-load progress that also ends on crash for typescript-language-server. |
 | [vscode-languageclient.md](vscode-languageclient.md)             | Japanese | Reading vscode-languageserver-node finds that jsonrpc's `sendRequest` never times out; the only time-based handling is a 2-second shutdown wait and a 10-second stalled-byte-stream warning (2026-08-27).                                                           |
 | [zed-lsp.md](zed-lsp.md)                                         | Japanese | Zed subscribes to rust-analyzer's `experimental/serverStatus` but deserializes only `health` and `message`, never reading the `quiescent` field, which does not appear anywhere in Zed's codebase (2026-08).                                                        |
@@ -70,7 +71,7 @@ writing a mapping (ADR 0018 decision C).
 | [claude-code-dogfooding.md](claude-code-dogfooding.md)                                   | English  | Observes how Claude Code uses language servers through lsp-det, filling in design chapter 8's items (startup timing, first cross-workspace request, timeouts, unknown-notification handling), appended after every session (2026-09-03–).                        |
 | [disk-edit-propagation-measurement.md](disk-edit-propagation-measurement.md)             | Japanese | Measures across four servers and four scenarios how disk edits reach language-server responses; only `didChangeWatchedFiles` reaches all four immediately, and Claude Code's own notification set leaves Go and Python responses stale all session (2026-09-04). |
 | [language-server-exit-on-stdin-eof.md](language-server-exit-on-stdin-eof.md)             | Japanese | Measures whether four language servers exit on stdin EOF after answering `initialize`, confirming all four do so without waiting for `shutdown`/`exit`, within 0.13 seconds combined, the basis for macOS orphan-process handling (2026-09-04).                  |
-| [workspace-symbol-truncation-measurement.md](workspace-symbol-truncation-measurement.md) | Japanese | Measures `workspace/symbol` truncation across four servers after Serena's code revealed a `limit: 128` parameter; rust-analyzer and gopls truncate at fixed limits (128 and 100) while pyright does not (2026-09-04).                                            |
+| [workspace-symbol-truncation-measurement.md](workspace-symbol-truncation-measurement.md) | English  | Measures `workspace/symbol` truncation across four servers after Serena's code revealed a `limit: 128` parameter; rust-analyzer and gopls truncate at fixed limits (128 and 100) while pyright does not (2026-09-04).                                            |
 
 ## Reviews
 

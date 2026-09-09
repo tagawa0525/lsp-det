@@ -300,7 +300,7 @@ The current strategy (order, rules, the list of submissions) is [upstream-submis
 
 1. Stand up consumers (Claude Code, lsp-det, Serena) first, then ask the server's upstream
 2. Fix a defect the other side already feels first; bring the protocol proposal later, as a generalization of it. If upstream already has a different answer to the same problem, build on top of it
-3. A proposal to LSP itself (microsoft/language-server-protocol) is filed without waiting for upstream adoption, on the grounds of a measurement of vocabulary fragmentation ([research/readiness-vocabulary-corpus.md](research/readiness-vocabulary-corpus.md) (Japanese)). It connects to the existing issue microsoft/language-server-protocol#511's thread as "a re-proposal from an agent use case". Declaration range and the launch manifest are frozen and out of scope for this path
+3. A proposal to LSP itself (microsoft/language-server-protocol) is filed without waiting for upstream adoption, on the grounds of a measurement of vocabulary fragmentation ([research/readiness-vocabulary-corpus.md](research/readiness-vocabulary-corpus.md)). It connects to the existing issue microsoft/language-server-protocol#511's thread as "a re-proposal from an agent use case". Declaration range and the launch manifest are frozen and out of scope for this path
 
 ---
 

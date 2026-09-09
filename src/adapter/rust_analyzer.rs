@@ -375,6 +375,34 @@ mod tests {
     }
 
     #[test]
+    fn prefers_the_readiness_field_when_the_upstream_sends_one() {
+        // The proposed field addition (docs/upstream-submissions.md, preparation 4): a
+        // rust-analyzer that reports `readiness` itself says `initializing` while nothing is
+        // loaded yet, where `quiescent: true` alone would read as ready.
+        let mut adapter = RustAnalyzerAdapter::new();
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"readiness":"initializing","message":null}}"#;
+        let state = interpret(&mut adapter, body).unwrap();
+        assert_eq!(state.readiness, Readiness::Initializing);
+        assert_eq!(state.health, Health::Ok);
+    }
+
+    #[test]
+    fn ignores_a_status_whose_readiness_is_not_a_value_of_this_protocol() {
+        // Like a health value outside the protocol: the status is not read at all rather than
+        // guessed from `quiescent` (spec chapter 8.1 reasoning applies to both axes).
+        for claimed in ["unknown", "warming"] {
+            let mut adapter = RustAnalyzerAdapter::new();
+            let body = format!(
+                r#"{{"method":"experimental/serverStatus","params":{{"health":"ok","quiescent":true,"readiness":"{claimed}"}}}}"#
+            );
+            assert!(
+                interpret(&mut adapter, &body).is_none(),
+                "must not accept readiness {claimed} from the upstream"
+            );
+        }
+    }
+
+    #[test]
     fn carries_health_through_unchanged() {
         // Failure arrives via health (spec chapter 6 item 5). Even with error, quiescent is
         // read independently.

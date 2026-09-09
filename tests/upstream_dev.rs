@@ -23,6 +23,9 @@
 //! - typescript-language-server: exit when tsserver is killed by a signal, as it already does
 //!   for a non-zero exit code (upstream #302 / #305). Once it does, a dead tsserver reaches
 //!   lsp-det as the exit of the upstream (spec chapter 8) instead of empty answers
+//! - rust-analyzer (the alternative to speaking the protocol): report `readiness` as a field of
+//!   `experimental/serverStatus`. Once it does, the mapping reads the field instead of deriving
+//!   readiness from `quiescent`, and `initializing` before the first load is the server's own word
 
 mod support;
 
@@ -204,6 +207,58 @@ fn assert_upstream_speaks_the_protocol(command: &str, args: &[&str], root: std::
 fn rust_analyzer_speaks_the_server_state_protocol() {
     let project = support::TempCargoProject::with_cross_file_reference("upstream-dev");
     assert_upstream_speaks_the_protocol("rust-analyzer", &[], project.root.clone());
+}
+
+/// rust-analyzer, the field-addition alternative (docs/upstream-submissions.md, preparation 4):
+/// `experimental/serverStatus` carries `readiness` next to `quiescent`. `quiescent` answers
+/// "is background work pending?", which is trivially false before the first load, so a client
+/// reading it as "ready" is wrong exactly then; the field spells out `initializing` / `indexing`
+/// / `ready`. Passes once every status notification carries the field consistently with
+/// `quiescent` and the first load ends in `ready`.
+#[test]
+#[ignore = "acceptance condition for an upstream change. Local only. Put target/upstream/bin in PATH and run cargo test --test upstream_dev -- --ignored"]
+fn rust_analyzer_reports_readiness_in_server_status() {
+    let project = support::TempCargoProject::with_cross_file_reference("upstream-dev");
+    let mut upstream =
+        ConformanceClient::start(&direct("rust-analyzer", &[], project.root.clone()));
+    upstream.initialize_with_root_and_capabilities(
+        &project.root,
+        json!({"experimental": {"serverStatusNotification": true}}),
+    );
+
+    // The first load of a small workspace ends within seconds; the cap only bounds the premise.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut seen = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        let status = upstream
+            .await_notification_within("experimental/serverStatus", remaining)
+            .unwrap_or_else(|| {
+                panic!("the first load did not end in readiness ready within 60 seconds: {seen:?}")
+            });
+        let readiness = status["readiness"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the status carries no readiness field: {status}"))
+            .to_string();
+        let quiescent = status["quiescent"]
+            .as_bool()
+            .unwrap_or_else(|| panic!("the status carries no quiescent field: {status}"));
+        assert!(
+            ["initializing", "indexing", "ready"].contains(&readiness.as_str()),
+            "readiness is not a value of the protocol: {status}"
+        );
+        // ready is quiescent, and non-quiescent is never ready (quiescent while initializing is
+        // the trivial quiescence before the first load, which is the point of the field).
+        assert!(
+            (readiness == "ready") == quiescent || readiness == "initializing",
+            "readiness and quiescent disagree: {status}"
+        );
+        seen.push(readiness.clone());
+        if readiness == "ready" {
+            break;
+        }
+    }
+    upstream.shutdown();
 }
 
 /// gopls: speaks this protocol in addition to the "Setting up workspace" progress

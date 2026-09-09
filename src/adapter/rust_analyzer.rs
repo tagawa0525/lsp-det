@@ -14,6 +14,12 @@
 //! Failure arrives via `health`. A workspace load failure is
 //! `{health: error, quiescent: true}` (`current_status()`). Per spec chapter
 //! 6 item 5, it is mapped onto `health`, not `readiness`.
+//!
+//! `quiescent` is trivially `true` before the first load (nothing is in flight
+//! yet), so it alone cannot say `initializing`. The proposed field addition
+//! (docs/upstream-submissions.md, preparation 4) has rust-analyzer report
+//! `readiness` itself next to `quiescent`; when the field is present it is
+//! the server's own word and is read instead of `quiescent`.
 
 use serde::Deserialize;
 
@@ -33,8 +39,43 @@ pub const SERVER_STATUS_METHOD: &str = "experimental/serverStatus";
 struct ServerStatusParams {
     health: UpstreamHealth,
     quiescent: bool,
+    /// The proposed field. Absent from every released rust-analyzer so far. When present it
+    /// must be a value of the protocol: `null` is not read as "absent" (that would fall back to
+    /// `quiescent`, the reading the field exists to replace).
+    #[serde(default, deserialize_with = "present_readiness")]
+    readiness: Option<UpstreamReadiness>,
     #[serde(default)]
     message: Option<String>,
+}
+
+/// The values of the proposed `readiness` field. Received as a dedicated enum for the same
+/// reason as [`UpstreamHealth`]: a value outside the protocol fails to parse and the status is
+/// not read.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum UpstreamReadiness {
+    Initializing,
+    Indexing,
+    Ready,
+}
+
+/// Deserializes a `readiness` that is present. Only a missing field is `None` (via
+/// `#[serde(default)]`); a present `null` or anything else outside the protocol is an error.
+fn present_readiness<'de, D>(deserializer: D) -> Result<Option<UpstreamReadiness>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    UpstreamReadiness::deserialize(deserializer).map(Some)
+}
+
+impl From<UpstreamReadiness> for Readiness {
+    fn from(value: UpstreamReadiness) -> Self {
+        match value {
+            UpstreamReadiness::Initializing => Readiness::Initializing,
+            UpstreamReadiness::Indexing => Readiness::Indexing,
+            UpstreamReadiness::Ready => Readiness::Ready,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -232,14 +273,17 @@ impl Mapping for RustAnalyzerAdapter {
             health = Health::Error;
         }
 
+        // The server's own readiness when it reports one; derived from `quiescent` otherwise.
+        let readiness = match params.readiness {
+            Some(readiness) => readiness.into(),
+            None if params.quiescent => Readiness::Ready,
+            None => Readiness::Indexing,
+        };
+
         self.last_health = health;
         Some(ServerState {
             health,
-            readiness: if params.quiescent {
-                Readiness::Ready
-            } else {
-                Readiness::Indexing
-            },
+            readiness,
             message: params.message,
         })
     }
@@ -372,6 +416,43 @@ mod tests {
         let mut adapter = RustAnalyzerAdapter::new();
         let state = interpret(&mut adapter, &status("ok", true)).expect("status is readable");
         assert_eq!(state.readiness, Readiness::Ready);
+    }
+
+    #[test]
+    fn prefers_the_readiness_field_when_the_upstream_sends_one() {
+        // The proposed field addition (docs/upstream-submissions.md, preparation 4): a
+        // rust-analyzer that reports `readiness` itself says `initializing` while nothing is
+        // loaded yet, where `quiescent: true` alone would read as ready.
+        let mut adapter = RustAnalyzerAdapter::new();
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"readiness":"initializing","message":null}}"#;
+        let state = interpret(&mut adapter, body).unwrap();
+        assert_eq!(state.readiness, Readiness::Initializing);
+        assert_eq!(state.health, Health::Ok);
+    }
+
+    #[test]
+    fn ignores_a_status_whose_readiness_is_not_a_value_of_this_protocol() {
+        // Like a health value outside the protocol: the status is not read at all rather than
+        // guessed from `quiescent` (spec chapter 8.1 reasoning applies to both axes).
+        for claimed in ["unknown", "warming"] {
+            let mut adapter = RustAnalyzerAdapter::new();
+            let body = format!(
+                r#"{{"method":"experimental/serverStatus","params":{{"health":"ok","quiescent":true,"readiness":"{claimed}"}}}}"#
+            );
+            assert!(
+                interpret(&mut adapter, &body).is_none(),
+                "must not accept readiness {claimed} from the upstream"
+            );
+        }
+    }
+
+    #[test]
+    fn ignores_a_status_whose_readiness_is_null() {
+        // `null` is not a value of the protocol either. Reading it as "absent" would fall back
+        // to `quiescent`, which is the reading the field exists to replace.
+        let mut adapter = RustAnalyzerAdapter::new();
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"readiness":null}}"#;
+        assert!(interpret(&mut adapter, body).is_none());
     }
 
     #[test]

@@ -63,7 +63,7 @@ typescript-language-server の `tsserver-exit-by-signal` のビルドでは、�
 
 lsp-det 側は、名前の大文字小文字を区別せず（pyright は "Pyright" と名乗る）、`serverInfo` の版で保証の根拠を置き換えるかを写像が決める（typescript-language-server の版は包み紙の版）ようにしてある。rust-analyzer のパッチに当てたことで、恒等写像の初期状態の問い合わせが `initialized` より前だった不具合も見つかり直した（PR #26）
 
-`reference/` の clone は `upstream` リモートを持つので、グローバルの git hook はこちらの規約の検査（Conventional Commits の件名、markdownlint の自動修正、ruff、rustfmt）を飛ばす。上流の規約は上流の固定版の道具と CI が見る
+上流に出す変更を当てる clone（下の「fork とリモート」の表の 6 つ）は `origin` が fork、`upstream` が本家で、グローバルの git hook は `upstream` リモートのある clone ではこちらの規約の検査（Conventional Commits の件名、markdownlint の自動修正、ruff、rustfmt）を飛ばす。上流の規約は上流の固定版の道具と CI が見る。`reference/` の他の clone（`reference/README.md` の浅い clone）は `origin` だけで、コミットしない
 
 ## Serena
 

@@ -65,7 +65,7 @@ With the `tsserver-exit-by-signal` build of typescript-language-server, two conf
 
 On lsp-det's side, name matching is case-insensitive (pyright calls itself "Pyright"), and whether to replace the basis for a guarantee with `serverInfo`'s version is up to the mapping (typescript-language-server's `serverInfo` version is the wrapper's version). Applying the patch to rust-analyzer also surfaced and fixed a bug where the identity mapping's initial state query happened before `initialized` (PR #26)
 
-The clones under `reference/` have an `upstream` remote, so the global git hooks skip this repository's convention checks there (the Conventional Commits subject, markdownlint auto-fix, ruff, rustfmt). The upstream's conventions are checked by its own pinned tools and CI
+The clones that receive changes for an upstream (the six in the "Forks and remotes" table below) have the fork as `origin` and the upstream as `upstream`, and the global git hooks skip this repository's convention checks (the Conventional Commits subject, markdownlint auto-fix, ruff, rustfmt) in any clone with an `upstream` remote. The upstream's conventions are checked by its own pinned tools and CI. The other clones under `reference/` (the shallow clones in `reference/README.md`) have only `origin` and are never committed to
 
 ## Serena
 

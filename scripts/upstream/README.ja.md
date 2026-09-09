@@ -70,6 +70,9 @@ lsp-det 側は、名前の大文字小文字を区別せず（pyright は "Pyrig
 Serena 側の変更は `reference/serena`（`uv sync --frozen --all-groups --all-extras` で dev 依存まで入れる）に当て、`scripts/serena/probe.py` で references を取って確かめる。fork の `tsserver-crash-on-request-path` の受け入れ条件は、`CRASH=1 VIA_LSP_DET=0` がコード 0 で終わること（tsserver を落とした直後の references が `TypeScriptServerCrashedError` になり、"references after crash raised TypeScriptServerCrashedError" の行が出る）。素の上流は 0 件を成功として返し、probe は "NO ERROR SURFACED" を出してコード 1 で終わる。lsp-det 経由の比較にも同じ道具を使う:
 
 ```bash
+# 受け入れ条件（コード 0 で終わること。a.ts の 0 行 16 桁は export された関数名）
+cd reference/serena && CRASH=1 VIA_LSP_DET=0 uv run --frozen python ../../scripts/serena/probe.py typescript /path/to/repo a.ts 0 16
+# lsp-det 経由の比較
 cd reference/serena && uv run --frozen python ../../scripts/serena/probe.py python /path/to/repo a.py 0 4
 ```
 

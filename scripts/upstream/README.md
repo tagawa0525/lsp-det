@@ -72,6 +72,9 @@ The clones under `reference/` have an `upstream` remote, so the global git hooks
 The change on Serena's side is applied to `reference/serena` (install the dev dependencies with `uv sync --frozen --all-groups --all-extras`) and confirmed with `scripts/serena/probe.py`, which fetches references. The acceptance condition for the fork's `tsserver-crash-on-request-path` is that `CRASH=1 VIA_LSP_DET=0` exits 0 (the references request right after killing tsserver raises `TypeScriptServerCrashedError`, and the probe prints the "references after crash raised TypeScriptServerCrashedError" line). The stock upstream returns 0 locations as a success; the probe prints "NO ERROR SURFACED" and exits 1. The same tool compares the path through lsp-det:
 
 ```bash
+# acceptance condition (exits 0; line 0 column 16 of a.ts is the exported function's name)
+cd reference/serena && CRASH=1 VIA_LSP_DET=0 uv run --frozen python ../../scripts/serena/probe.py typescript /path/to/repo a.ts 0 16
+# comparison through lsp-det
 cd reference/serena && uv run --frozen python ../../scripts/serena/probe.py python /path/to/repo a.py 0 4
 ```
 

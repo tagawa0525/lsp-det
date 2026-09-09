@@ -109,10 +109,10 @@ fn is_fully_ready(&self) -> bool {
 
 ### 結果
 
-| 条件                      | 素の版（`2026-08-03`）                                                                                                                 | field 版（`server-status-readiness`）                                                                                                                       |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1 クレートのプロジェクト  | 5 ms `{ok, quiescent: false}` → 1.7 s `{ok, quiescent: true}`                                                                          | 4 ms `{quiescent: false, readiness: initializing}` → 0.2 s `{quiescent: false, indexing}` → 0.54 s `{quiescent: true, ready}`                               |
-| Cargo.toml のない空の場所 | 5 ms `{warning, quiescent: true, "Failed to discover workspace. …"}` → 6 ms `{error, quiescent: true, "… Failed to load workspaces."}` | 4 ms `{warning, quiescent: true, initializing, "Failed to discover workspace. …"}` → 5 ms `{error, quiescent: true, ready, "… Failed to load workspaces."}` |
+| 条件                      | 素の版（`2026-08-03`）                                                                                                                                 | field 版（`server-status-readiness`）                                                                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 クレートのプロジェクト  | 5 ms `{health: ok, quiescent: false}` → 1.7 s `{health: ok, quiescent: true}`                                                                          | 4 ms `{quiescent: false, readiness: initializing}` → 0.2 s `{quiescent: false, readiness: indexing}` → 0.54 s `{quiescent: true, readiness: ready}`                                               |
+| Cargo.toml のない空の場所 | 5 ms `{health: warning, quiescent: true, "Failed to discover workspace. …"}` → 6 ms `{health: error, quiescent: true, "… Failed to load workspaces."}` | 4 ms `{health: warning, quiescent: true, readiness: initializing, "Failed to discover workspace. …"}` → 5 ms `{health: error, quiescent: true, readiness: ready, "… Failed to load workspaces."}` |
 
 2 回ずつ走らせて同じ並びだった（時刻は ±10 ms）。field 版のプロジェクトの `health` は `warning`（ソースビルドの rustc に `rust-src` がなく sysroot の読み込みに失敗する。`readiness` の並びには関係しない）。
 

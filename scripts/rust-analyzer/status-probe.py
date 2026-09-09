@@ -42,11 +42,15 @@ class Server:
         length = None
         while True:
             line = self.process.stdout.readline().decode()
-            if line in ("\r\n", "\n", ""):
+            if line == "":
+                raise RuntimeError("rust-analyzer closed stdout")
+            if line in ("\r\n", "\n"):
                 break
-            name, value = line.split(":", 1)
+            name, _, value = line.partition(":")
             if name.strip().lower() == "content-length":
                 length = int(value)
+        if length is None:
+            raise RuntimeError("a message without Content-Length")
         return json.loads(self.process.stdout.read(length))
 
 

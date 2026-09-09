@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Record what an LSP client writes to a language server, then run the server.
 
 Usage (from a Claude Code plugin's .lsp.json):
@@ -20,7 +21,10 @@ import time
 def main() -> int:
     if len(sys.argv) < 3:
         sys.exit("usage: tee.py <log file> <server command> [args...]")
-    fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    # O_NOFOLLOW: the path is often under /tmp, so do not follow a symlink
+    # someone else planted there.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(sys.argv[1], flags, 0o600)
     with open(fd, "ab", buffering=0) as log:
         server = subprocess.Popen(sys.argv[2:], stdin=subprocess.PIPE)
         if server.stdin is None:

@@ -1,6 +1,6 @@
 # sourcekit-lsp の readiness の実測（M18。保留）
 
-ADR 0019 決定 F の M18。コーパス（[readiness-vocabulary-corpus.md](readiness-vocabulary-corpus.ja.md)）は sourcekit-lsp を「信号はあるが設定で無効（opt-in）」型に置き、「観測者が `backgroundIndexing` を注入して `indexing` → `ready` を取れるか」を疑問にしていた。**この疑問は nixpkgs の版では測れない。** `backgroundIndexing` と `IndexProgressManager`（title "Indexing" の `$/progress`）は Swift 6.0 以降のもので、nixpkgs（固定した rev も nixos-unstable も）の sourcekit-lsp は 5.10.1。5.10.1 は索引をビルド（`swift build --enable-index-store`）からしか作らず、しかも nixpkgs の Swift 5.10.1 には IndexStoreDB が索引を読むのに要る `libIndexStore.so` が入っていないので、ビルドしても `references` と `workspace/symbol` は空のまま。実物（6.x）が取れるまで保留し、5.10.1 で分かったことだけを記す。
+ADR 0019 決定 F の M18。コーパス（[readiness-vocabulary-corpus.ja.md](readiness-vocabulary-corpus.ja.md)）は sourcekit-lsp を「信号はあるが設定で無効（opt-in）」型に置き、「観測者が `backgroundIndexing` を注入して `indexing` → `ready` を取れるか」を疑問にしていた。**この疑問は nixpkgs の版では測れない。** `backgroundIndexing` と `IndexProgressManager`（title "Indexing" の `$/progress`）は Swift 6.0 以降のもので、nixpkgs（固定した rev も nixos-unstable も）の sourcekit-lsp は 5.10.1。5.10.1 は索引をビルド（`swift build --enable-index-store`）からしか作らず、しかも nixpkgs の Swift 5.10.1 には IndexStoreDB が索引を読むのに要る `libIndexStore.so` が入っていないので、ビルドしても `references` と `workspace/symbol` は空のまま。実物（6.x）が取れるまで保留し、5.10.1 で分かったことだけを記す。
 
 ## 方法
 

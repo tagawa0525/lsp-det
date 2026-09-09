@@ -1,6 +1,6 @@
 # Expert（Elixir）の readiness の実測（M10）
 
-ADR 0019 決定 F の M10。コーパス（[readiness-vocabulary-corpus.md](readiness-vocabulary-corpus.ja.md)）の Elixir の行は Serena の実装から「ビルドは `didOpen` まで始まらない」と見ていた。実測では **エンジンの起動とビルドは `initialized` で始まり、`didOpen` は要らない**。時間なしで写像できる。一方、`workspace/didChangeWatchedFiles` は `**/*.{ex,exs}` を動的登録しておきながら Created も Changed も取り込まず、`freshness.fileChanges` は空になる。
+ADR 0019 決定 F の M10。コーパス（[readiness-vocabulary-corpus.ja.md](readiness-vocabulary-corpus.ja.md)）の Elixir の行は Serena の実装から「ビルドは `didOpen` まで始まらない」と見ていた。実測では **エンジンの起動とビルドは `initialized` で始まり、`didOpen` は要らない**。時間なしで写像できる。一方、`workspace/didChangeWatchedFiles` は `**/*.{ex,exs}` を動的登録しておきながら Created も Changed も取り込まず、`freshness.fileChanges` は空になる。
 
 ## 方法
 

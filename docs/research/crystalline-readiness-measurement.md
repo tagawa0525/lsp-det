@@ -1,6 +1,6 @@
 # crystalline（Crystal）の readiness の実測（M17）
 
-ADR 0019 決定 F の M17。コーパス（[readiness-vocabulary-corpus.md](readiness-vocabulary-corpus.ja.md)）は crystalline を「per-request / per-file の進捗」型に置き、「起動系と per-request 系のトークンを区別できるか」を疑問にしていた。実測とソースで、**起動系のトークンはなく、`$/progress` はすべてリクエスト単位のコンパイル**（title "Building project"、message は entry point のパス）。要求はそのコンパイルを同期で待ってから答えるので、起動直後の要求も完全で、per-request のトークンを readiness に写す必要はない。readiness の語彙は `initialized` の直後の `window/logMessage` "LSP server is ready." で、その前に要求が答えられる窓はない。開いていないファイルのディスク上の変更は結果キャッシュのせいで織り込まれない（監視もしない）。Serena の 10 秒の sleep（`_MIN_COMPILATION_DELAY`）は根拠がない。
+ADR 0019 決定 F の M17。コーパス（[readiness-vocabulary-corpus.ja.md](readiness-vocabulary-corpus.ja.md)）は crystalline を「per-request / per-file の進捗」型に置き、「起動系と per-request 系のトークンを区別できるか」を疑問にしていた。実測とソースで、**起動系のトークンはなく、`$/progress` はすべてリクエスト単位のコンパイル**（title "Building project"、message は entry point のパス）。要求はそのコンパイルを同期で待ってから答えるので、起動直後の要求も完全で、per-request のトークンを readiness に写す必要はない。readiness の語彙は `initialized` の直後の `window/logMessage` "LSP server is ready." で、その前に要求が答えられる窓はない。開いていないファイルのディスク上の変更は結果キャッシュのせいで織り込まれない（監視もしない）。Serena の 10 秒の sleep（`_MIN_COMPILATION_DELAY`）は根拠がない。
 
 ## 方法
 

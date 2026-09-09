@@ -1,6 +1,6 @@
 # haskell-language-server の readiness の実測（M15）
 
-ADR 0019 決定 F の M15。コーパス（[readiness-vocabulary-corpus.md](readiness-vocabulary-corpus.ja.md)）は HLS を「複数トークンの並行」型（"Indexing" と "Processing" の 2 本の `$/progress`）に置き、「未完了トークン 0 で `ready` にして 7.2 が通るか」を疑問にしていた。実測とソースで、**トークンは readiness の語彙ではない**。通常モードでは lsp ライブラリの `optProgressStartDelay = 1 秒`（「1 秒たてば人は遅いと感じ始める」というコメント付き）で 1 秒未満のセッションは一切出ず、セッションは kick ごと・索引バッチごとに作り直されるので、200 モジュールを 8 秒かけて索引する間もトークンはほぼ出ない。その間 `references` は **部分的な結果を返し続け、増えていく**。`--test` で遅延を 0 にしても、索引のトークンはバッチごとに開閉し、閉じている隙間に結果は不完全で、最後のトークンが閉じた後も 12 秒索引が続く。readiness の正直な写像は `unknown`（仕様 8.2 の 3）。health は cradle の失敗が診断（`source: "cradle"`）で分かる。
+ADR 0019 決定 F の M15。コーパス（[readiness-vocabulary-corpus.ja.md](readiness-vocabulary-corpus.ja.md)）は HLS を「複数トークンの並行」型（"Indexing" と "Processing" の 2 本の `$/progress`）に置き、「未完了トークン 0 で `ready` にして 7.2 が通るか」を疑問にしていた。実測とソースで、**トークンは readiness の語彙ではない**。通常モードでは lsp ライブラリの `optProgressStartDelay = 1 秒`（「1 秒たてば人は遅いと感じ始める」というコメント付き）で 1 秒未満のセッションは一切出ず、セッションは kick ごと・索引バッチごとに作り直されるので、200 モジュールを 8 秒かけて索引する間もトークンはほぼ出ない。その間 `references` は **部分的な結果を返し続け、増えていく**。`--test` で遅延を 0 にしても、索引のトークンはバッチごとに開閉し、閉じている隙間に結果は不完全で、最後のトークンが閉じた後も 12 秒索引が続く。readiness の正直な写像は `unknown`（仕様 8.2 の 3）。health は cradle の失敗が診断（`source: "cradle"`）で分かる。
 
 ## 方法
 

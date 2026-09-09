@@ -1,6 +1,6 @@
 # Gleam 言語サーバーの readiness の実測（M19）
 
-ADR 0019 決定 F の M19。コーパス（[readiness-vocabulary-corpus.md](readiness-vocabulary-corpus.ja.md)）は Gleam を「信号の不在の曖昧さ」型に置き、「依存ダウンロードがないときの `ready` を信号なしで言えるか」を疑問にしていた。実測とソースで、**信号は不在にならない**。`$/progress` "Downloading Gleam dependencies"（token `"downloading-dependencies"`）は、ダウンロードするものがなくても `initialized` の直後に begin → end する（12 ms）。要求は end の後に順に処理され、コンパイルは要求の中で同期に走るので、最初の要求から完全。Serena の「10 秒待って来なければ済みとみなす」は、来ないことがないので要らない。一方、`gleam.toml` の変更（`didChangeWatchedFiles`）の後は、エンジンが作り直されて同じトークンがもう一度 begin → end した後も **`references` が空のまま**になる（1.18.1 の不具合と見られる。原因はソースで追い切れていない）。
+ADR 0019 決定 F の M19。コーパス（[readiness-vocabulary-corpus.ja.md](readiness-vocabulary-corpus.ja.md)）は Gleam を「信号の不在の曖昧さ」型に置き、「依存ダウンロードがないときの `ready` を信号なしで言えるか」を疑問にしていた。実測とソースで、**信号は不在にならない**。`$/progress` "Downloading Gleam dependencies"（token `"downloading-dependencies"`）は、ダウンロードするものがなくても `initialized` の直後に begin → end する（12 ms）。要求は end の後に順に処理され、コンパイルは要求の中で同期に走るので、最初の要求から完全。Serena の「10 秒待って来なければ済みとみなす」は、来ないことがないので要らない。一方、`gleam.toml` の変更（`didChangeWatchedFiles`）の後は、エンジンが作り直されて同じトークンがもう一度 begin → end した後も **`references` が空のまま**になる（1.18.1 の不具合と見られる。原因はソースで追い切れていない）。
 
 ## 方法
 

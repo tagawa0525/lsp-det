@@ -9,7 +9,7 @@ claude -p "Use the LSP tool exactly once: findReferences for the symbol at src/l
   --debug-file /tmp/cc-debug.log --output-format json --allowedTools LSP --model sonnet
 ```
 
-- 記録は `/tmp/claude-code-tee-rust-analyzer.log`（`.lsp.json` の第 2 引数）。`### 0.0054s` の行がクライアントの書き込みの時刻で、その後に原文の LSP メッセージが続く
+- 記録は `/tmp/claude-code-tee-rust-analyzer.log`（`.lsp.json` の第 2 引数）。`### 0.0054s` の行がクライアントの書き込みの時刻（ラッパーがサーバーを起動してからの経過）で、その後に原文の LSP メッセージが続く
 - 他のサーバーを測るときは `.lsp.json` の項目を足す（`command` は `python3`、`args` は `${CLAUDE_PLUGIN_ROOT}/tee.py <ログ> <サーバーのコマンド>`。`${CLAUDE_PLUGIN_ROOT}` は Claude Code が展開する）
 - lsp-det 経由を測るときは `args` を `["${CLAUDE_PLUGIN_ROOT}/tee.py", "<ログ>", "lsp-det", "--", "rust-analyzer"]` にすると、CC が lsp-det に書いたものが記録される。lsp-det が上流に書いたものを記録するなら `lsp-det -- python3 …/tee.py <ログ> rust-analyzer`
 - `--debug-file` のログには CC 側の時刻（`Sending request 'textDocument/references - (1)'`、`Received response … in 2ms`）と、`shutdown` の失敗のような CC 自身のエラーが出る

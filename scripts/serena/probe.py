@@ -39,12 +39,17 @@ from solidlsp.language_servers.typescript_language_server import (
 from solidlsp.ls import SolidLanguageServer
 from solidlsp.ls_config import LanguageServerConfig, LanguageServerId
 from solidlsp.ls_exceptions import SolidLSPException
+from solidlsp.lsp_protocol_handler.server import LSPError
 from solidlsp.settings import SolidLSPSettings
 
 UPSTREAM = {
     "python": ["pyright-langserver", "--stdio"],
     "typescript": ["typescript-language-server", "--stdio"],
 }
+
+# lsp-det が health error の間の要求を拒む応答 (src/gate.rs)。LSP の RequestFailed。
+LSP_DET_REJECTION_CODE = -32803
+LSP_DET_REJECTION_PREFIX = "lsp-det: the language server reports health: error"
 
 
 def children(pid: int) -> list[int]:
@@ -79,11 +84,22 @@ def kill_tsserver_descendants() -> list[int]:
     return victims
 
 
+def is_lsp_det_rejection(cause: Exception | None) -> bool:
+    """lsp-det が health error を理由に要求を拒んだ応答 (RequestFailed) か。"""
+    return (
+        isinstance(cause, LSPError)
+        and cause.code == LSP_DET_REJECTION_CODE
+        and str(cause).startswith(LSP_DET_REJECTION_PREFIX)
+    )
+
+
 def main() -> None:
     lang, repo, rel = sys.argv[1], sys.argv[2], sys.argv[3]
     line, col = int(sys.argv[4]), int(sys.argv[5])
     crash = os.environ.get("CRASH") == "1"
     via_lsp_det = os.environ.get("VIA_LSP_DET", "1") == "1"
+    if crash and lang != "typescript":
+        sys.exit("CRASH=1 kills tsserver, so it only makes sense with typescript")
     logging.basicConfig(
         level=logging.INFO,
         format="%(relativeCreated)6d %(name)s %(levelname)s %(message)s",
@@ -145,7 +161,7 @@ def run(
                 # 検知 (fork の修正) がログを見て先に投げることがあり、その場合 lsp-det
                 # の拒否は要求が届かないので出ない。
                 expected = isinstance(e, TypeScriptServerCrashedError) or (
-                    via_lsp_det and "caused by lsp-det" in str(e)
+                    via_lsp_det and is_lsp_det_rejection(e.cause)
                 )
             else:
                 log(

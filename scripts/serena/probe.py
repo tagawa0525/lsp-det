@@ -15,8 +15,9 @@ reference/serena の環境で動かす:
 環境変数:
     VIA_LSP_DET=0  lsp-det を挟まず上流を直接起動する (比較用)
     CRASH=1        references の後に tsserver を SIGKILL し、直後の references の
-                   見え方を出す (typescript のみ意味がある)。例外が出なければ
-                   コード 1 で終わる
+                   見え方を出す (typescript のみ意味がある)。期待する例外
+                   (TypeScriptServerCrashedError か、lsp-det 経由なら lsp-det の
+                   拒否) にならなければコード 1 で終わる
 
 lsp-det と上流 (pyright-langserver / typescript-language-server) は PATH で
 解決される。target/upstream/bin を先頭に置けばソースビルドの上流を使う。
@@ -32,6 +33,9 @@ import sys
 import tempfile
 import time
 
+from solidlsp.language_servers.typescript_language_server import (
+    TypeScriptServerCrashedError,
+)
 from solidlsp.ls import SolidLanguageServer
 from solidlsp.ls_config import LanguageServerConfig, LanguageServerId
 from solidlsp.ls_exceptions import SolidLSPException
@@ -91,7 +95,7 @@ def main() -> None:
     base_cmd = ["lsp-det", "--", *upstream] if via_lsp_det else upstream
     # 一時ディレクトリは例外で抜けても消す。
     with tempfile.TemporaryDirectory(prefix="serena-probe-") as tmp:
-        run(ls_id, base_cmd, tmp, repo, rel, line, col, crash)
+        run(ls_id, base_cmd, tmp, repo, rel, line, col, crash, via_lsp_det)
 
 
 def run(
@@ -103,6 +107,7 @@ def run(
     line: int,
     col: int,
     crash: bool,
+    via_lsp_det: bool,
 ) -> None:
     settings = SolidLSPSettings(
         solidlsp_dir=tmp,
@@ -118,7 +123,7 @@ def run(
         print(f"[{time.time() - t0:7.3f}] PROBE {message}", flush=True)
 
     log(f"base_cmd={base_cmd}")
-    surfaced = True
+    expected = True
     with ls.start_server_context():
         log("server started (Serena's readiness wait finished)")
         refs = ls.request_references(rel, line, col)
@@ -135,13 +140,20 @@ def run(
                 refs2 = ls.request_references(rel, line, col)
             except SolidLSPException as e:
                 log(f"references after crash raised {type(e).__name__}: {str(e)[:900]}")
+                # 期待する例外だけを成功にする。他の例外 (打ち切り、終了) は別の経路
+                # なので、受け入れ条件の偽陽性にしない。lsp-det 経由でも Serena 自身の
+                # 検知 (fork の修正) がログを見て先に投げることがあり、その場合 lsp-det
+                # の拒否は要求が届かないので出ない。
+                expected = isinstance(e, TypeScriptServerCrashedError) or (
+                    via_lsp_det and "caused by lsp-det" in str(e)
+                )
             else:
                 log(
                     f"references after crash -> {len(refs2)} locations (NO ERROR SURFACED)"
                 )
-                surfaced = False
+                expected = False
     log("done")
-    if not surfaced:
+    if not expected:
         sys.exit(1)
 
 

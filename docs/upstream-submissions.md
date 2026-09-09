@@ -36,7 +36,7 @@ lsp-det の最終目標は、サーバー状態プロトコルを言語サーバ
 
 1. 仕様を安定版にする（上の規則。「通知にする理由」の記述、nil の (a) / (b)、`Status`、tag）
 2. tsls のパッチを typescript-language-server/typescript-language-server#305 の取りこぼし修正に作り直し、6.0.0 で再測定する。通ると tsls は SIGKILL でも落ちるので、lsp-det は上流消失として扱う（仕様 8 章）。anthropics/claude-code#82416 の Symptom 1（tsserver は生きているが応答しない）は対象外と明記する。**済（2026-09-09）**: 修正は `onExit` の `if (exitCode)` を外す形（tsserver 自身の shutdown は #585 以来 `onExit` に届かないので、条件の理由が消えていた）。fork の `tsserver-exit-by-signal`、fork の CI 3 OS で確認。再測定と経緯は [research/typescript-language-server-readiness-measurement.md](research/typescript-language-server-readiness-measurement.md)
-3. gopls の提出を health（"Error loading workspace" をクライアントに見える信号にする）と go.mod 変更後の再ロード窓に縮める。`awaitLoaded` と `gopls mcp` を先に認める
+3. gopls の提出を health（"Error loading workspace" をクライアントに見える信号にする）と go.mod 変更後の再ロード窓に縮める。`awaitLoaded` と `gopls mcp` を先に認める。**済（2026-09-09）**: 実測（[research/gopls-health-measurement.md](research/gopls-health-measurement.md)）で、失敗中の要求は明示的なエラー、信号は `window.workDoneProgress` のないクライアントに type 4（Log）の showMessage に落ちる、健康なセッションの go.mod 変更に窓はないが回復後は約 1 秒の窓がある、と分かった。提出は golang/go#78273 への severity のコメントと、窓の新規 issue の 2 件に決めた
 4. rust-analyzer に `serverStatus` への field 追加案を用意する（別通知の案と並べる）
 5. LSP 本体向けに `vscode-languageserver-node` の `protocol.serverState.proposed.ts` を用意する
 6. Serena を上流 HEAD（oraios/serena#1978、oraios/serena#1988 の帰趨を含む）で再測定する
@@ -54,7 +54,7 @@ lsp-det の最終目標は、サーバー状態プロトコルを言語サーバ
 
 1. Serena: 再測定の結果が残る不具合の issue と、registry に lsp-det を載せる提案
 2. rust-analyzer: issue で両案（`serverStatus` への field 追加、別通知の `experimental/serverState`）を並べる。PR は相手が選んだ方を出す
-3. gopls: golang/go に health の issue。fixture と実測ログ付き
+3. gopls: golang/go#78273 に fallback の severity のコメント、回復後の go.mod 変更の窓は新規 issue。fixture と実測ログ付き
 
 第 3 段（第 2 段のどれかに反応があってから）:
 
@@ -66,7 +66,7 @@ lsp-det の最終目標は、サーバー状態プロトコルを言語サーバ
 - Claude Code 以外のエージェント（Cursor、Codex CLI、Cline、OpenCode、Zed）が LSP をどう叩くか。同じ穴があれば報告先と提案の聴衆が広がる。Zed は `experimental/serverStatus` を既に読む
 - Claude Code のユーザーが使う vtsls と ty（anthropics/claude-code#76870 の報告者の環境）。lsp-det に写像がない
 - Claude Code の修正の方向（信号を待つか timer か）と時期
-- `gopls mcp` が readiness をどう扱うか
+- ~~`gopls mcp` が readiness をどう扱うか~~ → `find_references` は `golang.References` を直接呼び、LSP と同じスナップショットの API（`awaitLoaded`）を通る（[research/gopls-health-measurement.md](research/gopls-health-measurement.md)）
 
 ## 却下した案
 
@@ -103,7 +103,7 @@ lsp-det の最終目標は、サーバー状態プロトコルを言語サーバ
 | nixd                       | (a) 評価の失敗を end の `message` か `window/showMessage` で成功と区別できるようにする提案。現状は失敗しても end の message が成功時と同じ「evaluated …」で、失敗は stderr のログにしか出ない。(b) 評価 worker の死で nixd 自身が SIGPIPE で落ちないようにする提案。SIGPIPE を無視して次の RPC をエラー応答にする。(c) `workspace/didChangeWatchedFiles` を登録なしで受けても stderr に出さず黙って無視する提案（既にエラーではないので優先は低い）                                                                                                                                                                                                                                                                                                                          | [research/nixd-readiness-measurement.md](research/nixd-readiness-measurement.md)                                                                                                                                                                                                                                                   | 第 3 段                                                                                                  | 未着手                                                                                                                                                                |
 | nil                        | (a) flake.lock の読み込み（`load_flake_info`）にも `$/progress` を出す提案。現状は入力への `definition` が空で通る窓（約 100 ms）に信号がない。(b) flake がない workspace でその旨を `window/logMessage` か `$/progress` で示す提案。現状は信号の不在が「読み込み中」と区別できない。(c) 中断した評価の end を出す前に次の begin を出す提案。現状は end → 115 ms 後に begin で、その間だけ `ready` に見える                                                                                                                                                                                                                                                                                                                                                                  | [research/nil-readiness-measurement.md](research/nil-readiness-measurement.md)                                                                                                                                                                                                                                                     | 第 3 段                                                                                                  | 未着手                                                                                                                                                                |
 | rust-analyzer              | issue で `experimental/serverStatus` への field 追加（`readiness`）と別通知の `experimental/serverState`（fork `tagawa0525/rust-analyzer` の `server-state`）の両案を並べ、相手が選んだ方を PR にする。`quiescent` の飛び越えの実測を根拠にする                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | 仕様 10 章、[research/rust-analyzer-quiescent-measurement.md](research/rust-analyzer-quiescent-measurement.md)                                                                                                                                                                                                                     | 第 2 段。準備 4。rust-lang/rust-analyzer#10888 は「`serverStatus` で既にある」で閉じている               | fork に別通知の案を用意済み。受け入れ条件は通過。field 追加案は未着手                                                                                                 |
-| gopls                      | golang/go に health の issue: "Error loading workspace" をクライアントに見える信号にする提案と、go.mod 変更後の再ロード窓。`references` が初期ロードを待つこと（`awaitLoaded`）と `gopls mcp` を先に認める。CL（fork `tagawa0525/tools` の `server-state`）は合意の後。golang/tools は Gerrit で Google CLA が要る                                                                                                                                                                                                                                                                                                                                                                                                                                                           | [research/gopls-readiness-measurement.md](research/gopls-readiness-measurement.md)                                                                                                                                                                                                                                                 | 第 2 段。準備 3。fixture と実測ログを最初から添える                                                      | fork に用意済み。受け入れ条件は通過。issue は未着手                                                                                                                   |
+| gopls                      | (a) golang/go#78273 へのコメント: critical error status（"Error loading workspace"）は `window.workDoneProgress` を宣言しないクライアントには `window/showMessage` type 4（Log）の本文だけに落ち、正常の "Finished loading packages."（type 3）と severity で区別できない。fallback の severity を title に応じて選ぶ（`WorkspaceLoadFailure` は Error）提案。(b) 新規 issue: 一度読み込み失敗から回復したセッションでは、以後の go.mod 変更のたびに要求が約 1 秒 "no package metadata" で失敗する（`unloadableFiles` が go.mod の修復で消えない）。`references` が初回ロードを待つこと（`awaitLoaded`、golang/go#76137）と `gopls mcp` を先に認める。CL（fork `tagawa0525/tools` の `server-state`）は出さない。golang/tools は Gerrit で Google CLA が要る                 | [research/gopls-health-measurement.md](research/gopls-health-measurement.md)、[research/gopls-readiness-measurement.md](research/gopls-readiness-measurement.md)                                                                                                                                                                   | 第 2 段。準備 3 は済                                                                                     | 草案あり（下）。文面はユーザーの確認待ち                                                                                                                              |
 | LSP 本体                   | `workspace/serverState` の proposal。[microsoft/language-server-protocol#511](https://github.com/microsoft/language-server-protocol/issues/511) のスレッドに「エージェント用途からの再提案」として接続する                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | [research/readiness-vocabulary-corpus.md](research/readiness-vocabulary-corpus.md)、仕様 10 章                                                                                                                                                                                                                                     | 第 3 段。準備 5（`vscode-languageserver-node` の `.proposed.ts`）。第 2 段のどれかに反応があってから     | 未着手                                                                                                                                                                |
 
 ## 草案
@@ -130,4 +130,56 @@ The `exitCode` check dates from 507db40 (2022), a logging-only refactor made rig
 ## Tests
 
 Two cases in `ts-client.test.ts` pin down the two facts the change rests on: a tsserver killed by a signal reaches `onExit` with a null exit code, and `shutdown()` does not reach `onExit`. `pnpm test`, `lint` and `typecheck` pass (CI on my fork: Linux, macOS, Windows × Node 22 / 24). End to end, with this change the server exits with code 1 right after the `kill -9` above.
+```
+
+### gopls (a): golang/go#78273 へのコメント
+
+先: [golang/go#78273](https://github.com/golang/go/issues/78273)（"x/tools/gopls: gopls sends verbose error messages via $/progress instead of window/showMessage"。open。adonovan が "an abridged version displayed in the client UI" に同意）。
+
+本文:
+
+```markdown
+A related observation from the client side (gopls v0.23.0; the code is the same at master). The critical "Error loading workspace" status is the only signal that the workspace failed to load, and how it reaches the client depends on `window.workDoneProgress`:
+
+- With it: a `$/progress` begin with title "Error loading workspace", held open until the problem is fixed ("Done.").
+- Without it: `progress.Tracker.Start` falls back to `window/showMessage` with `type: 4` (Log), carrying only the message (the title is dropped), and the resolution arrives as `type: 3` (Info) "Done.". "Loading packages..." arrives as Log and "Finished loading packages." as Info through the same fallback.
+
+So for a client that does not implement progress (Claude Code, for example, declares no `window` capability at all) a workspace load failure looks like any other log line, and carries a lower severity than the "Finished loading packages." that precedes it. The requests themselves are honest meanwhile: `textDocument/references` and `textDocument/definition` answer `no package metadata for file …` as errors while the workspace is broken (`workspace/symbol` answers `null`), so what is missing is only the severity and identity of the status.
+
+Suggestion, in the spirit of the abridged message above: when `Tracker.Start` falls back to `showMessage`, let the severity carry what the title carried (`Error` for `WorkspaceLoadFailure`, `Info` for the others) and keep the full text in the server log. Reproduction (a two-file module whose go.mod has an unterminated `require (` block, a stdio client with no `window` capability) and the message logs: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/gopls-health-measurement.md.
+```
+
+### gopls (b): golang/go に新規 issue
+
+タイトル: `x/tools/gopls: after a workspace load error is fixed, every later go.mod change makes requests fail with "no package metadata" for about a second`
+
+本文（golang/go の issue template の見出しに沿う）:
+
+```markdown
+### gopls version
+
+golang.org/x/tools/gopls v0.23.0 (go1.26.7 linux/amd64). The code involved (`MetadataForFile` and `clone` in `internal/cache/snapshot.go`) is the same at master.
+
+### What did you do?
+
+1. A two-file module: `go.mod` (`module fixture` / `go 1.21`), `a.go` with `func Target() {}`, `b.go` with `func Caller() { Target() }`. Open `a.go` over stdio and wait for "Finished loading packages.".
+2. Break `go.mod` on disk (append an unterminated `require (` block) and send `workspace/didChangeWatchedFiles` (Changed). "Error loading workspace" appears, and requests on `a.go` fail with `no package metadata for file …/a.go` (expected).
+3. Fix `go.mod` on disk and send `didChangeWatchedFiles`. "Done." arrives; a second later `textDocument/references` on `Target` works again.
+4. Append a comment to `go.mod`, send `didChangeWatchedFiles`, and immediately send `textDocument/references` (or `definition`) on `a.go`, repeating every 50ms.
+
+### What did you see happen?
+
+For about 1.0s after each `go.mod` change, every request on `a.go` fails with `no package metadata for file file:///…/a.go`; then they succeed again. This repeats on every later `go.mod` change for the rest of the session (three changes in a row, two runs).
+
+### What did you expect to see?
+
+The same as in a session that never had a load error. There, step 4 answers correctly at once (16ms after the change in my runs), because `MetadataForFile` loads the file's package inline (`s.load(ctx, NoNetwork, fileLoadScope(uri))`) when its metadata was invalidated.
+
+### Why, reading the source
+
+While the workspace was broken, `MetadataForFile` found no package for `a.go` and added it to `snapshot.unloadableFiles`. A URI leaves that set only through a metadata-affecting change to that `.go` file itself (`clone`: "typing in a file doesn't necessarily make it loadable"); fixing `go.mod` does not remove it. After the recovery the file is loadable again, but it stays marked unloadable, so on every later `go.mod` change (`reinit` in `clone` invalidates the metadata) `MetadataForFile` skips the inline load (`(shouldLoad || len(pkgs) == 0) && !unloadable`) and returns the error until the background reload has run.
+
+A possible fix: clear `unloadableFiles` on the `reinit` path of `clone` (go.mod / go.work / go.sum changed on disk), since a workspace-level change is exactly the kind of change that can make a file loadable again.
+
+Logs of both kinds of session and the probe script: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/gopls-health-measurement.md and https://github.com/tagawa0525/lsp-det/blob/main/scripts/gopls/health-probe.py.
 ```

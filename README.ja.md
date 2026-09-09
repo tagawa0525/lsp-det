@@ -94,7 +94,7 @@ interface ServerState {
 
 いずれか 1 つ。
 
-- **Release のバイナリ**: `v*` の tag ごとに [GitHub Releases](https://github.com/tagawa0525/lsp-det/releases) にプラットフォームごとの静的バイナリが付く（`lsp-det-x86_64-unknown-linux-gnu`、`lsp-det-aarch64-unknown-linux-gnu`、`lsp-det-x86_64-apple-darwin`、`lsp-det-aarch64-apple-darwin`、`lsp-det-x86_64-pc-windows-msvc.exe`）。自分のプラットフォームのものを落とし、`lsp-det`（Windows は `lsp-det.exe`）に改名して実行権限を付け、`PATH` に置く
+- **Release のバイナリ**: `v*` の tag ごとに [GitHub Releases](https://github.com/tagawa0525/lsp-det/releases) にプラットフォームごとに 1 つのバイナリが付く: `lsp-det-x86_64-unknown-linux-musl` と `lsp-det-aarch64-unknown-linux-musl`（静的リンクなのでどのディストリビューションでも動く）、`lsp-det-x86_64-apple-darwin` と `lsp-det-aarch64-apple-darwin`、`lsp-det-x86_64-pc-windows-msvc.exe`（OS だけに依存する）。自分のプラットフォームのものを落とし、`lsp-det`（Windows は `lsp-det.exe`）に改名して実行権限を付け、`PATH` に置く。バイナリは署名していない: macOS ではブラウザで落としたものが隔離され、`xattr -d com.apple.quarantine lsp-det` するまで Gatekeeper が実行を拒む（`curl` で落としたものは隔離されない）。引数なしで `lsp-det` を実行すると使い方を出して 2 で終わるので、バイナリが動くことの確認はそれで足りる
 - **Cargo**: `cargo install --git https://github.com/tagawa0525/lsp-det`（stable の Rust、edition 2024。依存は `serde`、`serde_json`、`thiserror`、`libc` だけで、Rust 以外のツールチェーンは要らない）
 - **Nix**: `nix profile install github:tagawa0525/lsp-det`。または `github:tagawa0525/lsp-det` を flake input にして `packages.${system}.default` を取る（作者の home-manager の構成はこの形。[dogfood/README.md](dogfood/README.md)）
 

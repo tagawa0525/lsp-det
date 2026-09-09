@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# macOS と Windows のターゲットで cargo check を通す（ADR 0012 決定 D）。
+# macOS と Windows のターゲットと、Release が使う Linux の musl ターゲットで
+# cargo check を通す（ADR 0012 決定 D、追補 2026-09-09）。
 # Linux の開発環境から、他 OS でコンパイルが通るかを push の前に確かめる。
 # 挙動の検証は CI の各 OS のランナーが行う（.github/workflows/ci.yml）。
 #
@@ -9,7 +10,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target/cross}"
 
-for target in aarch64-apple-darwin x86_64-pc-windows-msvc; do
+for target in aarch64-apple-darwin x86_64-pc-windows-msvc x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
   if ! rustup target list --installed --toolchain stable | grep -qx "$target"; then
     rustup target add "$target" --toolchain stable
   fi

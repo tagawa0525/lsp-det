@@ -82,3 +82,13 @@ Windows API は `kernel32` / `ntdll` の必要な関数だけを `extern "system
 ### README と CLAUDE.md
 
 対応 OS とリリースバイナリの記述を更新する。
+
+## 追補（2026-09-09）: Linux のリリースバイナリは musl の静的リンク
+
+提出前の準備 7（`docs/upstream-submissions.md`）で v0.7.0 の Release を点検し、Linux のバイナリ（`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`）がランナーの glibc に動的リンクされ、`GLIBC_2.39`（Ubuntu 24.04）を下限にしていることが分かった。Ubuntu 22.04（2.35）や Debian 12（2.36）、RHEL 9（2.34）では起動できず、README の「静的バイナリ」も事実に反していた。決定 E の目的（`cargo build` なしに試せる入口）に対して、Linux はこれでは足りない。
+
+決定: Linux の 2 つは `x86_64-unknown-linux-musl` と `aarch64-unknown-linux-musl` で作る。Rust の musl ターゲットは crt と libc を自前で持つ（self-contained）ので、ランナーに musl の道具は要らず、依存が `libc` クレートだけの本プロジェクトはそのまま静的にリンクできる。ワークフローに「Linux のバイナリが `static` であること」の確認を足し、README の記述が再び事実から離れないようにする。`scripts/check-targets.sh` にも 2 つの musl ターゲットを足す。
+
+確かめたこと（NixOS x86_64、rustup stable 1.97.1）: `x86_64-unknown-linux-musl` の release ビルドは `static-pie linked`（1.7 MB）で、`cargo test --target x86_64-unknown-linux-musl` は単体 313 件と結合（偽上流）147 件を含む全件が通る。`aarch64-unknown-linux-musl` は `cargo check --tests --examples` が通り、`rust-lld` で `statically linked` の実行ファイルにリンクできる。macOS と Windows のバイナリは OS のライブラリだけに依存するので変えない。musl の Linux バイナリは次の `v*` のタグから付く。
+
+却下: Release の gnu バイナリを古い glibc のランナーで作る案（ランナーの選択に縛られ、下限が見えない）。バイナリを配らず `cargo install --git` だけにする案（決定 E の目的に反する。`cargo install --git https://github.com/tagawa0525/lsp-det` 自体は v0.7.0 で通ることを確かめた）。

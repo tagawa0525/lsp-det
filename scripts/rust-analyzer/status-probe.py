@@ -110,6 +110,17 @@ def main():
                 print(f"{server.elapsed()} serverStatus {json.dumps(params)}")
                 if settled(params, empty):
                     break
+            elif method == "workspace/configuration":
+                # One entry per requested item (the client declares no `workspace.configuration`,
+                # so this is not expected, but a wrong shape would derail the server).
+                items = message["params"]["items"]
+                server.send(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": message["id"],
+                        "result": [None] * len(items),
+                    }
+                )
             elif "id" in message and method is not None:
                 server.send({"jsonrpc": "2.0", "id": message["id"], "result": None})
         server.send({"jsonrpc": "2.0", "id": 2, "method": "shutdown", "params": None})

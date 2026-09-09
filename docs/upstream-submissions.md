@@ -146,7 +146,7 @@ A related observation from the client side (gopls v0.23.0; the code is the same 
 
 So for a client that does not implement progress (Claude Code, for example, declares no `window` capability at all) a workspace load failure looks like any other log line, and carries a lower severity than the "Finished loading packages." that precedes it. The requests themselves are honest meanwhile: `textDocument/references` and `textDocument/definition` answer `no package metadata for file …` as errors while the workspace is broken (`workspace/symbol` answers `null`), so what is missing is only the severity and identity of the status.
 
-Suggestion, in the spirit of the abridged message above: when `Tracker.Start` falls back to `showMessage`, let the severity carry what the title carried (`Error` for `WorkspaceLoadFailure`, `Info` for the others) and keep the full text in the server log. Reproduction (a two-file module whose go.mod has an unterminated `require (` block, a stdio client with no `window` capability) and the message logs: <lsp-det の docs/research/gopls-health-measurement.md への permalink>.
+Suggestion, in the spirit of the abridged message above: when `Tracker.Start` falls back to `showMessage`, let the severity carry what the title carried (`Error` for `WorkspaceLoadFailure`, `Info` for the others) and keep the full text in the server log. Reproduction (a two-file module whose go.mod has an unterminated `require (` block, a stdio client with no `window` capability) and the message logs: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/gopls-health-measurement.md.
 ```
 
 ### gopls (b): golang/go に新規 issue
@@ -181,5 +181,5 @@ While the workspace was broken, `MetadataForFile` found no package for `a.go` an
 
 A possible fix: clear `unloadableFiles` on the `reinit` path of `clone` (go.mod / go.work / go.sum changed on disk), since a workspace-level change is exactly the kind of change that can make a file loadable again.
 
-Logs of both kinds of session and the probe script: <lsp-det の docs/research/gopls-health-measurement.md と scripts/gopls/health-probe.py への permalink>.
+Logs of both kinds of session and the probe script: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/gopls-health-measurement.md and https://github.com/tagawa0525/lsp-det/blob/main/scripts/gopls/health-probe.py.
 ```

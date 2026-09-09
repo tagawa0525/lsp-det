@@ -203,8 +203,7 @@ def poll(label, content, method="textDocument/references", params=None):
             if m.get("id") == i and "method" not in m:
                 got = m
                 break
-            if "method" in m and "id" in m:
-                log(m)
+            log(m)
         if got is None:
             kind = "timeout"
         elif "error" in got:

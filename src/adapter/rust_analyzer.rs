@@ -14,6 +14,12 @@
 //! Failure arrives via `health`. A workspace load failure is
 //! `{health: error, quiescent: true}` (`current_status()`). Per spec chapter
 //! 6 item 5, it is mapped onto `health`, not `readiness`.
+//!
+//! `quiescent` is trivially `true` before the first load (nothing is in flight
+//! yet), so it alone cannot say `initializing`. The proposed field addition
+//! (docs/upstream-submissions.md, preparation 4) has rust-analyzer report
+//! `readiness` itself next to `quiescent`; when the field is present it is
+//! the server's own word and is read instead of `quiescent`.
 
 use serde::Deserialize;
 
@@ -33,8 +39,32 @@ pub const SERVER_STATUS_METHOD: &str = "experimental/serverStatus";
 struct ServerStatusParams {
     health: UpstreamHealth,
     quiescent: bool,
+    /// The proposed field. Absent from every released rust-analyzer so far.
+    #[serde(default)]
+    readiness: Option<UpstreamReadiness>,
     #[serde(default)]
     message: Option<String>,
+}
+
+/// The values of the proposed `readiness` field. Received as a dedicated enum for the same
+/// reason as [`UpstreamHealth`]: a value outside the protocol fails to parse and the status is
+/// not read.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum UpstreamReadiness {
+    Initializing,
+    Indexing,
+    Ready,
+}
+
+impl From<UpstreamReadiness> for Readiness {
+    fn from(value: UpstreamReadiness) -> Self {
+        match value {
+            UpstreamReadiness::Initializing => Readiness::Initializing,
+            UpstreamReadiness::Indexing => Readiness::Indexing,
+            UpstreamReadiness::Ready => Readiness::Ready,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -232,14 +262,17 @@ impl Mapping for RustAnalyzerAdapter {
             health = Health::Error;
         }
 
+        // The server's own readiness when it reports one; derived from `quiescent` otherwise.
+        let readiness = match params.readiness {
+            Some(readiness) => readiness.into(),
+            None if params.quiescent => Readiness::Ready,
+            None => Readiness::Indexing,
+        };
+
         self.last_health = health;
         Some(ServerState {
             health,
-            readiness: if params.quiescent {
-                Readiness::Ready
-            } else {
-                Readiness::Indexing
-            },
+            readiness,
             message: params.message,
         })
     }

@@ -54,7 +54,7 @@ lsp-det の最終目標は、サーバー状態プロトコルを言語サーバ
 
 1. Serena: 再測定の結果が残る不具合の issue と、registry に lsp-det を載せる提案
 2. rust-analyzer: issue で両案（`serverStatus` への field 追加、別通知の `experimental/serverState`）を並べる。PR は相手が選んだ方を出す
-3. gopls: golang/go#78273 に fallback の severity のコメント、回復後の go.mod 変更の窓は新規 issue。fixture と実測ログ付き（2026-09-09 に提出済み: golang/go#78273 のコメントと golang/go#81400）
+3. gopls: golang/go#78273 に fallback の severity のコメント、回復後の go.mod 変更の窓は新規 issue。fixture と実測ログ付き（2026-09-09 に提出済み: golang/go#78273 のコメントと golang/go#81400。付いた反応と返信は「gopls: 提出後の反応」）
 
 第 3 段（第 2 段のどれかに反応があってから）:
 
@@ -240,4 +240,26 @@ While the workspace was broken, `MetadataForFile` found no package for `a.go` an
 A possible fix: clear `unloadableFiles` on the `reinit` path of `clone` (go.mod / go.work / go.sum changed on disk), since a workspace-level change is exactly the kind of change that can make a file loadable again.
 
 Logs of both kinds of session and the probe script: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/gopls-health-measurement.md and https://github.com/tagawa0525/lsp-det/blob/main/scripts/gopls/health-probe.py.
+```
+
+### gopls: 提出後の反応（2026-09-09）
+
+両方とも、付いたのは Go チームの自動ボット gabyhelp の "Related Issues" だけで、メンテナの返答はまだない。golang/go#81400 には gopherbot が `gopls` / `Tools` のラベルと milestone Unreleased を付けた。ボットが挙げた issue のうち開いているものは全部読み、こちらの主張に関わるのは次の 3 点。
+
+- golang/go#81400 の重複はない。golang/go#36589（go.mod 変更時の metadata 無効化を差分で判定する提案）は 2026-08 に obsolete とされ、golang/go#79585 は branch 切り替え後に `shouldLoad` が残って go.mod を書き換える別の不具合、golang/go#68002 は読み込みの範囲を絞る親 issue で、回復後に `unloadableFiles` に残る件には触れていない
+- [golang/go#50885](https://github.com/golang/go/issues/50885) で findleyr が 2022 年に、critical error status を `$/progress` を開いたまま保持する手法は "tricky, and may be problematic" で各クライアントへの影響を調べるべきと書いている。golang/go#78273 に出した「`window.workDoneProgress` を宣言しないクライアントには Log に落ちる」はその影響の一例
+- [golang/go#76137](https://github.com/golang/go/issues/76137)（closed）で adonovan が、"Finished loading packages." は metadata の取得完了であって型検査の完了ではない、準備完了を知るにはサーバーを黒箱として扱いその状態でしか答えられない要求を投げて待て、と答えている。gopls の提出を readiness ではなく health に縮めた判断（[research/gopls-health-measurement.md](research/gopls-health-measurement.md)）と整合する
+
+ユーザーの指示で、ボットへの返信として上を要約したコメントを 2 件に出した（[golang/go#81400 のコメント](https://github.com/golang/go/issues/81400#issuecomment-5599635641)、[golang/go#78273 のコメント](https://github.com/golang/go/issues/78273#issuecomment-5599635886)）。
+
+golang/go#81400 への本文:
+
+```markdown
+For the record, none of the related issues above covers this one: #36589 was marked obsolete last month; #79585 is about `shouldLoad` entries surviving a branch switch (a different map, and its symptom is gopls writing to go.mod, not requests failing); #68002 is about how loads are scoped, not about a file staying in `unloadableFiles` after the workspace has recovered. The closest prior discussion is #76137, where the answer was that requests such as `references` block on the initial load — which is exactly what makes this session-long window surprising: a session that never had a load error answers at once after a go.mod change, and only a session that once recovered from one keeps failing.
+```
+
+golang/go#78273 への本文:
+
+```markdown
+Two of the related issues above bear on the fallback observation. In #50885 findleyr noted in 2022 that holding a critical status open as a hanging progress notification "is tricky, and may be problematic" and that its ramifications on various clients should be looked into; the Log-severity fallback for clients without `window.workDoneProgress` is one such ramification, and it affects exactly the clients that cannot see the hanging notification. In #76137 adonovan pointed out that "Finished loading packages." only means package metadata was obtained, not that type-checking is complete. That is why the suggestion above is limited to the severity of the failure status: it does not ask gopls for a readiness signal, only that a failure not arrive with a lower severity than the success message before it.
 ```

@@ -54,7 +54,7 @@ lsp-det の最終目標は、サーバー状態プロトコルを言語サーバ
 
 1. Serena: 再測定の結果が残る不具合の issue と、registry に lsp-det を載せる提案。**提出済み（2026-09-10）**: PR oraios/serena#2007、issue oraios/serena#2003〜#2006、oraios/serena#1988 へのコメント
 2. rust-analyzer: issue で両案（`serverStatus` への field 追加、別通知の `experimental/serverState`）を並べる。PR は相手が選んだ方を出す。**提出済み（2026-09-10）**: rust-lang/rust-analyzer#23331
-3. gopls: golang/go#78273 に fallback の severity のコメント、回復後の go.mod 変更の窓は新規 issue。fixture と実測ログ付き（2026-09-09 に提出済み: golang/go#78273 のコメントと golang/go#81400。付いた反応と返信は「gopls: 提出後の反応」）
+3. gopls: golang/go#78273 に fallback の severity のコメント、回復後の go.mod 変更の窓は新規 issue。fixture と実測ログ付き（2026-09-09 に提出済み: golang/go#78273 のコメントと golang/go#81400。付いた反応と返信は「gopls: 提出後の反応」。修正 CL の検証とデバウンス CL へのコメントは「gopls: 上流の修正 CL の検証」以下。2026-09-12 に提出済み）
 
 第 3 段（第 2 段のどれかに反応があってから）:
 
@@ -556,11 +556,11 @@ golang/go#78273 への本文:
 Two of the related issues above bear on the fallback observation. In #50885 findleyr noted in 2022 that holding a critical status open as a hanging progress notification "is tricky, and may be problematic" and that its ramifications on various clients should be looked into; the Log-severity fallback for clients without `window.workDoneProgress` is one such ramification, and it affects exactly the clients that cannot see the hanging notification. In #76137 adonovan pointed out that "Finished loading packages." only means package metadata was obtained, not that type-checking is complete. That is why the suggestion above is limited to the severity of the failure status: it does not ask gopls for a readiness signal, only that a failure not arrive with a lower severity than the success message before it.
 ```
 
-### gopls: 上流の修正 CL の検証（2026-09-12、未提出）
+### gopls: 上流の修正 CL の検証（2026-09-12、提出済み）
 
 golang/go#81400 に Go チームの Hana Kim が [CL 830924](https://go.dev/cl/830924)（`clone` の `reinit` で `unloadableFiles` を空にする）を出し、レビューで Peter Weinberger が [CL 830844](https://go.dev/cl/830844)（`didChangeWatchedFiles` の 50 ms デバウンス）が入ると回帰テストが空振りすると指摘した。4 つのビルドで検証した結果と機構は [research/gopls-health-measurement.md](research/gopls-health-measurement.md) の「提出後: 上流の修正 CL の検証」。
 
-下は golang/go#81400 へのコメントの草案。**まだ出さない**（golang/go#81408 への草案と同時に、ユーザーの承認のうえで出す。probe の変更が main に入ってから）。レビュー（2026-09-12）で、報告書の「診断が届くまで要求を繰り返す形」を英文が "no deterministic form" と否定していた食い違いを直し、probe の path を直接書いた。
+下は golang/go#81400 へのコメント。2026-09-12 にユーザーの承認を得て[提出](https://github.com/golang/go/issues/81400#issuecomment-5644035663)。レビュー（2026-09-12）で、報告書の「診断が届くまで要求を繰り返す形」を英文が "no deterministic form" と否定していた食い違いを直し、probe の path を直接書いた。
 
 ```markdown
 I built gopls at CL 830924 patch set 2 (a373bba32) and at its parent on master (249605012), and both again with CL 830844 patch set 2 (the `didChangeWatchedFiles` debounce) cherry-picked on top, and ran `scripts/gopls/health-probe.py` from the repository linked above against each (go1.27.0 linux/amd64; two runs each; three go.mod changes after the recovery, each followed by `textDocument/references` or `definition` on `a.go` repeated every 50ms).
@@ -574,11 +574,11 @@ Two forms that do not depend on this. The state the fix changes is `unloadableFi
 Also unchanged at CL 830924: requests while go.mod is broken on disk still fail with the explicit error, and a session that never had a load error still answers at once after a go.mod change.
 ```
 
-### gopls: デバウンス CL 830844 が通知の直後の要求に変更前の答えを返す（2026-09-12、未提出）
+### gopls: デバウンス CL 830844 が通知の直後の要求に変更前の答えを返す（2026-09-12、提出済み）
 
 golang/go#81408（重複する `go list`）に対する Peter Weinberger の [CL 830844](https://go.dev/cl/830844)（`didChangeWatchedFiles` の 50 ms デバウンス）は、通知の後の要求を変更前の snapshot から答える。測定は [research/gopls-health-measurement.md](research/gopls-health-measurement.md) の「デバウンス CL 830844 は通知の直後の要求に古い答えを返す」。lsp-det の準拠テスト 7.3.2 はこの CL で落ちる。
 
-下は golang/go#81408 へのコメントの草案。**まだ出さない**（上の golang/go#81400 の草案と同時に、ユーザーの承認のうえで出す）。他のサーバーの例はソースと実測で確かめた範囲に限り（pyright は `tests/conformance.rs` の 7.3.2、rust-analyzer は `dispatch.rs` の `ContentModified` と main loop の `Retry`）、CL の答えを「正しくない」とは言わず、クライアントが「送った通知が適用されたか」を知れることを求める形にした。プロキシ（lsp-det）の説明はこのスレッドの文脈の外なので置かない。レビュー（2026-09-12）で nil の例を外した。nil は flake.lock の変更で end を即座に出し 100 ms 後に begin を出すが、その間は古い情報のまま `ready` に見える（[research/nil-readiness-measurement.md](research/nil-readiness-measurement.md)。nil への提案 (3)）ので、この CL と同じ穴であり手本にならない。代わりに、CL 自身が `gopls mcp` の `fileOf` では `session.DidModifyFiles` を直接呼んで debounce を迂回している事実（コミットメッセージ "so snapshot queries are not delayed by the debounce timer"）を足した。
+下は golang/go#81408 へのコメント。2026-09-12 にユーザーの承認を得て[提出](https://github.com/golang/go/issues/81408#issuecomment-5644035909)。他のサーバーの例はソースと実測で確かめた範囲に限り（pyright は `tests/conformance.rs` の 7.3.2、rust-analyzer は `dispatch.rs` の `ContentModified` と main loop の `Retry`）、CL の答えを「正しくない」とは言わず、クライアントが「送った通知が適用されたか」を知れることを求める形にした。プロキシ（lsp-det）の説明はこのスレッドの文脈の外なので置かない。レビュー（2026-09-12）で nil の例を外した。nil は flake.lock の変更で end を即座に出し 100 ms 後に begin を出すが、その間は古い情報のまま `ready` に見える（[research/nil-readiness-measurement.md](research/nil-readiness-measurement.md)。nil への提案 (3)）ので、この CL と同じ穴であり手本にならない。代わりに、CL 自身が `gopls mcp` の `fileOf` では `session.DidModifyFiles` を直接呼んで debounce を迂回している事実（コミットメッセージ "so snapshot queries are not delayed by the debounce timer"）を足した。
 
 ```markdown
 A measurement on CL 830844 patch set 2 (dacbdbd80), cherry-picked onto 249605012, against 249605012 itself, both built with go1.27.0 linux/amd64. Two-file module: `a.go` with `func Target() {}` (open in the editor), `b.go` with `func Caller() { Target() }` (not open). A client over stdio removes the call from `b.go` on disk, sends `workspace/didChangeWatchedFiles` (Changed) for it, and immediately starts asking `textDocument/references` on `Target` every 10ms.

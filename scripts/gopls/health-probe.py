@@ -117,9 +117,8 @@ def reader():
             hdr += c
         n = int(hdr.split(b"Content-Length:")[1].split(b"\r\n")[0])
         m = json.loads(p.stdout.read(n))
-        m["_recv"] = (
-            time.time()
-        )  # receive time, for correlating a message with a change
+        # Receive time, for correlating a message with a change.
+        m["_recv"] = time.time()
         q.put(m)
 
 
@@ -244,9 +243,9 @@ def poll(label, content, method="textDocument/references", params=None):
         if m is None:
             raise SystemExit("gopls exited: EOF on stdout")
         log(m)
+    # Sampled before the write, so that the change's own diagnostic cannot be excluded below.
     tc = time.time()
     go_mod_changed(content)
-    t_notified = time.time()
     if a.did_change_before_request:
         a_go_version[0] += 1
         notify(
@@ -297,8 +296,7 @@ def poll(label, content, method="textDocument/references", params=None):
             if (
                 m.get("method") == "textDocument/publishDiagnostics"
                 and m["params"]["uri"].endswith("/go.mod")
-                and m["_recv"]
-                >= t_notified  # not one still arriving for an earlier change
+                and m["_recv"] >= tc  # not one still arriving for an earlier change
             ):
                 break
         print(f"   go.mod diagnostics arrived at t+{time.time() - tc:.3f}s")
@@ -506,6 +504,10 @@ if a.scenario == "stale-after-watched-change":
         outcomes.append((round(time.time() - tc, 3), kind))
         time.sleep(0.01)
     burst_thread.join(timeout=2)
+    if burst_thread.is_alive() or len(send_times) != 20:
+        raise SystemExit(
+            f"burst did not complete: {len(send_times)} of 20 notifications sent"
+        )
     deviation = max(abs(s - k * 0.03) for k, s in enumerate(send_times))
     print(
         f"   burst: {len(send_times)} notifications sent 30ms apart, last at t+{send_times[-1]:.3f}s, "

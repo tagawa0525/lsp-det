@@ -413,7 +413,7 @@ Three questions:
 
 ### Serena: 提出後の反応（2026-09-12）
 
-PR oraios/serena#2007 と issue oraios/serena#2003〜#2006 には反応がない。oraios/serena#1988 へのコメントにも返信はないが、作者 opcode81 が 2026-09-12 に PR を force-push した（`78485f45` "Refactor external language server registration"。本文は「OO 設計に寄せ、Protocol `LanguageServerIdLike` で共通の interface を置き、登録の関心事を `LanguageServerRegistry` に集約」で、こちらへの言及はない）。その差分を 3 つの質問に当てると次のとおり。
+PR oraios/serena#2007 と issue oraios/serena#2003〜#2006 には反応がない。oraios/serena#1988 へのコメントにも返信はないが、作者 opcode81 が 2026-09-12 に PR を force-push した（最終的な head は `faed2fd3` "Refactor external language server registration"。同日 09:28 UTC の `78485f45` を 10:58 UTC に amend したもの。本文は「OO 設計に寄せ、Protocol `LanguageServerIdLike` で共通の interface を置き、登録の関心事を `LanguageServerRegistry` に集約」で、こちらへの言及はない）。その差分を 3 つの質問に当てると次のとおり。
 
 | 質問                                                                                              | 状態                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -423,7 +423,7 @@ PR oraios/serena#2007 と issue oraios/serena#2003〜#2006 には反応がない
 
 質問 1 が解けたのが refactor の副産物かこちらのコメントを読んでのものかは、返信がないので分からない。
 
-関連して、vitalyruhl の [oraios/serena#2016](https://github.com/oraios/serena/pull/2016)（2026-09-11）が「registry の導入後、`ls_specific_settings` の string キーが失われ、設定した `ls_path` が起動前に消える」と報告し、opcode81 は 2026-09-12 に「`LanguageServerId` はもう `StrEnum` ではないので、キーは `get_key()` で引くのが正しい」と答えて同じ force-push に取り込んだ（`SolidLSPSettings.ls_specific_settings` の型が `dict[str, dict[str, Any]]` に、`get_ls_specific_settings()` が `.get(ls_id.get_key())` に）。lsp-det の Serena 統合が依存する `ls_specific_settings.<language>.ls_base_cmd` の経路は、#1988 がマージされた後も string キーで残る。
+関連して、vitalyruhl の [oraios/serena#2016](https://github.com/oraios/serena/pull/2016)（2026-09-11）が「registry の導入後、`ls_specific_settings` の string キーが失われ、設定した `ls_path` が起動前に消える」と報告し、opcode81 は 2026-09-12 に「`LanguageServerId` はもう `StrEnum` ではないので、キーは `get_key()` で引くのが正しい」と答えて force-push に取り込んだ。`faed2fd3` では `SolidLSPSettings.ls_specific_settings` の型が `dict[str | LanguageServerId, dict[str, Any]]` で、`get_ls_specific_settings()` は string キー（`ls_id.get_key()`）を引き、組み込みの `LanguageServerId` なら enum キーも引く。両方にあれば `ValueError`（"Duplicate LS-specific settings"）。lsp-det の Serena 統合が依存する `ls_specific_settings.<language>.ls_base_cmd` の経路は、#1988 がマージされた後も string キーで残る。
 
 次: 返信はしない（質問 1 は解け、2 は PR がまだ動いている）。#1988 がマージされたら、上流 HEAD で [research/serena-integration-measurement.md](research/serena-integration-measurement.md) の経路を再確認し、fork の `tsserver-crash-on-request-path` を rebase する。催促は 2026-09-24 頃に 1 回だけ。
 

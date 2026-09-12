@@ -337,8 +337,18 @@ def poll(label, content, method="textDocument/references", params=None):
         if kind != prev:
             print(f"   t+{t:.3f}s {kind}")
             prev = kind
+    # Keep reading for a second through note(), so a diagnostic that arrives after the
+    # last request is still counted.
+    end = time.time() + 1
+    while time.time() < end:
+        try:
+            m = q.get(timeout=max(0.01, end - time.time()))
+        except queue.Empty:
+            break
+        if m is None:
+            raise SystemExit("gopls exited: EOF on stdout")
+        note(m)
     print(f"   go.mod diagnostics received for this change: {gomod_diagnostics[0]}")
-    pump(1)
 
 
 caps = {

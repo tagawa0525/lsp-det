@@ -156,7 +156,7 @@ lsp-det への影響: `cargo build --release --examples` の後に `cargo test -
 
 7.1 と 7.2.2 の失敗は開発版（`v0.0.0-2026…`）が `TESTED_VERSIONS` にないための宣言不在で、両方のビルドで同じに落ち、この件とは無関係。
 
-lsp-det は ADR 0014 でクライアントの代わりに `didChangeWatchedFiles` を送ってから要求を転送するので、この CL を含む版には `freshness` の `fileChanges` を宣言できない。CL が入った版が出たら 7.3.2 を当て直し、`TESTED_VERSIONS` を動かさない。
+lsp-det は ADR 0015 でクライアントの代わりに `didChangeWatchedFiles` を送ってから要求を転送するので、この CL を含む版には `freshness` の `fileChanges` を宣言できない。CL が入った版が出たら 7.3.2 を当て直し、`TESTED_VERSIONS` を動かさない。
 
 CL 自身がこの問題を一箇所だけ避けている: `gopls mcp` の `fileOf` は `DidChangeWatchedFiles` の呼び出しを `session.DidModifyFiles` の直接呼び出しに置き換え、debounce を迂回する（コミットメッセージ: "Update MCP's fileOf to modify the session snapshot directly so snapshot queries are not delayed by the debounce timer"）。変更の直後の問い合わせを遅らせてはならないことは認めたうえで、内蔵クライアントだけを救った形で、LSP のクライアントに同じ経路はない。
 

@@ -344,7 +344,7 @@ def poll(label, content, method="textDocument/references", params=None):
         try:
             m = q.get(timeout=max(0.01, end - time.time()))
         except queue.Empty:
-            break
+            continue  # the deadline ends the loop
         if m is None:
             raise SystemExit("gopls exited: EOF on stdout")
         note(m)
@@ -473,7 +473,7 @@ def sample_references(label, seconds, interval, start=None):
         try:
             take(q.get(timeout=max(0.01, end - time.time())))
         except queue.Empty:
-            break
+            continue  # the deadline ends the loop
     outcomes = [(off, answers.get(i, "timeout")) for i, off in sent]
     prev = None
     for off, kind in outcomes:

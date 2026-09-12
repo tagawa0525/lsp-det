@@ -246,6 +246,18 @@ def poll(label, content, method="textDocument/references", params=None):
     # Sampled before the write, so that the change's own diagnostic cannot be excluded below.
     tc = time.time()
     go_mod_changed(content)
+    gomod_diagnostics = [0]
+
+    def note(m):
+        # log, counting the go.mod diagnostics received since this change
+        if (
+            m.get("method") == "textDocument/publishDiagnostics"
+            and m["params"]["uri"].endswith("/go.mod")
+            and m["_recv"] >= tc
+        ):
+            gomod_diagnostics[0] += 1
+        log(m)
+
     if a.did_change_before_request:
         a_go_version[0] += 1
         notify(
@@ -292,12 +304,8 @@ def poll(label, content, method="textDocument/references", params=None):
                 raise SystemExit(
                     "gopls exited before publishing diagnostics for go.mod"
                 )
-            log(m)
-            if (
-                m.get("method") == "textDocument/publishDiagnostics"
-                and m["params"]["uri"].endswith("/go.mod")
-                and m["_recv"] >= tc  # not one still arriving for an earlier change
-            ):
+            note(m)
+            if gomod_diagnostics[0]:  # not one still arriving for an earlier change
                 break
         print(f"   go.mod diagnostics arrived at t+{time.time() - tc:.3f}s")
     outcomes = []
@@ -315,7 +323,7 @@ def poll(label, content, method="textDocument/references", params=None):
             if m.get("id") == i and "method" not in m:
                 got = m
                 break
-            log(m)
+            note(m)
         if got is None:
             kind = "timeout"
         elif "error" in got:
@@ -329,6 +337,7 @@ def poll(label, content, method="textDocument/references", params=None):
         if kind != prev:
             print(f"   t+{t:.3f}s {kind}")
             prev = kind
+    print(f"   go.mod diagnostics received for this change: {gomod_diagnostics[0]}")
     pump(1)
 
 
@@ -411,37 +420,55 @@ if a.scenario == "break-later":
         request_and_wait("textDocument/references", REFS)
 
 
-def watch_references(label, seconds):
-    """Repeat references on Target every 10ms for `seconds` and print the runs of answers."""
-    tc = time.time()
-    outcomes = []
-    while time.time() - tc < seconds:
-        i = req("textDocument/references", REFS)
-        got = None
-        end = time.time() + 2
-        while time.time() < end:
-            try:
-                m = q.get(timeout=max(0.01, end - time.time()))
-            except queue.Empty:
-                break
-            if m is None:
-                raise SystemExit("gopls exited: EOF on stdout")
-            if m.get("id") == i and "method" not in m:
-                got = m
-                break
-            log(m)
-        if got is None:
-            kind = "timeout"
-        elif "error" in got:
-            kind = "ERR:" + got["error"]["message"][:30]
+def sample_references(label, seconds, interval, start=None):
+    """Send references on Target every `interval` seconds from fixed deadlines (not after the
+    previous answer, so a slow answer does not move the next request), match the answers by
+    id, and print the runs of outcomes in send order, stamped with the send time."""
+    start = start or time.time()
+    sent = []  # (id, send offset), in send order
+    answers = {}
+
+    def take(m):
+        if m is None:
+            raise SystemExit("gopls exited: EOF on stdout")
+        if "method" not in m and m.get("id") in pending:
+            answers[m["id"]] = (
+                "ERR:" + m["error"]["message"][:30]
+                if "error" in m
+                else f"OK n={len(m['result'] or [])}"
+            )
+            pending.discard(m["id"])
         else:
-            kind = f"OK n={len(got['result'] or [])}"
-        outcomes.append((round(time.time() - tc, 3), kind))
-        time.sleep(0.01)
+            log(m)
+
+    pending = set()
+    n = 0
+    while True:
+        due = start + n * interval
+        if due >= start + seconds:
+            break
+        now = time.time()
+        if now < due:
+            try:
+                take(q.get(timeout=due - now))
+            except queue.Empty:
+                pass
+            continue
+        i = req("textDocument/references", REFS)
+        pending.add(i)
+        sent.append((i, round(time.time() - start, 3)))
+        n += 1
+    end = time.time() + 2
+    while pending and time.time() < end:
+        try:
+            take(q.get(timeout=max(0.01, end - time.time())))
+        except queue.Empty:
+            break
+    outcomes = [(off, answers.get(i, "timeout")) for i, off in sent]
     prev = None
-    for t, kind in outcomes:
+    for off, kind in outcomes:
         if kind != prev:
-            print(f"   {label} t+{t:.3f}s {kind}")
+            print(f"   {label} t+{off:.3f}s {kind}")
             prev = kind
     return outcomes
 
@@ -455,7 +482,7 @@ if a.scenario == "stale-after-watched-change":
         "workspace/didChangeWatchedFiles",
         {"changes": [{"uri": uri + "/b.go", "type": 2}]},
     )
-    watch_references("single", 1.2)
+    sample_references("single", 1.2, 0.01)
     pump(1)
     print(
         "=== b.go gets the call back on disk + 20 didChangeWatchedFiles(b.go) 30ms apart, references every 10ms"
@@ -463,46 +490,26 @@ if a.scenario == "stale-after-watched-change":
     write("b.go", B_GO)
     send_times = []
 
+    def notify_b_changed():
+        notify(
+            "workspace/didChangeWatchedFiles",
+            {"changes": [{"uri": uri + "/b.go", "type": 2}]},
+        )
+        send_times.append(time.time() - tb)
+
     def burst():
-        # 20 notifications 30ms apart, on their own thread so that a slow request cannot
-        # bunch them up; the actual send times are reported below.
-        for k in range(20):
+        # Notifications 2..20, 30ms apart from the first, on their own thread so that a slow
+        # request cannot bunch them up; the actual send times are reported below.
+        for k in range(1, 20):
             while (d := tb + k * 0.03 - time.time()) > 0:
                 time.sleep(d)
-            notify(
-                "workspace/didChangeWatchedFiles",
-                {"changes": [{"uri": uri + "/b.go", "type": 2}]},
-            )
-            send_times.append(time.time() - tb)
+            notify_b_changed()
 
     tb = time.time()
+    notify_b_changed()  # the first one before any request, so no request precedes it
     burst_thread = threading.Thread(target=burst, daemon=True)
     burst_thread.start()
-
-    tc = tb
-    outcomes = []
-    while time.time() - tc < 1.2:
-        i = req("textDocument/references", REFS)
-        got = None
-        end = time.time() + 2
-        while time.time() < end:
-            try:
-                m = q.get(timeout=max(0.01, end - time.time()))
-            except queue.Empty:
-                break
-            if m is None:
-                raise SystemExit("gopls exited: EOF on stdout")
-            if m.get("id") == i and "method" not in m:
-                got = m
-                break
-            log(m)
-        kind = (
-            "timeout"
-            if got is None
-            else ("ERR" if "error" in got else f"OK n={len(got['result'] or [])}")
-        )
-        outcomes.append((round(time.time() - tc, 3), kind))
-        time.sleep(0.01)
+    outcomes = sample_references("burst", 1.2, 0.01, start=tb)
     burst_thread.join(timeout=2)
     if burst_thread.is_alive() or len(send_times) != 20:
         raise SystemExit(
@@ -513,11 +520,6 @@ if a.scenario == "stale-after-watched-change":
         f"   burst: {len(send_times)} notifications sent 30ms apart, last at t+{send_times[-1]:.3f}s, "
         f"max deviation from schedule {deviation * 1000:.1f}ms"
     )
-    prev = None
-    for t, kind in outcomes:
-        if kind != prev:
-            print(f"   burst t+{t:.3f}s {kind}")
-            prev = kind
 
 if a.scenario == "reload-window":
     poll("comment", GOOD + "// touched\n")

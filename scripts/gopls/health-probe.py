@@ -7,7 +7,8 @@ the server-to-client messages with a timestamp (`window/logMessage` lines that m
 neither "error" nor "loading" are dropped to keep the trace readable). Nothing is judged by
 time; the waits only bound how long the probe looks.
 
-usage: health-probe.py --scenario NAME [--observe SECS] [--after-go-mod-diagnostics]
+usage: health-probe.py --scenario NAME [--observe SECS] [--diagnostics-delay DUR]
+       [--after-go-mod-diagnostics | --did-change-before-request | --toggle-b-before-request]
 
 --after-go-mod-diagnostics makes the reload-window and recover-window scenarios send their
 first request only after gopls has published diagnostics for go.mod following the change,
@@ -52,9 +53,10 @@ import time
 ap = argparse.ArgumentParser()
 ap.add_argument("--scenario", required=True)
 ap.add_argument("--observe", type=float, default=6)
-ap.add_argument("--after-go-mod-diagnostics", action="store_true")
-ap.add_argument("--did-change-before-request", action="store_true")
-ap.add_argument("--toggle-b-before-request", action="store_true")
+timing = ap.add_mutually_exclusive_group()
+timing.add_argument("--after-go-mod-diagnostics", action="store_true")
+timing.add_argument("--did-change-before-request", action="store_true")
+timing.add_argument("--toggle-b-before-request", action="store_true")
 ap.add_argument(
     "--diagnostics-delay",
     help="gopls diagnosticsDelay via initializationOptions, e.g. 300ms",
@@ -258,8 +260,14 @@ def poll(label, content, method="textDocument/references", params=None):
             f"   {'didOpen' if b_open[0] else 'didClose'} b.go at t+{time.time() - tc:.3f}s"
         )
     if a.after_go_mod_diagnostics:
+        end = time.time() + 10
         while True:
-            m = q.get()
+            try:
+                m = q.get(timeout=max(0.01, end - time.time()))
+            except queue.Empty:
+                raise SystemExit(
+                    f"no publishDiagnostics for go.mod within 10s of the change ({label})"
+                )
             if m is None:
                 raise SystemExit(
                     "gopls exited before publishing diagnostics for go.mod"
@@ -281,7 +289,7 @@ def poll(label, content, method="textDocument/references", params=None):
             except queue.Empty:
                 break
             if m is None:
-                break
+                raise SystemExit("gopls exited: EOF on stdout")
             if m.get("id") == i and "method" not in m:
                 got = m
                 break
@@ -395,7 +403,7 @@ def watch_references(label, seconds):
             except queue.Empty:
                 break
             if m is None:
-                break
+                raise SystemExit("gopls exited: EOF on stdout")
             if m.get("id") == i and "method" not in m:
                 got = m
                 break
@@ -457,7 +465,7 @@ if a.scenario == "stale-after-watched-change":
             except queue.Empty:
                 continue
             if m is None:
-                break
+                raise SystemExit("gopls exited: EOF on stdout")
             if m.get("id") == i and "method" not in m:
                 got = m
                 break

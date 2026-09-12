@@ -52,7 +52,7 @@ lsp-det の最終目標は、サーバー状態プロトコルを言語サーバ
 
 第 2 段（準備の 3〜6 の後。第 1 段の反応を待たない）:
 
-1. Serena: 再測定の結果が残る不具合の issue と、registry に lsp-det を載せる提案。**提出済み（2026-09-10）**: PR oraios/serena#2007、issue oraios/serena#2003〜#2006、oraios/serena#1988 へのコメント
+1. Serena: 再測定の結果が残る不具合の issue と、registry に lsp-det を載せる提案。**提出済み（2026-09-10）**: PR oraios/serena#2007、issue oraios/serena#2003〜#2006、oraios/serena#1988 へのコメント。#1988 のその後の動きは「Serena: 提出後の反応」
 2. rust-analyzer: issue で両案（`serverStatus` への field 追加、別通知の `experimental/serverState`）を並べる。PR は相手が選んだ方を出す。**提出済み（2026-09-10）**: rust-lang/rust-analyzer#23331
 3. gopls: golang/go#78273 に fallback の severity のコメント、回復後の go.mod 変更の窓は新規 issue。fixture と実測ログ付き（2026-09-09 に提出済み: golang/go#78273 のコメントと golang/go#81400。付いた反応と返信は「gopls: 提出後の反応」。修正 CL の検証とデバウンス CL へのコメントは「gopls: 上流の修正 CL の検証」以下。2026-09-12 に提出済み）
 
@@ -410,6 +410,22 @@ Three questions:
 2. The readiness wait lives inside each adapter's `_start_server` (`PyrightServer` waits for "Found N source files", `TypeScriptLanguageServer` for `$/progress`). Would a hook such as `_wait_for_initial_readiness()` on `SolidLanguageServer`, called from `start_server`, be acceptable so that a subclass can override only that part? Without it the subclass has to copy `_start_server`.
 3. Should such an adapter live in this repository (under `src/solidlsp/language_servers/`) or as a separate package that uses the entry point? I am happy to maintain it either way.
 ````
+
+### Serena: 提出後の反応（2026-09-12）
+
+PR oraios/serena#2007 と issue oraios/serena#2003〜#2006 には反応がない。oraios/serena#1988 へのコメントにも返信はないが、作者 opcode81 が 2026-09-12 に PR を force-push した（`78485f45` "Refactor external language server registration"。本文は「OO 設計に寄せ、Protocol `LanguageServerIdLike` で共通の interface を置き、登録の関心事を `LanguageServerRegistry` に集約」で、こちらへの言及はない）。その差分を 3 つの質問に当てると次のとおり。
+
+| 質問                                                                                              | 状態                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1. 組み込み adapter の子クラスを新しいキーで登録するか、`allow_override` で既存キーを上書きするか | 両方できる形になった。旧版は `register_ls()` が「実装クラス 1 つにつき ID は 1 つ」「組み込み ID の上書き禁止」で、`SolidLanguageServer.get_language_server_id()` がクラスから enum を逆引き（`LanguageServerId.from_ls_class`）していたため、子クラスでは `ValueError` になった。新版は逆引きを消して `ls_id = config.ls_id`（registry のキーがそのまま来る）とし、`LanguageServerRegistry.get_instance().register(ls_id, allow_override=False)` に上書きの引数が付いた |
+| 2. `_wait_for_initial_readiness()` の hook                                                        | 未対応。`ls.py` の変更は `ls_id` の取り方だけで、`start_server` の周りは動いていない                                                                                                                                                                                                                                                                                                                                                                                     |
+| 3. 本体に同梱するか別パッケージか                                                                 | 文書（`docs/03-special-guides/external_language_server_registration.md`）は別パッケージが entry point を公開する形で書かれている。group 名は `serena.language_servers` から `solidlsp.language_server_registration` に変わった。本体への同梱の可否には触れていない                                                                                                                                                                                                       |
+
+質問 1 が解けたのが refactor の副産物かこちらのコメントを読んでのものかは、返信がないので分からない。
+
+関連して、vitalyruhl の [oraios/serena#2016](https://github.com/oraios/serena/pull/2016)（2026-09-11）が「registry の導入後、`ls_specific_settings` の string キーが失われ、設定した `ls_path` が起動前に消える」と報告し、opcode81 は 2026-09-12 に「`LanguageServerId` はもう `StrEnum` ではないので、キーは `get_key()` で引くのが正しい」と答えて同じ force-push に取り込んだ（`SolidLSPSettings.ls_specific_settings` の型が `dict[str, dict[str, Any]]` に、`get_ls_specific_settings()` が `.get(ls_id.get_key())` に）。lsp-det の Serena 統合が依存する `ls_specific_settings.<language>.ls_base_cmd` の経路は、#1988 がマージされた後も string キーで残る。
+
+次: 返信はしない（質問 1 は解け、2 は PR がまだ動いている）。#1988 がマージされたら、上流 HEAD で [research/serena-integration-measurement.md](research/serena-integration-measurement.md) の経路を再確認し、fork の `tsserver-crash-on-request-path` を rebase する。催促は 2026-09-24 頃に 1 回だけ。
 
 ### LSP 本体: microsoft/language-server-protocol#511 へのコメントと proposal issue
 

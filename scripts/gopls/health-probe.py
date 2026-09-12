@@ -226,6 +226,16 @@ def poll(label, content, method="textDocument/references", params=None):
     print(
         f"=== go.mod change ({label}) + didChangeWatchedFiles, then {method} {after}, repeated with 50ms pauses"
     )
+    # Log everything already received, so that a go.mod diagnostic left over from
+    # initialization or the previous change cannot satisfy the wait below.
+    while True:
+        try:
+            m = q.get_nowait()
+        except queue.Empty:
+            break
+        if m is None:
+            raise SystemExit("gopls exited: EOF on stdout")
+        log(m)
     tc = time.time()
     go_mod_changed(content)
     if a.did_change_before_request:

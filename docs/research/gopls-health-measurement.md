@@ -142,7 +142,21 @@ CL 830844 を重ねたときの freshness（通知から取り込みまでの窓
 
 2 走行とも同じ。今の gopls は通知を受けた順に処理するので、`didChangeWatchedFiles` の後の要求は必ずその変更を織り込む。CL 830844 はこの順序を要求に対しては守らない（編集通知 `didOpen` / `didChange` / `didSave` / `didClose` が来たときだけ保留分を同期に flush する）。変更を受け取っておきながら最長 50 ms、連続する変更では 500 ms、古い状態で答え、その間クライアントに信号はない（flush の時点で出るものはなく、`publishDiagnostics` は再ロードの後）。仕様 6 章 2 項の freshness（受け取った `didChangeWatchedFiles` を以後の要求が織り込む）が成り立たない。
 
-lsp-det への影響: 準拠テスト `gopls_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_gopls` と `stand_in_spec_7_3_2` は親で通り、親 + CL 830844 で "did not return the call added on disk while declaring ready (freshness violation)" で落ちる（`cargo build --release --examples` の後に `cargo test --release --test conformance gopls -- --ignored --test-threads=1`。テスト名で絞った実行は偽上流の example をビルドしないため先に作る。`gopls_spec_7_1` と `spec_7_2_2` は開発版が `TESTED_VERSIONS` にないための宣言不在で両方落ち、この件とは無関係）。lsp-det は ADR 0014 でクライアントの代わりに `didChangeWatchedFiles` を送ってから要求を転送するので、この CL を含む版には `freshness` の `fileChanges` を宣言できない。CL が入った版が出たら 7.3.2 を当て直し、`TESTED_VERSIONS` を動かさない。
+lsp-det への影響: `cargo build --release --examples` の後に `cargo test --release --test conformance gopls -- --ignored --test-threads=1`（テスト名で絞った実行は偽上流の example をビルドしないため先に作る）で選ばれる 7 件の結果は次のとおり。親は 5 件通過・2 件失敗、親 + CL 830844 は 3 件通過・4 件失敗で、差は 7.3.2 の 2 件。
+
+| テスト                                                                  | 親（249605012） | 親 + CL 830844                                                                                |
+| ----------------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------- |
+| `gopls_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_gopls` | ok              | FAILED（"did not return the call added on disk while declaring ready (freshness violation)"） |
+| `stand_in_spec_7_3_2_through_lsp_det_with_real_gopls`                   | ok              | FAILED（同上）                                                                                |
+| `gopls_spec_7_2_coverage_through_lsp_det_with_real_gopls`               | ok              | ok                                                                                            |
+| `gopls_spec_7_3_cross_file_freshness_through_lsp_det_with_real_gopls`   | ok              | ok                                                                                            |
+| `gopls_does_not_reemit_workspace_setup_on_go_mod_change`                | ok              | ok                                                                                            |
+| `gopls_spec_7_1_through_lsp_det_with_real_gopls`                        | FAILED          | FAILED                                                                                        |
+| `spec_7_2_2_gopls_returns_the_declared_limit_for_workspace_symbol`      | FAILED          | FAILED                                                                                        |
+
+7.1 と 7.2.2 の失敗は開発版（`v0.0.0-2026…`）が `TESTED_VERSIONS` にないための宣言不在で、両方のビルドで同じに落ち、この件とは無関係。
+
+lsp-det は ADR 0014 でクライアントの代わりに `didChangeWatchedFiles` を送ってから要求を転送するので、この CL を含む版には `freshness` の `fileChanges` を宣言できない。CL が入った版が出たら 7.3.2 を当て直し、`TESTED_VERSIONS` を動かさない。
 
 CL 自身がこの問題を一箇所だけ避けている: `gopls mcp` の `fileOf` は `DidChangeWatchedFiles` の呼び出しを `session.DidModifyFiles` の直接呼び出しに置き換え、debounce を迂回する（コミットメッセージ: "Update MCP's fileOf to modify the session snapshot directly so snapshot queries are not delayed by the debounce timer"）。変更の直後の問い合わせを遅らせてはならないことは認めたうえで、内蔵クライアントだけを救った形で、LSP のクライアントに同じ経路はない。
 

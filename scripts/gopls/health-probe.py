@@ -262,12 +262,14 @@ def poll(label, content, method="textDocument/references", params=None):
     if a.after_go_mod_diagnostics:
         end = time.time() + 10
         while True:
-            try:
-                m = q.get(timeout=max(0.01, end - time.time()))
-            except queue.Empty:
+            if time.time() >= end:
                 raise SystemExit(
                     f"no publishDiagnostics for go.mod within 10s of the change ({label})"
                 )
+            try:
+                m = q.get(timeout=max(0.01, end - time.time()))
+            except queue.Empty:
+                continue
             if m is None:
                 raise SystemExit(
                     "gopls exited before publishing diagnostics for go.mod"

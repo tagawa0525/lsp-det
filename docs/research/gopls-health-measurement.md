@@ -91,6 +91,63 @@
 - 回復後の go.mod 変更の窓は gopls の不具合として新規 issue。fixture、ソースの読み、直し方の候補を添える
 - `workspace/symbol` が失敗中に `null` を返す点は、要求ごとの正直さの例外として記録にとどめる（別 issue にするかは上の 2 つの反応を見てから）
 
+## 提出後: 上流の修正 CL の検証（2026-09-12）
+
+golang/go#81400 に対し、Go チームの Hana Kim が [CL 830924](https://go.dev/cl/830924)（`clone` の `reinit` の経路で `unloadableFiles` を空にする。上の「直し方の候補」と同じ）を出した。レビューで Peter Weinberger が、別の [CL 830844](https://go.dev/cl/830844)（`workspace/didChangeWatchedFiles` を 50 ms デバウンスし、編集操作 `didOpen` / `didChange` / `didSave` / `didClose` が来たら保留分を同期に flush する）が入ると、CL 830924 の回帰テスト（通知の直後に `References`）は変更前の snapshot に対して空振りで通る、と指摘した。
+
+4 つの `gopls` をビルドして同じ probe を当てた（go1.27.0 linux/amd64）: CL 830924 patch set 2（`a373bba32`）、その親（`249605012`、master 上）、および両方に CL 830844 patch set 2（`dacbdbd80`）を cherry-pick したもの。probe には要求のタイミングを変える選択肢を足した（`--after-go-mod-diagnostics`、`--did-change-before-request`、`--toggle-b-before-request`、`--diagnostics-delay`）。
+
+### 結果（`recover-window`、回復後の go.mod 変更 3 回 × 2 走行。時刻は変更からの経過）
+
+| 要求のタイミング                                   | 親                                      | 親 + デバウンス                                                                    | CL 830924             | CL 830924 + デバウンス |
+| -------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------- | --------------------- | ---------------------- |
+| 通知の直後から 50 ms ごと                          | 0.001 s でエラー、1.015〜1.018 s で成功 | 0.001 s は**成功（変更前の snapshot）**、0.052 s でエラー、1.065〜1.072 s で成功   | 0.009〜0.018 s で成功 | 0.001 s で成功         |
+| go.mod の `publishDiagnostics` を待ってから        | 1.013 s（診断の到着）で成功             | 1.063 s で成功                                                                     | 1.011〜1.014 s で成功 | 1.062〜1.064 s で成功  |
+| 通知の後に a.go の `didChange`（内容不変）を送って | 0.010 s で成功（**窓が出ない**）        | 0.001 s でエラー、1.014〜1.017 s で成功                                            | 0.009〜0.011 s で成功 | 0.008〜0.016 s で成功  |
+| 通知の後に b.go の `didOpen` / `didClose` を送って | 0.010 s で成功（**窓が出ない**）        | 0.001 s でエラー。成功は `didOpen` 後 0.052〜0.059 s、`didClose` 後 1.016〜1.018 s | 0.009〜0.011 s で成功 | 0.009〜0.018 s で成功  |
+
+読み取り:
+
+- 修正はデバウンスの有無に関わらず効く。修正のない 2 つは、flush の後（デバウンスなしは通知の直後、ありは 50 ms 後）に窓が始まる
+- 窓は「再ロードの所要時間」ではない。`--diagnostics-delay` を 300 ms にすると窓は 0.356 s、2 s にすると 2.03 s（親、デバウンスなし。親 + デバウンスの 300 ms は 0.052〜0.407 s）。fixture の再ロード自体は遅延を差し引いて 15〜56 ms
+- go.mod の `publishDiagnostics` は再ロードの後に来るので、それを待ってから要求するテストは（修正の有無に関わらず）空振りで通る
+- 空振りしないテストの形: 通知の後、変更後の go.mod の診断が届くまで要求を繰り返し、その間に一度でも "no package metadata" が返れば失敗。診断が窓の後に届くことは 4 つのビルドすべてで確認した
+
+### 窓の機構と、編集操作が master で窓を消す理由（trace で確認）
+
+親のビルドに `MetadataForFile` の判定、`clone` の変更ごとの `invalidateMetadata`、`load` と `reloadWorkspace` の呼び元を書き出す trace を仕込み（`GOPLS_TRACE_FILE`。lsp-det には入れていない）、`recover-window` を通知直後の要求と `--did-change-before-request` の 2 通りで走らせた。
+
+- go.mod のディスク上の変更は `clone` で `reinit` になり、新しい snapshot は `initialized = false` になる。a.go の metadata はなくなる（`MetadataForFile` で `pkgs=0`）
+- `references` の経路は `MetadataForFile`（`golang.NarrowestPackageForFile`）を `awaitLoaded` より先に呼ぶ。a.go が `unloadableFiles` に入っていると要求内のロードを飛ばし、`pkgs=0` のまま "no package metadata" になる。健全なセッションでは `unloadable=false` なので要求内で `s.load(fileLoadScope)` が走り 16 ms で答える
+- 窓を閉じるのは `reloadWorkspace`（`shouldLoad` は空で `scopes=0`）ではなく、`AwaitInitialized` → `Snapshot.initialize` によるワークスペース全体のロード（trace の `load #6`、`initialize:704` から）。それを最初に呼ぶのは通常、`DiagnosticsDelay` の後に走る診断パス（`server.diagnose` → `WorkspaceMetadata` → `awaitLoaded`）。窓の長さが `diagnosticsDelay` に追従するのはこのため
+- 編集操作（`didChange` / `didOpen` / `didClose`）が来ると `Session.DidModifyFiles` → `invalidateViewLocked`（`view.go`）が clone の前に `prevSnapshot.AwaitInitialized(ctx)` を呼ぶ（"Do not clone a snapshot until its view has finished initializing"）。`reinit` 直後の snapshot は未初期化なので、ここで同期にロードされ（trace では `DidChange` のハンドラの中で `load #6`、約 10 ms）、直後の要求は答えられる。デバウンスなしの master で編集操作が窓を消すのはこれ
+- デバウンス版で同じ編集操作が窓を消さないのは、flush された go.mod の変更と編集操作が**1 つの** `DidModifyFiles` にまとまるから。`AwaitInitialized` が待つのは変更前の（初期化済みの）snapshot で、`reinit` で未初期化になるのはその clone の結果。以後、診断パスまで誰も `AwaitInitialized` を呼ばない
+
+テストへの含意: デバウンス後は「通知 → 編集操作 → 要求」が空振りせず（親 + デバウンスで 1 ms 後の要求がエラー、修正 + デバウンスで成功）、デバウンス前の今は「通知 → 要求」が空振りしない（Hana Kim のテストの形）。同じ手順を両方で使うことはできない。手順に依らない形は、通知の直後から変更後の診断が届くまで要求を繰り返す形。
+
+### `break-later` と `reload-window`（CL 830924、デバウンスなし）
+
+壊れている間の要求は従来どおり明示的なエラー（偽の成功にならない）。修復直後の要求は 16 ms で成功（親は再ロードまでエラー）。健全なセッションの go.mod 変更は窓なし（変わらず）。
+
+CL 830844 が入ったら gopls の freshness の写像（通知から取り込みまでの窓）を測り直す。
+
+### デバウンス CL 830844 は通知の直後の要求に古い答えを返す（2026-09-12）
+
+上の検証で「親 + デバウンス」の通知 1 ms 後の要求が変更前の snapshot から答えていたので、答えが変わる fixture で測った（probe の `stale-after-watched-change`。b.go は開いていない）。
+
+| 手順                                                                                                          | 親（デバウンスなし）             | 親 + CL 830844                                                     |
+| ------------------------------------------------------------------------------------------------------------- | -------------------------------- | ------------------------------------------------------------------ |
+| b.go の `Target()` の呼び出しをディスク上で消し、`didChangeWatchedFiles` の直後から 10 ms ごとに `references` | 1 ms 後の要求から 0 件（正しい） | 1 ms 後から **1 件（消した呼び出し）**、52 ms 後に 0 件            |
+| 呼び出しを戻し、`didChangeWatchedFiles` を 30 ms 間隔で 20 回送りながら 10 ms ごとに `references`             | 1 ms 後の要求から 1 件（正しい） | **0 件のまま 507〜511 ms**（`debounceMax` の 500 ms）、その後 1 件 |
+
+2 走行とも同じ。今の gopls は通知を受けた順に処理するので、`didChangeWatchedFiles` の後の要求は必ずその変更を織り込む。CL 830844 はこの順序を要求に対しては守らない（編集通知 `didOpen` / `didChange` / `didSave` / `didClose` が来たときだけ保留分を同期に flush する）。変更を受け取っておきながら最長 50 ms、連続する変更では 500 ms、古い状態で答え、その間クライアントに信号はない（flush の時点で出るものはなく、`publishDiagnostics` は再ロードの後）。仕様 6 章 2 項の freshness（受け取った `didChangeWatchedFiles` を以後の要求が織り込む）が成り立たない。
+
+lsp-det への影響: 準拠テスト `gopls_spec_7_3_2_watched_file_changes_through_lsp_det_with_real_gopls` と `stand_in_spec_7_3_2` は親で通り、親 + CL 830844 で "did not return the call added on disk while declaring ready (freshness violation)" で落ちる（`cargo test --release --test conformance gopls -- --ignored --test-threads=1`。`gopls_spec_7_1` と `spec_7_2_2` は開発版が `TESTED_VERSIONS` にないための宣言不在で両方落ち、この件とは無関係）。lsp-det は ADR 0014 でクライアントの代わりに `didChangeWatchedFiles` を送ってから要求を転送するので、この CL を含む版には `freshness` の `fileChanges` を宣言できない。CL が入った版が出たら 7.3.2 を当て直し、`TESTED_VERSIONS` を動かさない。
+
+CL 自身がこの問題を一箇所だけ避けている: `gopls mcp` の `fileOf` は `DidChangeWatchedFiles` の呼び出しを `session.DidModifyFiles` の直接呼び出しに置き換え、debounce を迂回する（コミットメッセージ: "Update MCP's fileOf to modify the session snapshot directly so snapshot queries are not delayed by the debounce timer"）。変更の直後の問い合わせを遅らせてはならないことは認めたうえで、内蔵クライアントだけを救った形で、LSP のクライアントに同じ経路はない。
+
+直し方の候補（gopls 側）: 要求の処理の入口でも保留分を drain する（編集通知と同じ扱い）。burst の途中に要求が来なければ今のまとめ方が保たれ、来たときだけ 1 回 flush するので、#81408 の目的（重複する `go list`）は損なわない。または、保留があることと適用された時点をクライアントに示す信号を出す。
+
 ## 一般化してはならない点
 
 - 窓の長さ（約 1 秒）は 2 ファイルの fixture と本機での値。再ロードの所要時間に依存する

@@ -7,7 +7,25 @@ the server-to-client messages with a timestamp (`window/logMessage` lines that m
 neither "error" nor "loading" are dropped to keep the trace readable). Nothing is judged by
 time; the waits only bound how long the probe looks.
 
-usage: health-probe.py --scenario NAME [--observe SECS]
+usage: health-probe.py --scenario NAME [--observe SECS] [--after-go-mod-diagnostics]
+
+--after-go-mod-diagnostics makes the reload-window and recover-window scenarios send their
+first request only after gopls has published diagnostics for go.mod following the change,
+instead of immediately after didChangeWatchedFiles. A server that debounces the notification
+answers an immediate request from the snapshot before the change; the diagnostics come after
+the change has been applied.
+
+--did-change-before-request makes the same scenarios send a textDocument/didChange for a.go
+(full text, unchanged) between didChangeWatchedFiles and the first request. A server that
+debounces watched-file notifications flushes them inside the editor operation, so the request
+that follows sees the snapshot after the change.
+
+--toggle-b-before-request does the same with a textDocument/didOpen of b.go (didClose when it
+is already open) instead of a didChange of a.go, so the editor operation touches a file other
+than the one the request is about.
+
+--diagnostics-delay sets gopls's diagnosticsDelay (default 1s) through initializationOptions, to
+see whether a window's length follows it.
 
 scenarios:
   broken-start   go.mod has a syntax error from the start
@@ -16,6 +34,10 @@ scenarios:
   reload-window  healthy load, then go.mod changes; references repeated with 50ms pauses
   recover-window healthy, broken, fixed; then go.mod changes; references repeated with 50ms pauses
   missing-dep    go.mod requires a module that cannot be fetched (GOPROXY=off)
+  stale-after-watched-change
+                 healthy load; b.go loses its call to Target on disk (+didChangeWatchedFiles),
+                 then references on Target every 10ms: does the answer still count the call?
+                 Then b.go gets the call back through a burst of 20 notifications 30ms apart
 """
 
 import argparse
@@ -30,6 +52,13 @@ import time
 ap = argparse.ArgumentParser()
 ap.add_argument("--scenario", required=True)
 ap.add_argument("--observe", type=float, default=6)
+ap.add_argument("--after-go-mod-diagnostics", action="store_true")
+ap.add_argument("--did-change-before-request", action="store_true")
+ap.add_argument("--toggle-b-before-request", action="store_true")
+ap.add_argument(
+    "--diagnostics-delay",
+    help="gopls diagnosticsDelay via initializationOptions, e.g. 300ms",
+)
 a = ap.parse_args()
 wdp = a.scenario != "nowdp"
 
@@ -185,11 +214,62 @@ def poll(label, content, method="textDocument/references", params=None):
     """Change go.mod, then repeat `method` (waiting for each answer and pausing 50ms between
     attempts) and print the runs of outcomes."""
     params = params or REFS
+    after = "immediately"
+    if a.after_go_mod_diagnostics:
+        after = "after publishDiagnostics for go.mod"
+    elif a.did_change_before_request:
+        after = "after a didChange for a.go"
+    elif a.toggle_b_before_request:
+        after = "after a didOpen/didClose of b.go"
     print(
-        f"=== go.mod change ({label}) + didChangeWatchedFiles, then {method} repeated with 50ms pauses"
+        f"=== go.mod change ({label}) + didChangeWatchedFiles, then {method} {after}, repeated with 50ms pauses"
     )
     tc = time.time()
     go_mod_changed(content)
+    if a.did_change_before_request:
+        a_go_version[0] += 1
+        notify(
+            "textDocument/didChange",
+            {
+                "textDocument": {"uri": uri + "/a.go", "version": a_go_version[0]},
+                "contentChanges": [{"text": read("a.go")}],
+            },
+        )
+        print(
+            f"   didChange a.go (unchanged text, version {a_go_version[0]}) at t+{time.time() - tc:.3f}s"
+        )
+    if a.toggle_b_before_request:
+        if b_open[0]:
+            notify("textDocument/didClose", {"textDocument": {"uri": uri + "/b.go"}})
+        else:
+            notify(
+                "textDocument/didOpen",
+                {
+                    "textDocument": {
+                        "uri": uri + "/b.go",
+                        "languageId": "go",
+                        "version": 1,
+                        "text": read("b.go"),
+                    }
+                },
+            )
+        b_open[0] = not b_open[0]
+        print(
+            f"   {'didOpen' if b_open[0] else 'didClose'} b.go at t+{time.time() - tc:.3f}s"
+        )
+    if a.after_go_mod_diagnostics:
+        while True:
+            m = q.get()
+            if m is None:
+                raise SystemExit(
+                    "gopls exited before publishing diagnostics for go.mod"
+                )
+            log(m)
+            if m.get("method") == "textDocument/publishDiagnostics" and m["params"][
+                "uri"
+            ].endswith("/go.mod"):
+                break
+        print(f"   go.mod diagnostics arrived at t+{time.time() - tc:.3f}s")
     outcomes = []
     for _ in range(60):
         i = req(method, params)
@@ -237,6 +317,11 @@ request_and_wait(
         "rootUri": uri,
         "capabilities": caps,
         "workspaceFolders": [{"uri": uri, "name": "fixture"}],
+        **(
+            {"initializationOptions": {"diagnosticsDelay": a.diagnostics_delay}}
+            if a.diagnostics_delay
+            else {}
+        ),
     },
 )
 notify("initialized", {})
@@ -251,6 +336,8 @@ notify(
         }
     },
 )
+a_go_version = [1]
+b_open = [False]
 print(f"[{time.time() - t0:6.3f}s] -> didOpen a.go; observing {a.observe}s")
 pump(a.observe)
 target_line = 4 if a.scenario == "missing-dep" else 2
@@ -292,6 +379,102 @@ if a.scenario == "break-later":
         request_and_wait("textDocument/references", REFS)
         pump(3)
         request_and_wait("textDocument/references", REFS)
+
+
+def watch_references(label, seconds):
+    """Repeat references on Target every 10ms for `seconds` and print the runs of answers."""
+    tc = time.time()
+    outcomes = []
+    while time.time() - tc < seconds:
+        i = req("textDocument/references", REFS)
+        got = None
+        end = time.time() + 2
+        while time.time() < end:
+            try:
+                m = q.get(timeout=max(0.01, end - time.time()))
+            except queue.Empty:
+                break
+            if m is None:
+                break
+            if m.get("id") == i and "method" not in m:
+                got = m
+                break
+            log(m)
+        if got is None:
+            kind = "timeout"
+        elif "error" in got:
+            kind = "ERR:" + got["error"]["message"][:30]
+        else:
+            kind = f"OK n={len(got['result'] or [])}"
+        outcomes.append((round(time.time() - tc, 3), kind))
+        time.sleep(0.01)
+    prev = None
+    for t, kind in outcomes:
+        if kind != prev:
+            print(f"   {label} t+{t:.3f}s {kind}")
+            prev = kind
+    return outcomes
+
+
+if a.scenario == "stale-after-watched-change":
+    print(
+        "=== b.go loses the call on disk + didChangeWatchedFiles(b.go), then references every 10ms"
+    )
+    write("b.go", "package fixture\n\nfunc Caller() {}\n")
+    notify(
+        "workspace/didChangeWatchedFiles",
+        {"changes": [{"uri": uri + "/b.go", "type": 2}]},
+    )
+    watch_references("single", 1.2)
+    pump(1)
+    print(
+        "=== b.go gets the call back on disk + 20 didChangeWatchedFiles(b.go) 30ms apart, references every 10ms"
+    )
+    write("b.go", B_GO)
+    tb = time.time()
+    sent = 0
+
+    def burst_tick():
+        global sent
+        if sent < 20 and time.time() - tb >= sent * 0.03:
+            notify(
+                "workspace/didChangeWatchedFiles",
+                {"changes": [{"uri": uri + "/b.go", "type": 2}]},
+            )
+            sent += 1
+
+    tc = time.time()
+    outcomes = []
+    while time.time() - tc < 1.2:
+        burst_tick()
+        i = req("textDocument/references", REFS)
+        got = None
+        end = time.time() + 2
+        while time.time() < end:
+            burst_tick()
+            try:
+                m = q.get(timeout=0.005)
+            except queue.Empty:
+                continue
+            if m is None:
+                break
+            if m.get("id") == i and "method" not in m:
+                got = m
+                break
+            log(m)
+        kind = (
+            "timeout"
+            if got is None
+            else ("ERR" if "error" in got else f"OK n={len(got['result'] or [])}")
+        )
+        outcomes.append((round(time.time() - tc, 3), kind))
+        time.sleep(0.01)
+    print(f"   burst: {sent} notifications sent, last at t+{(sent - 1) * 0.03:.2f}s")
+    prev = None
+    for t, kind in outcomes:
+        if kind != prev:
+            print(f"   burst t+{t:.3f}s {kind}")
+            prev = kind
 
 if a.scenario == "reload-window":
     poll("comment", GOOD + "// touched\n")

@@ -116,17 +116,25 @@ def reader():
                 return
             hdr += c
         n = int(hdr.split(b"Content-Length:")[1].split(b"\r\n")[0])
-        q.put(json.loads(p.stdout.read(n)))
+        m = json.loads(p.stdout.read(n))
+        m["_recv"] = (
+            time.time()
+        )  # receive time, for correlating a message with a change
+        q.put(m)
 
 
 threading.Thread(target=reader, daemon=True).start()
 seq = [0]
 
 
+send_lock = threading.Lock()
+
+
 def send(m):
     b = json.dumps(m).encode()
-    p.stdin.write(b"Content-Length: %d\r\n\r\n" % len(b) + b)
-    p.stdin.flush()
+    with send_lock:
+        p.stdin.write(b"Content-Length: %d\r\n\r\n" % len(b) + b)
+        p.stdin.flush()
 
 
 def notify(method, params):
@@ -238,6 +246,7 @@ def poll(label, content, method="textDocument/references", params=None):
         log(m)
     tc = time.time()
     go_mod_changed(content)
+    t_notified = time.time()
     if a.did_change_before_request:
         a_go_version[0] += 1
         notify(
@@ -285,9 +294,12 @@ def poll(label, content, method="textDocument/references", params=None):
                     "gopls exited before publishing diagnostics for go.mod"
                 )
             log(m)
-            if m.get("method") == "textDocument/publishDiagnostics" and m["params"][
-                "uri"
-            ].endswith("/go.mod"):
+            if (
+                m.get("method") == "textDocument/publishDiagnostics"
+                and m["params"]["uri"].endswith("/go.mod")
+                and m["_recv"]
+                >= t_notified  # not one still arriving for an earlier change
+            ):
                 break
         print(f"   go.mod diagnostics arrived at t+{time.time() - tc:.3f}s")
     outcomes = []
@@ -451,31 +463,35 @@ if a.scenario == "stale-after-watched-change":
         "=== b.go gets the call back on disk + 20 didChangeWatchedFiles(b.go) 30ms apart, references every 10ms"
     )
     write("b.go", B_GO)
-    tb = time.time()
-    sent = 0
+    send_times = []
 
-    def burst_tick():
-        global sent
-        if sent < 20 and time.time() - tb >= sent * 0.03:
+    def burst():
+        # 20 notifications 30ms apart, on their own thread so that a slow request cannot
+        # bunch them up; the actual send times are reported below.
+        for k in range(20):
+            while (d := tb + k * 0.03 - time.time()) > 0:
+                time.sleep(d)
             notify(
                 "workspace/didChangeWatchedFiles",
                 {"changes": [{"uri": uri + "/b.go", "type": 2}]},
             )
-            sent += 1
+            send_times.append(time.time() - tb)
 
-    tc = time.time()
+    tb = time.time()
+    burst_thread = threading.Thread(target=burst, daemon=True)
+    burst_thread.start()
+
+    tc = tb
     outcomes = []
     while time.time() - tc < 1.2:
-        burst_tick()
         i = req("textDocument/references", REFS)
         got = None
         end = time.time() + 2
         while time.time() < end:
-            burst_tick()
             try:
-                m = q.get(timeout=0.005)
+                m = q.get(timeout=max(0.01, end - time.time()))
             except queue.Empty:
-                continue
+                break
             if m is None:
                 raise SystemExit("gopls exited: EOF on stdout")
             if m.get("id") == i and "method" not in m:
@@ -489,7 +505,12 @@ if a.scenario == "stale-after-watched-change":
         )
         outcomes.append((round(time.time() - tc, 3), kind))
         time.sleep(0.01)
-    print(f"   burst: {sent} notifications sent, last at t+{(sent - 1) * 0.03:.2f}s")
+    burst_thread.join(timeout=2)
+    deviation = max(abs(s - k * 0.03) for k, s in enumerate(send_times))
+    print(
+        f"   burst: {len(send_times)} notifications sent 30ms apart, last at t+{send_times[-1]:.3f}s, "
+        f"max deviation from schedule {deviation * 1000:.1f}ms"
+    )
     prev = None
     for t, kind in outcomes:
         if kind != prev:

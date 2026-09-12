@@ -126,14 +126,10 @@ threading.Thread(target=reader, daemon=True).start()
 seq = [0]
 
 
-send_lock = threading.Lock()
-
-
 def send(m):
     b = json.dumps(m).encode()
-    with send_lock:
-        p.stdin.write(b"Content-Length: %d\r\n\r\n" % len(b) + b)
-        p.stdin.flush()
+    p.stdin.write(b"Content-Length: %d\r\n\r\n" % len(b) + b)
+    p.stdin.flush()
 
 
 def notify(method, params):
@@ -246,6 +242,11 @@ def poll(label, content, method="textDocument/references", params=None):
     # Sampled before the write, so that the change's own diagnostic cannot be excluded below.
     tc = time.time()
     go_mod_changed(content)
+    # The diagnostics for a healthy go.mod are the same (empty) for every change, so a
+    # diagnostic cannot be matched to a change by content, and gopls sends no acknowledgement
+    # for didChangeWatchedFiles. The barrier below therefore takes the first go.mod diagnostic
+    # received after the change, and the count printed at the end shows whether exactly one
+    # arrived for this change (a straggler from an earlier change would show as 2).
     gomod_diagnostics = [0]
 
     def note(m):
@@ -430,11 +431,16 @@ if a.scenario == "break-later":
         request_and_wait("textDocument/references", REFS)
 
 
-def sample_references(label, seconds, interval, start=None):
+def sample_references(label, seconds, interval, start=None, scheduled=()):
     """Send references on Target every `interval` seconds from fixed deadlines (not after the
     previous answer, so a slow answer does not move the next request), match the answers by
-    id, and print the runs of outcomes in send order, stamped with the send time."""
+    id, and print the runs of outcomes in send order, stamped with the send time.
+
+    `scheduled` is a list of (offset, callable) sent from the same loop at their offsets; one
+    due at the same time as a request goes first, so the order of the messages is fixed."""
     start = start or time.time()
+    scheduled = sorted(scheduled)
+    s = 0
     sent = []  # (id, send offset), in send order
     answers = {}
 
@@ -454,15 +460,21 @@ def sample_references(label, seconds, interval, start=None):
     pending = set()
     n = 0
     while True:
-        due = start + n * interval
-        if due >= start + seconds:
+        due_request = start + n * interval if n * interval < seconds else None
+        due_scheduled = start + scheduled[s][0] if s < len(scheduled) else None
+        if due_request is None and due_scheduled is None:
             break
+        due = min(d for d in (due_request, due_scheduled) if d is not None)
         now = time.time()
         if now < due:
             try:
                 take(q.get(timeout=due - now))
             except queue.Empty:
                 pass
+            continue
+        if due_scheduled is not None and due_scheduled <= due:
+            scheduled[s][1]()
+            s += 1
             continue
         i = req("textDocument/references", REFS)
         pending.add(i)
@@ -507,21 +519,16 @@ if a.scenario == "stale-after-watched-change":
         )
         send_times.append(time.time() - tb)
 
-    def burst():
-        # Notifications 2..20, 30ms apart from the first, on their own thread so that a slow
-        # request cannot bunch them up; the actual send times are reported below.
-        for k in range(1, 20):
-            while (d := tb + k * 0.03 - time.time()) > 0:
-                time.sleep(d)
-            notify_b_changed()
-
     tb = time.time()
     notify_b_changed()  # the first one before any request, so no request precedes it
-    burst_thread = threading.Thread(target=burst, daemon=True)
-    burst_thread.start()
-    outcomes = sample_references("burst", 1.2, 0.01, start=tb)
-    burst_thread.join(timeout=2)
-    if burst_thread.is_alive() or len(send_times) != 20:
+    outcomes = sample_references(
+        "burst",
+        1.2,
+        0.01,
+        start=tb,
+        scheduled=[(k * 0.03, notify_b_changed) for k in range(1, 20)],
+    )
+    if len(send_times) != 20:
         raise SystemExit(
             f"burst did not complete: {len(send_times)} of 20 notifications sent"
         )

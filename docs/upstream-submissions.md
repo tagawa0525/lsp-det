@@ -553,7 +553,7 @@ So the two things that remain are small: no `$/cancelRequest` is sent after the 
 
 opcode81 は 15:07〜15:54 UTC の間に #2004 → #2003 の順で読み、どちらも「実際に踏んだのか」を最初に問うた。読んで書いた issue は、実測を添えても "not an actual issue" になりうる。そもそも Serena に期待した役割は、下流の被験者（ADR 0010 M7）と、状態を読む消費者（本文書「位置づけ」）であり、(b) の 4 件は研究報告の副産物で本筋ではなかった。残す価値があったのは LSP 準拠と誠実さに関わる #2005 / #2006 で、どちらも第三者が修正 PR を出している。#1988 の issue（下）は要件の一覧ではなく、**実測と実害**（tsls の `references` が `[]` を成功として返す事例、ドッグフーディング第 6 回でエージェントが使われている関数を消した事例）を中心に据える。
 
-2026-09-14 時点の次: #1988 への返信と issue の草案を書いて確認に出す。翌日、issue は予備にして返信で答えることに改めた（次の節）。#2003 と #2004 は閉じた。#2004 の修正は #2030 に任せる。
+2026-09-14 時点の次: #1988 への返信と issue の草案を書いて確認に出す。翌日、issue は予備にして返信で答えることに改め、出す前に試作と再現で確かめ（[research/serena-request-path-state-prototype.md](research/serena-request-path-state-prototype.md)）、そのうえで返信した（次の節）。#2003 と #2004 は閉じた。#2004 の修正は #2030 に任せる。次: 返信への反応を待つ。issue を求められたら予備の草案を出す。催促はしない。
 
 ### Serena: #1988 への返信（草案。2026-09-15、未提出）と issue（予備）
 
@@ -563,7 +563,7 @@ opcode81 の返信（「Serena: 提出後の反応（2026-09-15）」）への�
 
 #### #1988 への返信
 
-**未提出。** 2026-09-15 JST に、この会話の文脈を持たないサブエージェントに事実の箇条書きだけを渡して起草させ（既存の草案も研究報告も読ませない。相手の語と普通の英語だけ、完全な文、比喩なし、進捗を盛らない、構成は自分で決める）、ユーザーの指摘で 3 点を直した版: (1) lsp-det の信号の説明は相手の adapter が同じものを読んでいるので「違いは読んだ結果の使い方だけ」の 3 文に縮める、(2) 18 サーバーの信号の一覧（corpus.md）の申し出は落とす、(3) 13 ファイルと 12 project の出どころ（共有パッケージ 1 + それを使うパッケージ 12 + app 1。13 = app のファイル + 各パッケージの入口 1 つ、12 project = 各パッケージの tsconfig）を明記する。事実は [research/serena-request-path-state-prototype.md](research/serena-request-path-state-prototype.md) と一致することを確認済み（c8827191 の時点で tsls の adapter が `$/progress` を `do_nothing` で捨てていたことも履歴で確認）。
+**提出済み（2026-09-14 20:29 UTC、JST では 09-15。[コメント](https://github.com/oraios/serena/pull/1988#issuecomment-5670324283)）。** 出す直前にリンク先の生存（fork の枝 `b7a7093d`、#23331 / #23362 / #1937 / #1978 / #2007 は open、#1858 は closed）と、上流 main（`18fa47bf`）に `_wait_for_cross_file_references_if_needed()` の呼び出しが残っていることを確かめた。2026-09-15 JST に、この会話の文脈を持たないサブエージェントに事実の箇条書きだけを渡して起草させ（既存の草案も研究報告も読ませない。相手の語と普通の英語だけ、完全な文、比喩なし、進捗を盛らない、構成は自分で決める）、ユーザーの指摘で 3 点を直した版: (1) lsp-det の信号の説明は相手の adapter が同じものを読んでいるので「違いは読んだ結果の使い方だけ」の 3 文に縮める、(2) 18 サーバーの信号の一覧（corpus.md）の申し出は落とす、(3) 13 ファイルと 12 project の出どころ（共有パッケージ 1 + それを使うパッケージ 12 + app 1。13 = app のファイル + 各パッケージの入口 1 つ、12 project = 各パッケージの tsconfig）を明記する。事実は [research/serena-request-path-state-prototype.md](research/serena-request-path-state-prototype.md) と一致することを確認済み（c8827191 の時点で tsls の adapter が `$/progress` を `do_nothing` で捨てていたことも履歴で確認）。
 
 ````markdown
 Thank you for the answers, and for merging the PR.

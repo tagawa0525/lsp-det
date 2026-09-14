@@ -563,22 +563,42 @@ opcode81 の返信（「Serena: 提出後の反応（2026-09-15）」）への�
 
 #### #1988 への返信
 
-**未提出。ユーザーの決定（2026-09-15 JST）: 出す前に、提案する方法（基底が状態を要求のたびに見る）で #1937 / #1978 の症状が実際に消えることを試作と再現で確かめる。** 返信の "This is the shape behind #1937, #1858, #1923, #1978, and #2007" は「同じ形と読んだ」であって検証ではなく、検証済みなのは #2007 の 1 行（probe で `[]` → 例外）だけ。読んだだけの主張は今週 2 件却下された。検証の計画と結果は [research/serena-request-path-state-prototype.md](research/serena-request-path-state-prototype.md)（これから書く）。
-
-長い版（約 680 語）はユーザーが「長すぎて読む気がしない」と却下。要点だけの版に縮め、ユーザーの意図（2026-09-15）を最初の答えの芯に置いた: 「サーバー固有では」への答えは「今はそのとおりで、だから SolidLSP の adapter がある。本来は各サーバーが同じ言葉を話すべきで、それが目標。lsp-det はそれまでのつなぎ」。約 390 語。長い版の材料は issue の予備（下）に残す。ユーザーの修正（同日）: rust-analyzer は「足しつつある」ではなく「提案している」（#23331 は返答あり、PR #23362 は未マージ）。プロキシは「同意して取り下げる」ではなく、そもそも提案するものではない。「クライアントが状態を持てば lsp-det は不要」は誤り——SolidLSP はクライアントで、状態を知ることはできず推定するだけ。adapter の写しも lsp-det と同じ橋で、到達点はサーバー自身の報告。「SolidLSP が本当のサーバーならよかった」は相手に取れる行動がないので書かない。**相手に出すリンクは英語の文書に限る**（この返信の `readiness-vocabulary-corpus.md` は英語が正。日本語の報告を出すなら先に英訳し、日本語版を `.ja.md` にリネームする）。
+**未提出。** 2026-09-15 JST に、この会話の文脈を持たないサブエージェントに事実の箇条書きだけを渡して起草させ（既存の草案も研究報告も読ませない。相手の語と普通の英語だけ、完全な文、比喩なし、進捗を盛らない、構成は自分で決める）、ユーザーの指摘で 3 点を直した版: (1) lsp-det の信号の説明は相手の adapter が同じものを読んでいるので「違いは読んだ結果の使い方だけ」の 3 文に縮める、(2) 18 サーバーの信号の一覧（corpus.md）の申し出は落とす、(3) 13 ファイルと 12 project の出どころ（共有パッケージ 1 + それを使うパッケージ 12 + app 1。13 = app のファイル + 各パッケージの入口 1 つ、12 project = 各パッケージの tsconfig）を明記する。事実は [research/serena-request-path-state-prototype.md](research/serena-request-path-state-prototype.md) と一致することを確認済み（c8827191 の時点で tsls の adapter が `$/progress` を `do_nothing` で捨てていたことも履歴で確認）。
 
 ````markdown
-Thanks. Short answers, since this PR is merged.
+Thank you for the answers, and for merging the PR.
 
-> Isn't this highly server-specific?
+**How lsp-det holds cross-file requests**
 
-Today, yes — that is exactly why SolidLSP has an adapter per server and lsp-det has a mapping per server, each reading that server's own signals (pyright's "Found N source files" log line, typescript-language-server's `$/progress` tokens and its "[tsserver] Exited" line, rust-analyzer's `experimental/serverStatus`, …). It should not have to be. Every one of those signals says the same two things — is the index complete, is the server functional — and what I am after is servers saying so in one vocabulary: I have proposed a `ready: bool` next to `health` in rust-analyzer's `experimental/serverStatus` (rust-lang/rust-analyzer#23331, PR #23362), and a draft proposal for LSP itself exists (its shape will follow feedback from implementations like SolidLSP). Until then someone has to map; lsp-det does it as a proxy and reports `unknown` where a server emits nothing, SolidLSP does it in adapters. What comes out of the mapping is not server-specific: one state per server, `{health, readiness}`, and one rule — cross-file requests wait while not `ready`, fail at once while `health` is `error`, pass through when `unknown`; nothing else is held; no timers.
+It reads the same indicators your adapters already read; for typescript-language-server, the `$/progress` tokens and the "[tsserver] Exited" log line. The difference is only in what happens with the result. lsp-det keeps it as a state — whether the server is ready, and whether it is functioning — and checks that state before every cross-file request; requests such as `references` wait while the server is not ready and fail immediately while it is broken, and single-file requests such as `hover` are never delayed.
 
-> how it could be added to SolidLSP
+**On the proxy**
 
-The mapping already exists in your adapters, and so does the seam: `_wait_for_cross_file_references_if_needed()` runs before every cross-file request. What is missing is that it consults a one-shot latch (`_has_waited_for_cross_file_references`, default `sleep(2)`) instead of a state. Smallest change: adapters keep the server's latest "ready / broken" state, updated from the handlers they already have; the base request path checks it on every cross-file request. This is the shape behind #1937, #1858, #1923, #1978, and #2007 (tsserver dead → `references` returns `[]`).
+I agree that an intermediate proxy process should be avoided, and I do not ask for it to be included in Serena. The proxy is a stopgap. What I want is for each language server to report, in a common form, whether indexing has finished and whether it is functioning. I have proposed this to rust-analyzer (discussion in rust-lang/rust-analyzer#23331, PR rust-lang/rust-analyzer#23362, which adds `ready: bool` to `experimental/serverStatus`; it is not merged). A proposal for the LSP itself is still a draft, and its form is not decided.
 
-Hook withdrawn; the seam is enough. The proxy is not the proposal and never was meant to be. lsp-det is a bridge until servers speak for themselves — and so is the mapping in your adapters; the difference is only where it runs. Until servers do speak, the least either bridge can do is consult the state on every request rather than once. I can bring the measurements, an inventory of which signals each of the 18 servers actually emits (plus a desk survey of the 70 SolidLSP supports: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/readiness-vocabulary-corpus.md), and tests for whatever boundary you choose. Happy to open an issue if you want to track it.
+**How this could be done in SolidLSP without a new hook**
+
+I withdraw the request for a `_wait_for_initial_readiness()` hook. SolidLSP already has a place on the request path that can do this. On `main` at 403ad0a5, the base class calls `_wait_for_cross_file_references_if_needed()` immediately before sending each definition, implementation and references request, and an adapter can override it. The default implementation checks `_has_waited_for_cross_file_references`, calls `sleep(2)` on the first call only, and sets the flag; the flag is never reset. The typescript-language-server adapter overrides it and, on the first call only, waits until its `_active_progress_tokens` set is empty; on later calls it returns immediately because of the flag. The flag and the `sleep(2)` came in with commit c8827191 (2025-09-18, "fix(swift-lsp): improve CI stability with enhanced delays and retry logic"); at that time the adapter did not read `$/progress`.
+
+The change I propose is that this method consults the adapter's readiness state on every call, not only on the first one. The event handlers can stay as local closures; the method only needs to read the state they already maintain.
+
+**What I measured**
+
+I reproduced oraios/serena#1937 (TypeScript: `find_referencing_symbols` returns partial results from the second call on). The setup is a generated pnpm-style monorepo with one shared package, 12 packages that import it (each with its own tsconfig, so each is a separate tsserver project), and one app that imports all 12; the shared package has no tsconfig of its own, the root has no solution tsconfig, and a file of the app is kept open. The complete answer for a symbol in the shared package is 13 files: the app file and one file in each of the 12 packages. A `find_referencing_symbols` call issued within 100 ms of the previous one returns 1 of those 13 files, 30 times out of 30. The result is the same with typescript-language-server 5.3.0 + TypeScript 5.9.3 and with the reporter's 5.1.3 + TypeScript 6.0.3.
+
+I then added 8 lines to the typescript-language-server adapter: in `_wait_for_cross_file_references_if_needed()`, call `wait_for_indexing()` whenever `_active_progress_tokens` is not empty, even after the flag is set. With this change, 35 of 36 calls return the complete 13 files. The branch is https://github.com/tagawa0525/serena/tree/request-path-consults-state. oraios/serena#1978 already proposes the same change, so I will not open a PR for it.
+
+The cost is this. A call on which the wait is triggered takes about 0.4 s, which is the time tsserver needs to reload the 12 package projects; `main` answers the same call in 10 ms with the wrong result. Calls during which no reload is running take 10–20 ms, the same as `main`. The one miss in 36 has a known cause: tsserver's first `$/progress` notification arrives a few ms after `didOpen`, and the check sometimes runs before it.
+
+My open PR oraios/serena#2007 adds a check at the top of the same method for a different case: it detects that tsserver has exited, so that a `references` request after the crash does not return `[]` as a success.
+
+One limit: the request-path approach does not cover Metals (the "second call" version of oraios/serena#1858). A `references` request immediately after creating and opening a new file does not include the new reference; one second later it does. At that moment the server has not started working yet (its first `$/progress` arrives 135 ms after `didOpen`), so there is nothing in the adapter's state to consult. Closing that window requires either a timed wait or the server itself holding the request.
+
+**What I can provide**
+
+- The fixture generator and the probe used for the reproduction above.
+- Tests, once it is decided what the base class holds and what each adapter supplies.
+- A tracking issue, if you would like one.
 ````
 
 #### issue（予備。相手が追跡用に欲しいと言ったら出す）

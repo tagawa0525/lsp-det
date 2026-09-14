@@ -563,20 +563,20 @@ opcode81 の返信（「Serena: 提出後の反応（2026-09-15）」）への�
 
 #### #1988 への返信
 
-長い版（約 680 語）はユーザーが「長すぎて読む気がしない」と却下。要点だけの版に縮め、ユーザーの意図（2026-09-15）を最初の答えの芯に置いた: 「サーバー固有では」への答えは「今はそのとおりで、だから SolidLSP の adapter がある。本来は各サーバーが同じ言葉を話すべきで、それが目標。lsp-det はそれまでのつなぎ」。約 270 語。長い版の材料は issue の予備（下）に残す。
+長い版（約 680 語）はユーザーが「長すぎて読む気がしない」と却下。要点だけの版に縮め、ユーザーの意図（2026-09-15）を最初の答えの芯に置いた: 「サーバー固有では」への答えは「今はそのとおりで、だから SolidLSP の adapter がある。本来は各サーバーが同じ言葉を話すべきで、それが目標。lsp-det はそれまでのつなぎ」。約 270 語。長い版の材料は issue の予備（下）に残す。ユーザーの修正（同日）: rust-analyzer は「足しつつある」ではなく「提案している」（#23331 は返答あり、PR #23362 は未マージ）。プロキシは「同意して取り下げる」ではなく、そもそも提案するものではない。**相手に出すリンクは英語の文書に限る**（この返信の `readiness-vocabulary-corpus.md` は英語が正。日本語の報告を出すなら先に英訳し、日本語版を `.ja.md` にリネームする）。
 
 ````markdown
 Thanks. Short answers, since this PR is merged.
 
 > Isn't this highly server-specific?
 
-Today, yes — that is exactly why SolidLSP has an adapter per server and lsp-det has a mapping per server, each reading that server's own signals (pyright's "Found N source files" log line, typescript-language-server's `$/progress` tokens and its "[tsserver] Exited" line, rust-analyzer's `experimental/serverStatus`, …). It should not have to be. Every one of those signals says the same two things — is the index complete, is the server functional — and what I am after is servers saying so in one vocabulary: rust-analyzer is adding `ready: bool` to `experimental/serverStatus` (rust-lang/rust-analyzer#23362), and a draft proposal for LSP itself exists (its shape will follow feedback from implementations like SolidLSP). Until then someone has to map; lsp-det does it as a proxy and reports `unknown` where a server emits nothing, SolidLSP does it in adapters. What comes out of the mapping is not server-specific: one state per server, `{health, readiness}`, and one rule — cross-file requests wait while not `ready`, fail at once while `health` is `error`, pass through when `unknown`; nothing else is held; no timers.
+Today, yes — that is exactly why SolidLSP has an adapter per server and lsp-det has a mapping per server, each reading that server's own signals (pyright's "Found N source files" log line, typescript-language-server's `$/progress` tokens and its "[tsserver] Exited" line, rust-analyzer's `experimental/serverStatus`, …). It should not have to be. Every one of those signals says the same two things — is the index complete, is the server functional — and what I am after is servers saying so in one vocabulary: I have proposed a `ready: bool` next to `health` in rust-analyzer's `experimental/serverStatus` (rust-lang/rust-analyzer#23331, PR #23362), and a draft proposal for LSP itself exists (its shape will follow feedback from implementations like SolidLSP). Until then someone has to map; lsp-det does it as a proxy and reports `unknown` where a server emits nothing, SolidLSP does it in adapters. What comes out of the mapping is not server-specific: one state per server, `{health, readiness}`, and one rule — cross-file requests wait while not `ready`, fail at once while `health` is `error`, pass through when `unknown`; nothing else is held; no timers.
 
 > how it could be added to SolidLSP
 
 The mapping already exists in your adapters, and so does the seam: `_wait_for_cross_file_references_if_needed()` runs before every cross-file request. What is missing is that it consults a one-shot latch (`_has_waited_for_cross_file_references`, default `sleep(2)`) instead of a state. Smallest change: adapters keep the server's latest "ready / broken" state, updated from the handlers they already have; the base request path checks it on every cross-file request. This is the shape behind #1937, #1858, #1923, #1978, and #2007 (tsserver dead → `references` returns `[]`).
 
-Hook withdrawn; the seam is enough. Proxy: agreed, not proposing one — lsp-det is the bridge until servers speak for themselves, and becomes unnecessary wherever they, or the client, hold the state. I can bring the measurements, an inventory of which signals each of the 18 servers actually emits (plus a desk survey of the 70 SolidLSP supports: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/readiness-vocabulary-corpus.md), and tests for whatever boundary you choose. Happy to open an issue if you want to track it.
+Hook withdrawn; the seam is enough. The proxy is not the proposal and never was meant to be: lsp-det is the bridge until servers speak for themselves, and becomes unnecessary wherever they, or the client, hold the state. I can bring the measurements, an inventory of which signals each of the 18 servers actually emits (plus a desk survey of the 70 SolidLSP supports: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/readiness-vocabulary-corpus.md), and tests for whatever boundary you choose. Happy to open an issue if you want to track it.
 ````
 
 #### issue（予備。相手が追跡用に欲しいと言ったら出す）
@@ -585,7 +585,7 @@ Hook withdrawn; the seam is enough. Proxy: agreed, not proposing one — lsp-det
 
 内容は上の返信と同じ材料を issue の形に組み直したもの（Summary → What happens today (measured) 1〜5 → What I am asking (a)(b)(c) と規則 5 つ → What I can bring → Later, not now → Context）。返信に入れなかった項目は次の 3 つで、出すときに足す: エージェントの実害の事例（Claude Code 経由。第 6 回のドッグフーディング: `didOpen` の 1 ms 後の `findReferences` で宣言だけを得て export された関数を消し `tsc` が TS2305、gopls で新規ファイルの参照 0 件で消し `go build` 失敗。Serena ではないことを明記）、仕様（https://github.com/tagawa0525/lsp-det/blob/main/docs/spec/server-state.md。9 章がクライアント側の規則）、サーバー自身が報告し始めている例（rust-analyzer の `ready: bool`、rust-lang/rust-analyzer#23331 / #23362）と LSP 本体への提案（ドラフト。こうした実装からの反応の後に形を決める、と明記）、その先（`ready` が保証する範囲の宣言、`didChangeWatchedFiles` 後の鮮度）。
 
-出す前に当て直すこと（返信・issue 共通）: 行番号が `main` の最新で動いていないか、#1978 と #2007 が動いていないか、リンク先。
+出す前に当て直すこと（返信・issue 共通）: 行番号が `main` の最新で動いていないか、#1978 と #2007 が動いていないか、リンク先。issue で `serena-integration-measurement.md` 等の日本語の報告にリンクするなら、先に英訳して日本語版を `.ja.md` にリネームする（英語が正の文書にする。ADR 0017 の追補が要る）。
 
 ### LSP 本体: microsoft/language-server-protocol#511 へのコメントと proposal issue
 

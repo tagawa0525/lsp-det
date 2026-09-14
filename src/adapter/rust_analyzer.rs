@@ -16,10 +16,14 @@
 //! 6 item 5, it is mapped onto `health`, not `readiness`.
 //!
 //! `quiescent` is trivially `true` before the first load (nothing is in flight
-//! yet), so it alone cannot say `initializing`. The proposed field addition
-//! (docs/upstream-submissions.md, preparation 4) has rust-analyzer report
-//! `readiness` itself next to `quiescent`; when the field is present it is
-//! the server's own word and is read instead of `quiescent`.
+//! yet), so it alone cannot say that nothing is loaded. The proposed field
+//! addition (docs/upstream-submissions.md, preparation 4; the shape the
+//! maintainers asked for in rust-lang/rust-analyzer#23331) has rust-analyzer
+//! report `ready: bool` next to `quiescent`: `false` while the workspaces are
+//! being (re)loaded, `true` once they are, including while caches are primed
+//! (priming only makes answers faster). When the field is present it is the
+//! server's own word and is read instead of `quiescent`; the derivation from
+//! `quiescent` differs from it only in also holding during priming.
 
 use serde::Deserialize;
 
@@ -40,42 +44,22 @@ struct ServerStatusParams {
     health: UpstreamHealth,
     quiescent: bool,
     /// The proposed field. Absent from every released rust-analyzer so far. When present it
-    /// must be a value of the protocol: `null` is not read as "absent" (that would fall back to
-    /// `quiescent`, the reading the field exists to replace).
-    #[serde(default, deserialize_with = "present_readiness")]
-    readiness: Option<UpstreamReadiness>,
+    /// must be a boolean: `null` is not read as "absent" (that would fall back to `quiescent`,
+    /// the reading the field exists to replace).
+    #[serde(default, deserialize_with = "present_bool")]
+    ready: Option<bool>,
     #[serde(default)]
     message: Option<String>,
 }
 
-/// The values of the proposed `readiness` field. Received as a dedicated enum for the same
-/// reason as [`UpstreamHealth`]: a value outside the protocol fails to parse and the status is
-/// not read.
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum UpstreamReadiness {
-    Initializing,
-    Indexing,
-    Ready,
-}
-
-/// Deserializes a `readiness` that is present. Only a missing field is `None` (via
-/// `#[serde(default)]`); a present `null` or anything else outside the protocol is an error.
-fn present_readiness<'de, D>(deserializer: D) -> Result<Option<UpstreamReadiness>, D::Error>
+/// Deserializes a `ready` that is present. Only a missing field is `None` (via
+/// `#[serde(default)]`); a present `null` or anything other than a boolean is an error, and the
+/// status is not read (the same reasoning as a `health` outside the protocol).
+fn present_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    UpstreamReadiness::deserialize(deserializer).map(Some)
-}
-
-impl From<UpstreamReadiness> for Readiness {
-    fn from(value: UpstreamReadiness) -> Self {
-        match value {
-            UpstreamReadiness::Initializing => Readiness::Initializing,
-            UpstreamReadiness::Indexing => Readiness::Indexing,
-            UpstreamReadiness::Ready => Readiness::Ready,
-        }
-    }
+    bool::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -145,7 +129,9 @@ const DEFAULT_WORKSPACE_SYMBOL_LIMIT: u64 = 128;
 /// Whether this is a file rust-analyzer registers for watching via
 /// `client/registerCapability` (`**/*.rs`, `**/Cargo.{toml,lock}`, `**/rust-analyzer.toml`).
 /// A Created / Deleted event for one of these is always followed by `quiescent: false → true`
-/// (per the addendum to research/disk-edit-propagation-measurement.md).
+/// (per the addendum to research/disk-edit-propagation-measurement.md), and by
+/// `ready: false → true` when the upstream reports that field (priming only starts once the
+/// load is quiescent again, so every such round trip passes through the load).
 fn is_watched_file(uri: &str) -> bool {
     // Judged by the last component of the URI. A Windows file URI can arrive `\\`-separated.
     let name = uri.rsplit(['/', '\\']).next().unwrap_or(uri);
@@ -273,9 +259,13 @@ impl Mapping for RustAnalyzerAdapter {
             health = Health::Error;
         }
 
-        // The server's own readiness when it reports one; derived from `quiescent` otherwise.
-        let readiness = match params.readiness {
-            Some(readiness) => readiness.into(),
+        // The server's own word when it reports one: `ready` is `false` while the workspaces
+        // are being (re)loaded and `true` once they are, including while caches are primed
+        // (answers are then slower, not incomplete). Derived from `quiescent` otherwise, which
+        // also holds during priming.
+        let readiness = match params.ready {
+            Some(true) => Readiness::Ready,
+            Some(false) => Readiness::Indexing,
             None if params.quiescent => Readiness::Ready,
             None => Readiness::Indexing,
         };
@@ -419,39 +409,51 @@ mod tests {
     }
 
     #[test]
-    fn prefers_the_readiness_field_when_the_upstream_sends_one() {
-        // The proposed field addition (docs/upstream-submissions.md, preparation 4): a
-        // rust-analyzer that reports `readiness` itself says `initializing` while nothing is
-        // loaded yet, where `quiescent: true` alone would read as ready.
+    fn prefers_the_ready_field_when_the_upstream_sends_one() {
+        // The proposed field addition (docs/upstream-submissions.md, preparation 4, in the
+        // shape the maintainers asked for in rust-lang/rust-analyzer#23331): a rust-analyzer
+        // that reports `ready` itself says `false` while nothing is loaded yet, where
+        // `quiescent: true` alone would read as ready.
         let mut adapter = RustAnalyzerAdapter::new();
-        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"readiness":"initializing","message":null}}"#;
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"ready":false,"message":null}}"#;
         let state = interpret(&mut adapter, body).unwrap();
-        assert_eq!(state.readiness, Readiness::Initializing);
+        assert_eq!(state.readiness, Readiness::Indexing);
         assert_eq!(state.health, Health::Ok);
     }
 
     #[test]
-    fn ignores_a_status_whose_readiness_is_not_a_value_of_this_protocol() {
+    fn a_ready_status_is_ready_even_while_caches_are_primed() {
+        // `quiescent` is `false` while rust-analyzer primes its caches, but the workspaces are
+        // loaded and answers are complete (only slower): the server's own `ready: true` wins
+        // over the derivation from `quiescent`.
+        let mut adapter = RustAnalyzerAdapter::new();
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":false,"ready":true,"message":null}}"#;
+        let state = interpret(&mut adapter, body).unwrap();
+        assert_eq!(state.readiness, Readiness::Ready);
+    }
+
+    #[test]
+    fn ignores_a_status_whose_ready_is_not_a_boolean() {
         // Like a health value outside the protocol: the status is not read at all rather than
         // guessed from `quiescent` (spec chapter 8.1 reasoning applies to both axes).
-        for claimed in ["unknown", "warming"] {
+        for claimed in ["\"true\"", "1", "\"ready\""] {
             let mut adapter = RustAnalyzerAdapter::new();
             let body = format!(
-                r#"{{"method":"experimental/serverStatus","params":{{"health":"ok","quiescent":true,"readiness":"{claimed}"}}}}"#
+                r#"{{"method":"experimental/serverStatus","params":{{"health":"ok","quiescent":true,"ready":{claimed}}}}}"#
             );
             assert!(
                 interpret(&mut adapter, &body).is_none(),
-                "must not accept readiness {claimed} from the upstream"
+                "must not accept ready {claimed} from the upstream"
             );
         }
     }
 
     #[test]
-    fn ignores_a_status_whose_readiness_is_null() {
-        // `null` is not a value of the protocol either. Reading it as "absent" would fall back
-        // to `quiescent`, which is the reading the field exists to replace.
+    fn ignores_a_status_whose_ready_is_null() {
+        // `null` is not a boolean either. Reading it as "absent" would fall back to
+        // `quiescent`, which is the reading the field exists to replace.
         let mut adapter = RustAnalyzerAdapter::new();
-        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"readiness":null}}"#;
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"ready":null}}"#;
         assert!(interpret(&mut adapter, body).is_none());
     }
 

@@ -127,3 +127,29 @@ fn is_fully_ready(&self) -> bool {
 
 - 時刻はこのマシンと 1 クレートの fixture のもの。`initializing` → `indexing` → `ready` の並びは構造由来だが、各段の長さは規模依存
 - 空の場所で最初の通知が `quiescent: true` になるのは `health` が初期値と違うからで、他の警告（設定エラー等）でも同じ経路で出る。プロジェクトがあれば最初の通知は `quiescent: false` である
+
+## メンテナの案 `ready: bool` の実測（2026-09-14、rust-lang/rust-analyzer#23331 の返答を受けて）
+
+rust-lang/rust-analyzer#23331 に ChayimFriedman2 が 2026-09-13 に返答した: 案 A を簡略化した **`ready: bool` の単一 field**。ワークスペースの読み込み中は `false`、読み込み後は `true` で、キャッシュの priming 中も `true`（priming はクライアントに影響しない。応答が遅くなることはあっても、応答は正しいまま）。上の「field 版」（3 値の `readiness`）はこの形に置き換える。
+
+### 境界のソース上の裏づけ
+
+- `is_quiescent()`（`reload.rs`）が見るのは VFS の一括ロード、ワークスペースの取得、ビルドスクリプト、proc macro、discover、設定の版で、priming は入っていない。これが「読み込み中」の全部
+- priming（`crates/ide-db/src/prime_caches.rs`）の冒頭: 「rust-analyzer は lazy で、頼まれるまで何も計算しない。最初の goto definition が遅くなるのを避けるための、キャッシュの事前計算」。要求は priming の有無に関係なく同じ salsa の問い合わせをその場で計算するので、答えの集合は変わらない。`is_fully_ready()` の注釈の「priming 中は salsa のロックを持つので応答できない」は遅延であって不完全ではない。メンテナの主張はソースと一致する
+- したがって `ready = !nothing_loaded_yet && is_quiescent()`（fork `tagawa0525/rust-analyzer` の `server-status-ready` 7d79ab49d1、上流 master f312032107 起点。`reload.rs` の `is_ready`）。3 値版との差は priming 中が `indexing` から `ready` になることだけ。初期の `last_reported_status` は `ready: false` で、通知の回数は変わらない。`cargo xtask tidy` と lib tests 99 件が通る
+
+### 結果
+
+`scripts/rust-analyzer/status-probe.py`（`ready` の field を持つ版は `quiescent: true` かつ `ready: true` で打ち切る）で 2 回ずつ。`serverInfo.version` は `0.0.0 (7d79ab49d1 2026-09-14)`。
+
+| 条件                      | `ready` 版（`server-status-ready` 7d79ab49d1）                                                                                                                                                                                                                                            |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 クレートのプロジェクト  | 11〜14 ms `{ok, quiescent: false, ready: false}` → 0.22〜0.25 s `{warning, quiescent: false, ready: false}`（sysroot の警告。前回と同じく `rust-src` がない） → 0.56〜0.60 s `{warning, quiescent: false, ready: true}`（priming 中） → 1 ms 後 `{warning, quiescent: true, ready: true}` |
+| Cargo.toml のない空の場所 | 11 ms `{warning, quiescent: true, ready: false, "Failed to discover workspace. …"}` → 12 ms `{error, quiescent: true, ready: true, "… Failed to load workspaces."}`                                                                                                                       |
+
+### 読み取り
+
+- **自明な静穏は `ready: false` として出る**。空の場所の最初の通知は `quiescent: true` のまま `ready: false`。field の目的はここにあり、2 値でも失われない
+- **priming の窓**（`quiescent: false, ready: true`）はこの fixture では 1 ms。`quiescent` から導く写像（field のない配布版）はこの窓も保留し、field を読む写像は保留しない。どちらも仕様 6 章 1 項（`ready` の間の答えは完全）を破らない。窓の長さは規模依存で、大きなワークスペースでは field を読む方が早く解放される
+- **`initializing` と `indexing` の区別は field にない**。観測者の初期状態 `initializing` は最初の通知（1 クレートでも 11 ms）までで、以後 `ready: false` は `indexing`。gopls / Dart / clangd の写像が最初の begin を `indexing` にするのと同じ扱い。下流の判定はどちらも保留なので、実害はない
+- **lsp-det 側**: `src/adapter/rust_analyzer.rs` は field があれば `true` → `ready`、`false` → `indexing`、なければ従来どおり `quiescent`。受け入れ条件は `tests/upstream_dev.rs` の `rust_analyzer_reports_ready_in_server_status`（fork の版で通過。素の版は field がなく失敗）。fork の版で準拠テスト 7.1 / 7.2 / 7.3 も通る（`spec_7_2_2_rust_analyzer_returns_the_declared_limit_for_workspace_symbol` だけは `TESTED_VERSIONS` にない版なので宣言がなく失敗。`scripts/upstream/README.ja.md` の想定どおり）。仕様 10 章の対応表は配布版の語彙（`quiescent`）を書いており、field が上流に入って配布されるまで動かさない

@@ -23,9 +23,9 @@
 //! - typescript-language-server: exit when tsserver is killed by a signal, as it already does
 //!   for a non-zero exit code (upstream #302 / #305). Once it does, a dead tsserver reaches
 //!   lsp-det as the exit of the upstream (spec chapter 8) instead of empty answers
-//! - rust-analyzer (the alternative to speaking the protocol): report `readiness` as a field of
+//! - rust-analyzer (the alternative to speaking the protocol): report `ready` as a field of
 //!   `experimental/serverStatus`. Once it does, the mapping reads the field instead of deriving
-//!   readiness from `quiescent`, and `initializing` before the first load is the server's own word
+//!   readiness from `quiescent`, and "not ready before the first load" is the server's own word
 
 mod support;
 
@@ -209,15 +209,17 @@ fn rust_analyzer_speaks_the_server_state_protocol() {
     assert_upstream_speaks_the_protocol("rust-analyzer", &[], project.root.clone());
 }
 
-/// rust-analyzer, the field-addition alternative (docs/upstream-submissions.md, preparation 4):
-/// `experimental/serverStatus` carries `readiness` next to `quiescent`. `quiescent` means "no
+/// rust-analyzer, the field-addition alternative (docs/upstream-submissions.md, preparation 4,
+/// in the shape the maintainers asked for in rust-lang/rust-analyzer#23331):
+/// `experimental/serverStatus` carries `ready: bool` next to `quiescent`. `quiescent` means "no
 /// background work is pending", which is trivially `true` before the first load (nothing is in
-/// flight yet), so a client reading it as "ready" is wrong exactly then; the field spells out
-/// `initializing` / `indexing` / `ready`. Passes once every status notification carries the field consistently with
-/// `quiescent` and the first load ends in `ready`.
+/// flight yet), so a client reading it as "ready" is wrong exactly then; `ready` is `false`
+/// until the workspaces are loaded, and stays `true` while caches are primed (answers are then
+/// slower, not incomplete). Passes once every status notification carries the field as a
+/// boolean, the first one says the load is not done, and the first load ends in `ready: true`.
 #[test]
 #[ignore = "acceptance condition for an upstream change. Local only. Put target/upstream/bin in PATH and run cargo test --test upstream_dev -- --ignored"]
-fn rust_analyzer_reports_readiness_in_server_status() {
+fn rust_analyzer_reports_ready_in_server_status() {
     let project = support::TempCargoProject::with_cross_file_reference("upstream-dev");
     let mut upstream =
         ConformanceClient::start(&direct("rust-analyzer", &[], project.root.clone()));
@@ -234,27 +236,20 @@ fn rust_analyzer_reports_readiness_in_server_status() {
         let status = upstream
             .await_notification_within("experimental/serverStatus", remaining)
             .unwrap_or_else(|| {
-                panic!("the first load did not end in readiness ready within 60 seconds: {seen:?}")
+                panic!("the first load did not end in ready within 60 seconds: {seen:?}")
             });
-        let readiness = status["readiness"]
-            .as_str()
-            .unwrap_or_else(|| panic!("the status carries no readiness field: {status}"))
-            .to_string();
-        let quiescent = status["quiescent"]
+        let ready = status["ready"]
             .as_bool()
-            .unwrap_or_else(|| panic!("the status carries no quiescent field: {status}"));
-        assert!(
-            ["initializing", "indexing", "ready"].contains(&readiness.as_str()),
-            "readiness is not a value of the protocol: {status}"
-        );
-        // ready is quiescent, and non-quiescent is never ready (quiescent while initializing is
-        // the trivial quiescence before the first load, which is the point of the field).
-        assert!(
-            (readiness == "ready") == quiescent || readiness == "initializing",
-            "readiness and quiescent disagree: {status}"
-        );
-        seen.push(readiness.clone());
-        if readiness == "ready" {
+            .unwrap_or_else(|| panic!("the status carries no boolean ready field: {status}"));
+        // The first notification is sent while the workspaces are still being fetched. This is
+        // the moment `quiescent` alone misleads (it is trivially `true` before the first load,
+        // nothing being in flight yet), and the moment the field exists for: `ready` separates
+        // that trivial quiescence from a loaded workspace.
+        if seen.is_empty() {
+            assert!(!ready, "the first status already claims ready: {status}");
+        }
+        seen.push(status.clone());
+        if ready {
             break;
         }
     }

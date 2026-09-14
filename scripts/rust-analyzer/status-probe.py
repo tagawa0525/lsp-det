@@ -4,7 +4,7 @@
 What does `experimental/serverStatus` say between `initialized` and the end of the first
 load? Drives a real rust-analyzer over stdio on a one-crate project (or on an empty
 directory) and prints every status notification with a timestamp. Stops at the first status
-that is quiescent with the load settled (`health` error, or `readiness` ready when the build
+that is quiescent with the load settled (`health` error, or `ready` true when the build
 reports the field, or plain quiescence otherwise). Nothing is judged by time.
 
 usage: status-probe.py RUST_ANALYZER [--empty]
@@ -60,7 +60,9 @@ def settled(params, empty):
         return False
     if empty:
         return params.get("health") == "error"
-    return params.get("readiness", "ready") == "ready"
+    # A build that reports `ready` (rust-lang/rust-analyzer#23331) is settled once it is
+    # quiescent with the workspaces loaded; `ready` alone comes earlier (priming still running).
+    return params.get("ready", True) is True
 
 
 def main():

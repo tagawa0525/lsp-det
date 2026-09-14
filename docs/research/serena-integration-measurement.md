@@ -119,16 +119,18 @@ opcode81 が #2004 に「実際にどう遭遇したのか。サーバーが本�
 
 pyright 1.1.412、solidlsp 直接（lsp-det なし）、要求の打ち切りを 8 秒に設定（`SolidLanguageServer.create(..., timeout=8)`。Serena の既定は 235 秒で、窓の長さがそれに比例するだけ）。`request_references` を 1 回 → 保留中の要求がない状態で pyright のプロセス（自分の子孫全部）を SIGKILL → stdout の読み取りスレッド（`LSP-stdout-reader:python`）の終了を join で待ち、そのキャンセルのログが "Cancelling 0 pending" だったことを確かめる（sleep では、読み取りスレッドの終了が遅れたときに要求 #2 が保留中に登録されてキャンセルされる競合が残る）→ `request_references` をもう 1 回。fixture は `a.py`（`def target()`）と `b.py`（import と呼び出し）。
 
-### 結果
+### 結果（最初の実行。kill の後に 1 秒 sleep してから要求 #2 を送る版の probe。#2004 への返信に載せた数字はこれ）
 
-| 時刻    | 出来事                                                                                                                                                              |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 4.21 s  | `references` #1 → 2 箇所                                                                                                                                            |
-| 4.34 s  | SIGKILL（保留なし）                                                                                                                                                 |
-| 4.53 s  | 読み取りスレッドが終了し（同期版では kill から 7 ms）、"Cancelling 0 pending language server requests"（`ls_process.py:629` → `326-335`。キャンセルはこの一度だけ） |
-| 5.34 s  | `ls.is_running()` は False                                                                                                                                          |
-| 5.53 s  | `references` #2: "Failed to write to stdin: [Errno 32] Broken pipe" が 2 回（`didOpen` と要求本体。`ls_process.py:664-667` で `log.error` して return）             |
-| 13.34 s | 素の `TimeoutError`（"Request timed out (timeout=8.0)"。打ち切りいっぱい）。`SolidLSPException` ではないので `tools_base.py:383` の再起動の判定に届かない           |
+| 時刻    | 出来事                                                                                                                                                    |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4.21 s  | `references` #1 → 2 箇所                                                                                                                                  |
+| 4.34 s  | SIGKILL（保留なし）                                                                                                                                       |
+| 4.53 s  | 読み取りスレッドが終了し、"Cancelling 0 pending language server requests"（`ls_process.py:629` → `326-335`。キャンセルはこの一度だけ）                    |
+| 5.34 s  | `ls.is_running()` は False                                                                                                                                |
+| 5.53 s  | `references` #2: "Failed to write to stdin: [Errno 32] Broken pipe" が 2 回（`didOpen` と要求本体。`ls_process.py:664-667` で `log.error` して return）   |
+| 13.34 s | 素の `TimeoutError`（"Request timed out (timeout=8.0)"。打ち切りいっぱい）。`SolidLSPException` ではないので `tools_base.py:383` の再起動の判定に届かない |
+
+同期版（checkout 済みの probe。sleep の代わりに読み取りスレッドの join と "Cancelling 0 pending" の確認）での再実行は、2.32 s SIGKILL → 2.33 s 読み取りスレッド終了（kill から 7 ms）と "Cancelling 0 pending" → 2.33 s 要求 #2（"Failed to write to stdin" が 2 回）→ 10.33 s 素の `TimeoutError`（8.00 s）。1 秒の間が消えただけで形は同じ。
 
 ### 読み
 

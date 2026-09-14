@@ -16,6 +16,8 @@ oraios/serena#2003 (打ち切りが素の `TimeoutError` で、`$/cancelRequest`
 
 import argparse
 import json
+import os
+import signal
 import subprocess
 import sys
 import threading
@@ -72,6 +74,7 @@ class Proxy:
         self.lock = threading.Lock()
         self.client_out = sys.stdout.buffer
         self.client_closed = threading.Event()
+        self.done = threading.Event()  # どちらかの側が閉じた
 
     def client_to_server(self) -> None:
         client_in = sys.stdin.buffer
@@ -99,15 +102,19 @@ class Proxy:
             server_in.write(message)
             server_in.flush()
         self.client_closed.set()
+        self.drop_held()
+        try:
+            server_in.close()
+        except OSError:
+            pass
+        self.done.set()
+
+    def drop_held(self) -> None:
         with self.lock:
             timers = list(self.held.values())
             self.held.clear()
         for timer in timers:
             timer.cancel()
-        try:
-            server_in.close()
-        except OSError:
-            pass
 
     def server_to_client(self) -> None:
         server_out = self.server.stdout
@@ -116,6 +123,8 @@ class Proxy:
             message = read_message(server_out)
             if message is None:
                 log("server closed")
+                self.drop_held()
+                self.done.set()
                 break
             payload = body_of(message)
             response_id = payload.get("id") if "method" not in payload else None
@@ -167,8 +176,14 @@ def main() -> None:
     if not command:
         parser.error("server command required after --")
 
+    # 自分のプロセスグループで起動し、終了時はグループごと落とす (typescript-language-server の
+    # 子の tsserver のように、ラッパーだけ kill しても残る子孫を漏らさない)。
     server = subprocess.Popen(
-        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=sys.stderr
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=sys.stderr,
+        start_new_session=True,
     )
     log(f"started {command} pid={server.pid}")
     proxy = Proxy(server, args.method, args.delay)
@@ -176,14 +191,29 @@ def main() -> None:
     down = threading.Thread(target=proxy.server_to_client, daemon=True)
     up.start()
     down.start()
-    up.join()
+    proxy.done.wait()  # クライアントが閉じたか、サーバーが閉じたか
+    if server.stdin:
+        try:
+            server.stdin.close()
+        except OSError:
+            pass
     try:
         server.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        log("server did not exit after stdin closed; killing it")
-        server.kill()
+        log("server did not exit after stdin closed; killing its process group")
+        os.killpg(server.pid, signal.SIGKILL)
         server.wait()
     log(f"server exited with {server.returncode}")
+    # サーバー側が先に閉じた場合、クライアントには stdout の EOF で伝える。上りのスレッドは
+    # stdin の readline で止まっていて、通常の終了処理は stdin のロックを取れず abort するので
+    # (daemon スレッド)、ログを流してから os._exit で終える。
+    try:
+        sys.stdout.buffer.close()
+    except OSError:
+        pass
+    if up.is_alive():
+        LOG.flush()
+        os._exit(0)
 
 
 if __name__ == "__main__":

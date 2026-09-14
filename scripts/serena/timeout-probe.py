@@ -15,9 +15,10 @@ reference/serena の環境で動かす:
 
 環境変数:
     REQUEST_TIMEOUT  要求の打ち切り秒数 (既定 5)
-    DELAY            プロキシが要求を止める秒数 (既定 8。REQUEST_TIMEOUT より長くする)
+    DELAY            プロキシがサーバーの応答を止める秒数 (既定 8。REQUEST_TIMEOUT より長くする)
 
-終了コードは常に 0 (受け入れ条件はまだ置かない。観測のみ)。
+観測できた実行の終了コードは 0 (受け入れ条件はまだ置かない。観測のみ)。DELAY が
+REQUEST_TIMEOUT 以下なら打ち切りが起きないので、起動前に拒んで 0 以外で終わる。
 観測の記録は docs/research/serena-integration-measurement.md。
 """
 

@@ -528,7 +528,7 @@ If you would rather treat this as part of #2003 (the bare `TimeoutError` not rea
 
 「打ち切った応答で LS の再起動の経路に乗せるのは筋が通らない。打ち切りは待つと決めた時間を超えただけで、短い打ち切りや大きなコードベースの重い要求では正常でありうる。LS に再起動を要する問題があることを意味しない。実際にどんな問題に遭遇したのか、なぜ再起動が適切だと思うのか」。
 
-相手の読みは題名（"bypasses the language-server restart path"）から来ていて、その読みでは相手が正しい。出した文面の提案は「`SolidLSPException` の子クラスにして**ツール層が**打ち切りを terminated と見なすかを決められるようにする（health probe の後で等）+ `$/cancelRequest` を送る」で、無条件の再起動ではないが、題名がそう読めるのはこちらの落ち度。#2004 と同じく、実際に踏んだのではなくソースを読んで書いたもの。ユーザーの指示で測ってから返信し（[research/serena-integration-measurement.md](research/serena-integration-measurement.md) の「(b-1) の実測」。応答が打ち切りより遅れる状況で、素の `TimeoutError`、`$/cancelRequest` なし、遅れた応答は放棄した `Request` を pop して静かに消える）、再起動の部分を取り下げて not planned で閉じた（2026-09-14、[コメント](https://github.com/oraios/serena/issues/2003#issuecomment-5667011948)）。出した文面の "the timed-out request keeps running in the server" は、cancel を送らないことからの推論で、実測（pyright は 4 ms で答え終わっている）の結論ではない。PR #107 のレビューで指摘され、報告書には測れたこと（cancel なし、`Request` の残留）と推論を分けて書いた。閉じた issue なので文面の訂正は出していない。閉じた理由: 本筋（Serena を状態を読む消費者にする）に寄与しない粗に相手の注意を使わせない。
+相手の読みは題名（"bypasses the language-server restart path"）から来ていて、その読みでは相手が正しい。出した文面の提案は「`SolidLSPException` の子クラスにして**ツール層が**打ち切りを terminated と見なすかを決められるようにする（health probe の後で等）+ `$/cancelRequest` を送る」で、無条件の再起動ではないが、題名がそう読めるのはこちらの落ち度。#2004 と同じく、実際に踏んだのではなくソースを読んで書いたもの。ユーザーの指示で測ってから返信し（[research/serena-integration-measurement.md](research/serena-integration-measurement.md) の「(b-1) の実測」。応答が打ち切りより遅れる状況で、素の `TimeoutError`、`$/cancelRequest` なし、遅れた応答は放棄した `Request` を pop して静かに消える）、再起動の部分を取り下げて not planned で閉じた（2026-09-14、[コメント](https://github.com/oraios/serena/issues/2003#issuecomment-5667011948)）。出した文面の "the timed-out request keeps running in the server" は、cancel を送らないことからの推論で、実測（pyright は 4 ms で答え終わっている）の結論ではない。PR #107 のレビューで指摘され、報告書には測れたこと（cancel なし、`Request` の残留）と推論を分けて書き、ユーザーの指示で投稿済みのコメントも訂正した（2026-09-14 16:26 UTC。当該の一文を測ったことに直し、末尾に *Edit* で訂正の旨を添えた。下の文面は訂正後）。閉じた理由: 本筋（Serena を状態を読む消費者にする）に寄与しない粗に相手の注意を使わせない。
 
 出した文面:
 
@@ -544,7 +544,9 @@ I measured what actually happens (solidlsp directly, pyright 1.1.412, request ti
 15.47 s  a second references request times out the same way; documentSymbol right after it succeeds in 0.00 s — the server is fine throughout
 ```
 
-So the two things that remain are small: the timed-out request keeps running in the server because no `$/cancelRequest` is sent (a single-threaded server serves the next request behind it), and the abandoned `Request` stays in `_pending_requests` until the server eventually answers. Neither is what the title claims. Closing this; the two measured points are recorded here in case they become relevant.
+So the two things that remain are small: no `$/cancelRequest` is sent after the timeout, and the abandoned `Request` stays in `_pending_requests` until the server eventually answers. Neither is what the title claims. Closing this; the two measured points are recorded here in case they become relevant.
+
+*Edit: the earlier wording of the paragraph above said the timed-out request "keeps running in the server". That was an inference from the missing `$/cancelRequest`, not something this measurement shows — pyright had answered in 4 ms and it was the proxy holding the response. Corrected to what was measured.*
 ````
 
 #### 09-14 の 3 件から読めること

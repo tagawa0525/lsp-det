@@ -108,7 +108,7 @@ lsp-det を載せる形は「`SolidLanguageServer` の子クラスを持つ Pyth
 ### 一般化してはならない点
 
 - fixture は前回と同じ 2 ファイル。上の「一般化してはならない点」はそのまま当てはまる
-- #1978 と #1988 は OPEN で、マージ時に形が変わりうる。特に #1988 の `ExternalLanguageServerId` の引数と entry point の group 名はマージ後に読み直す
+- 再測定の時点（2026-09-09）で #1978 と #1988 は OPEN だった。#1988 は 2026-09-12 21:16 UTC にマージされた（`403ad0a5`。「(b-2) の実測」の節）。マージされた形は上の「#1988 の registry の形」のとおりで、`ExternalLanguageServerId` の引数と entry point の group 名は変わっていない。#1978 は OPEN のまま
 - (b) の 4 件はコードを読んで所在を確かめたもの。動かして測ったのは (a) と、oraios/serena#2004 の問い返しを受けて測った (b-2)（下の節）だけ
 
 ## (b-2) の実測（2026-09-15、oraios/serena#2004 の問い返しへの答え）
@@ -136,12 +136,16 @@ pyright 1.1.412、solidlsp 直接（lsp-det なし）、要求の打ち切りを
 
 - 相手の主張は、プロセスが死んだ時点で要求が保留中の場合には正しい。読み取りスレッドが `_cancel_pending_requests` でその要求に `LanguageServerTerminatedException` を配る。#2004 の元の文面はこの場合まで「打ち切りまで待つ」と読めたので、返信で狭めた
 - キャンセルは読み取りスレッドが終わる瞬間の一度きり。その後に `_send_request_once`（`ls_process.py:337-349`）で登録された要求は誰も失敗させない。保留が空のときに死に、同じツール呼び出しの中で次の要求を送る場面（`include_info` 付きの `find_symbol` の hover のループ、`open_file` → 要求の並び）で起きる。`_ensure_functional_ls`（`ls_manager.py`）はツール呼び出しの間でしか `is_running()` を見ない
-- 直す場所は書き込みの失敗か、`_send_request_once` の冒頭の `is_running()`。どちらでも要求を `LanguageServerTerminatedException` で失敗させれば再起動の経路（`tools_base.py:383-389`）に乗る。probe の受け入れ条件はこれ（要求 #2 が打ち切りの前に `is_language_server_terminated()` の真な `SolidLSPException` になり、それが #2 の後のキャンセルによるもの）。第三者の [oraios/serena#2030](https://github.com/oraios/serena/pull/2030) がまさにこの形（下）
+- 直す場所は書き込みの失敗か、`_send_request_once` の冒頭の `is_running()`。どちらでも要求を `LanguageServerTerminatedException` で失敗させれば再起動の経路（`tools_base.py:383-389`）に乗る。probe の受け入れ条件はこれ（要求 #2 が打ち切りの前に `is_language_server_terminated()` の真な `SolidLSPException` になること。直し方は問わない。読み取りスレッドのキャンセルが #2 を拾う競合は、kill の後のキャンセルが "0 pending" 1 回だったことの検査で除く）。第三者の [oraios/serena#2030](https://github.com/oraios/serena/pull/2030) がまさにこの形（下）
 - 返信の文面は [../upstream-submissions.md](../upstream-submissions.md) の「Serena: 提出後の反応（2026-09-15）」
 
 ### #2030 の枝での結果
 
 [oraios/serena#2030](https://github.com/oraios/serena/pull/2030)（feiiiiii5、2026-09-13 01:42 UTC、OPEN。`_send_payload` の書き込み失敗で `_cancel_pending_requests(LanguageServerTerminatedException("Stdio send error", self.ls_id, cause=e))` を呼ぶ。偽の stdin のテスト 3 件付き）の head `6e9d8dcc` を checkout して同じ probe を走らせると、要求 #2 は 0.00 秒で `SolidLSPException`（`is_language_server_terminated()` が真、原因 `LanguageServerTerminatedException`）になり、コード 0 で終わる。書き込み失敗のたびにキャンセルが走る（`didOpen` で "Cancelling 0 pending"、要求本体で "Cancelling 1 pending"）。
+
+### 帰趨（2026-09-14 15:54 UTC）
+
+返信の 30 分後に opcode81 が "Not an actual issue. Closing." で #2004 を閉じた。窓（保留が空のときに死に、同じツール呼び出しの中で次の要求を送る）は実測どおり存在するが、実運用で踏む頻度は低いという判断と読む。反論はしない。#2030 は第三者の PR なので、その帰趨も相手に任せる。
 
 ### 一般化してはならない点
 

@@ -499,11 +499,11 @@ PR oraios/serena#2007 と issue oraios/serena#2003〜#2006 に、メンテナか
 - #2007 の穴はこの latch そのもの。`TypeScriptServerCrashedError` は `is_language_server_terminated()` が偽なので再起動の経路には乗らない。`map_exception` は -32603 を言い換えるだけで失敗を握りつぶしてはいない。`workspace/symbol`（`ls.py:3122`）と rename（`ls.py:3149`）はこの経路の外
 - 「サーバー固有では」への答え: 半分はそのとおりで、lsp-det は 17 の写像で 18 のサーバー（pyright と basedpyright は 1 つ）。写像が読む pyright の "Found N source files" と typescript-language-server の `$/progress` は、Serena の adapter が待っているものと同じ信号。共通の半分（状態と、要求経路がそれを見る規則）だけがサーバーに依らない
 
-#### oraios/serena#2004: opcode81 の問い返しと返信（2026-09-14 / 15）
+#### oraios/serena#2004: opcode81 の問い返し、返信、クローズ（2026-09-14）
 
 問い返し（2026-09-14）: 「実際にどう遭遇したのか。観測したのか。サーバーが本当にいないなら読み取りスレッドが検知して要求をキャンセルする」。
 
-(b) は読んで見つけたもので測っていなかった（[research/serena-integration-measurement.md](research/serena-integration-measurement.md) の「一般化してはならない点」に明記済み）。相手の主張は保留中の要求については正しく、元の文面はその場合まで「打ち切りまで待つ」と読めた。残る場面（保留が空のときに死に、同じツール呼び出しの中で次の要求を送る）を測ったところ事実だった（同報告の「(b-2) の実測」。probe は `scripts/serena/dead-write-probe.py`）。ユーザーの承認のうえで 2026-09-15（JST。09-14 15:24 UTC）に返信した（[コメント](https://github.com/oraios/serena/issues/2004#issuecomment-5666371144)）。問い返しの前日（09-13 01:42 UTC）に第三者 feiiiiii5 が修正 PR [oraios/serena#2030](https://github.com/oraios/serena/pull/2030)（`_send_payload` の書き込み失敗で `_cancel_pending_requests(LanguageServerTerminatedException(...))`。偽の stdin のテスト 3 件）を出していて、返信の時点で見落としていた。probe をその枝に当てるとコード 0（要求 #2 は 0.00 秒で `LanguageServerTerminatedException`。同報告の「#2030 の枝での結果」）。読んだだけの主張は「読んだ」と書くか、測ってから出す。
+(b) は読んで見つけたもので測っていなかった（[research/serena-integration-measurement.md](research/serena-integration-measurement.md) の「一般化してはならない点」に明記済み）。相手の主張は保留中の要求については正しく、元の文面はその場合まで「打ち切りまで待つ」と読めた。残る場面（保留が空のときに死に、同じツール呼び出しの中で次の要求を送る）を測ったところ事実だった（同報告の「(b-2) の実測」。probe は `scripts/serena/dead-write-probe.py`）。ユーザーの承認のうえで 2026-09-15（JST。09-14 15:24 UTC）に返信した（[コメント](https://github.com/oraios/serena/issues/2004#issuecomment-5666371144)）。問い返しの前日（09-13 01:42 UTC）に第三者 feiiiiii5 が修正 PR [oraios/serena#2030](https://github.com/oraios/serena/pull/2030)（`_send_payload` の書き込み失敗で `_cancel_pending_requests(LanguageServerTerminatedException(...))`。偽の stdin のテスト 3 件）を出していて、返信の時点で見落としていた。probe をその枝に当てるとコード 0（要求 #2 は 0.00 秒で `LanguageServerTerminatedException`。同報告の「#2030 の枝での結果」）。返信の 30 分後（15:54 UTC）に opcode81 は "Not an actual issue. Closing." で閉じた。窓は事実だが影響は小さいという判断で、反論はしない。#2030 の帰趨も相手に任せる。読んだだけの主張は「読んだ」と書くか、測ってから出す。
 
 出した文面:
 
@@ -524,7 +524,17 @@ request #2:    "Failed to write to stdin: [Errno 32] Broken pipe" (twice: the di
 If you would rather treat this as part of #2003 (the bare `TimeoutError` not reaching the restart path), I am fine closing this one; the fix is the same either way — fail the request with `LanguageServerTerminatedException` when the write fails or when `is_running()` is already false, instead of letting it wait.
 ````
 
-次: #1988 への返信と issue の草案を書いて確認に出す（次の PR。#1988 はマージ済みなので、返信はそのスレッドに短く、本体は issue）。#2004 の修正は #2030 が既にあるので自前の PR は出さない。probe の結果を #2030 に添えるかはユーザーの判断。(b-1) の #2003 は反応待ち。
+#### oraios/serena#2003: opcode81 の反論（2026-09-14 15:51 UTC）
+
+「打ち切った応答で LS の再起動の経路に乗せるのは筋が通らない。打ち切りは待つと決めた時間を超えただけで、短い打ち切りや大きなコードベースの重い要求では正常でありうる。LS に再起動を要する問題があることを意味しない。実際にどんな問題に遭遇したのか、なぜ再起動が適切だと思うのか」。
+
+相手の読みは題名（"bypasses the language-server restart path"）から来ていて、その読みでは相手が正しい。出した文面の提案は「`SolidLSPException` の子クラスにして**ツール層が**打ち切りを terminated と見なすかを決められるようにする（health probe の後で等）+ `$/cancelRequest` を送る」で、無条件の再起動ではないが、題名がそう読めるのはこちらの落ち度。#2004 と同じく、実際に踏んだのではなくソースを読んで書いたもの。返信の方針はユーザーの判断待ち（案: 再起動の話は取り下げ、`$/cancelRequest` が送られず打ち切った要求がサーバーで走り続け、遅れた応答が未知の id として捨てられることに絞る。その前に probe で測る）。
+
+#### 09-14 の 3 件から読めること
+
+opcode81 は 15:07〜15:54 UTC の間に #2004 → #2003 の順で読み、どちらも「実際に踏んだのか」を最初に問うた。読んで書いた issue は、実測を添えても "not an actual issue" になりうる。#1988 の issue（下）は要件の一覧ではなく、**実測と実害**（tsls の `references` が `[]` を成功として返す事例、ドッグフーディング第 6 回でエージェントが使われている関数を消した事例）を中心に据える。
+
+次: #1988 への返信と issue の草案を書いて確認に出す（次の PR。#1988 はマージ済みなので、返信はそのスレッドに短く、本体は issue）。#2003 は返信の方針をユーザーに諮る。#2004 は閉じられ、修正は #2030 に任せる。
 
 ### LSP 本体: microsoft/language-server-protocol#511 へのコメントと proposal issue
 

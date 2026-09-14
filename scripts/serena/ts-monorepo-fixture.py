@@ -96,7 +96,7 @@ def main() -> None:
     if not 1 <= args.consumers <= args.files:
         parser.error("--consumers must be between 1 and --files")
     root = os.path.abspath(args.dir)
-    if os.path.exists(root):
+    if os.path.lexists(root):  # 壊れた symlink も含めて、あれば止まる
         if not args.force:
             parser.error(
                 f"{root} already exists; pass --force to replace it (it will be deleted)"
@@ -203,6 +203,8 @@ def main() -> None:
         refs = ([] if args.leaf_no_tsconfig else [{"path": "packages/leaf"}]) + [
             {"path": f"packages/{n}"} for n in names
         ]
+        if args.app:
+            refs.append({"path": "apps/web"})
         write(
             os.path.join(root, "tsconfig.json"),
             json.dumps({"files": [], "references": refs}, indent=2),

@@ -44,7 +44,7 @@ cbartens の報告（2026-08-26。Serena 1.7.0、typescript-language-server 5.1.
 | **10** | **同**                                                                     | **5.1.3 / 6.0.3** | **referencing_symbols** | **`apps/web/src/main.ts`**                 | **13, 1, 1, 13, 1, 13**（13 = app の project から見える全部。25 ではない） | **再現**     |
 | 11     | 同                                                                         | 5.3.0 / 5.9.3     | referencing_symbols     | 同                                         | 13, 1, 1, 13, 1, 13, 1, 13, 1, 13, 1                                       | 再現         |
 
-探索の #1〜4、7 では tsserver が referencing project を**最初の要求の中で同期的に**全部読み込んでから答える（`$/progress` が 9〜137 本、応答はその後）。#5、6、8 は tsserver が consumer の project を知る手段がなく（solution も、開かれたファイルもない）、時間が経っても直らない安定した嘘（0 件、または自分自身の 1 件）。これは #1937 の一過性の窓ではなく、Serena の待ち・latch・状態のどれを直しても変わらない。lsp-det の写像も同じ信号しか見ないので、この配置では `ready` のまま不完全な答えを通す（clangd の compilation database なしと同じ構造。信号がないことを読んで `unknown` にする余地があるかは別途）。
+探索の #1〜4、7 では tsserver が referencing project を**最初の要求の中で同期的に**全部読み込んでから答える（`$/progress` が 9〜137 本、応答はその後）。#5、6、8 は tsserver が consumer の project を知る手段がなく（solution も、開かれたファイルもない）、時間が経っても直らない安定した嘘（0 件、または自分自身の 1 件）。これは #1937 の一過性の窓ではなく、Serena の待ち・latch・状態のどれを直しても変わらない。lsp-det の写像も同じ信号しか見ないので、この配置では `ready` のまま不完全な答えを通す。#5 の配置で lsp-det（main `eab5f78`、tsls 5.3.0 + TS 5.9.3 = 保証を宣言する組）を挟んで測ると、`coverage` を宣言し、0.350 s に `{ok, ready}` になり、保留は一度もなく、6 回とも 0 件を通した。clangd の compilation database なしと同じ構造で、信号がないことを読んで `unknown` にする余地があるかは別途（仕様 8.1）。
 
 ## 再現した配置の機構
 

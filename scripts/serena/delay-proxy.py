@@ -160,7 +160,11 @@ class Proxy:
             try:
                 self.client_out.write(message)
                 self.client_out.flush()
-            except (BrokenPipeError, OSError):
+            except (
+                BrokenPipeError,
+                OSError,
+                ValueError,
+            ):  # ValueError: 閉じた後の write
                 self.client_closed.set()
 
 
@@ -201,7 +205,10 @@ def main() -> None:
         server.wait(timeout=5)
     except subprocess.TimeoutExpired:
         log("server did not exit after stdin closed; killing its process group")
-        os.killpg(server.pid, signal.SIGKILL)
+        try:
+            os.killpg(server.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass  # wait の直後に消えた
         server.wait()
     log(f"server exited with {server.returncode}")
     # サーバー側が先に閉じた場合、クライアントには stdout の EOF で伝える。上りのスレッドは

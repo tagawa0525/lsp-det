@@ -149,26 +149,27 @@ pyright 1.1.412、solidlsp 直接（lsp-det なし）、要求の打ち切りを
 
 ## (b-1) の実測（2026-09-14、oraios/serena#2003 の反論への答え）
 
-opcode81 が #2003 に「打ち切りで再起動の経路に乗せるのは筋が通らない。打ち切りは待つと決めた時間を超えただけで、大きなコードベースでは正常でありうる。実際に何が起きたのか」と反論した（2026-09-14 15:51 UTC）。(b-1) も読んで書いたもので、題名（"bypasses the language-server restart path"）は打ち切りを再起動の根拠にするように読め、その読みでは相手が正しい。返信の前に、生きているが遅いサーバーで実際に何が起きるかを測った。道具は `scripts/serena/delay-proxy.py`（指定したメソッドの要求だけを止めて他は素通しする stdio プロキシ）と `scripts/serena/timeout-probe.py`。checkout は `3bed94f3`、行番号は `403ad0a5`。
+opcode81 が #2003 に「打ち切りで再起動の経路に乗せるのは筋が通らない。打ち切りは待つと決めた時間を超えただけで、大きなコードベースでは正常でありうる。実際に何が起きたのか」と反論した（2026-09-14 15:51 UTC）。(b-1) も読んで書いたもので、題名（"bypasses the language-server restart path"）は打ち切りを再起動の根拠にするように読め、その読みでは相手が正しい。返信の前に、応答が打ち切りより遅れたときに実際に何が起きるかを測った。道具は `scripts/serena/delay-proxy.py`（指定したメソッドの要求は即座にサーバーへ渡し、その**応答**だけを止めて他は素通しする stdio プロキシ）と `scripts/serena/timeout-probe.py`。checkout は `3bed94f3`、行番号は `403ad0a5`。返信に載せた最初の実行は、要求をサーバーへ渡す**前**に止める版のプロキシだった。その版ではサーバーが要求を受け取っていないので「サーバーで計算が続く」は測れておらず（PR #107 のレビューの指摘）、応答側で止める版に作り直して測り直した。時系列は両版で同じ（止める位置が違うだけで、クライアントから見える形は変わらない）。
 
 ### 方法
 
-pyright 1.1.412、solidlsp 直接、要求の打ち切り 5 秒（`SolidLanguageServer.create(..., timeout=5)`）。`ls_base_cmd` を `python delay-proxy.py --delay 8 -- pyright-langserver` にし、プロキシが `textDocument/references` の要求を 8 秒止めてから pyright に流す。`request_references` → 打ち切り → 遅れた応答の到着を `_pending_requests` の変化で捉える → `request_references` をもう一度 → `request_document_symbols`。
+pyright 1.1.412、solidlsp 直接、要求の打ち切り 5 秒（`SolidLanguageServer.create(..., timeout=5)`）。`ls_base_cmd` を `python delay-proxy.py --delay 8 -- pyright-langserver` にし、プロキシが `textDocument/references` の要求を即座に pyright へ渡し、pyright の応答（4 ms で返る）を 8 秒止めてからクライアントに流す。`request_references` → 打ち切り → 遅れた応答の到着を `_pending_requests` の変化で捉える → `request_references` をもう一度 → `request_document_symbols`。
 
 ### 結果
 
 | 時刻    | 出来事                                                                                                                                                                                                                                                                                        |
 | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0.47 s  | `request_references` #1 開始。既定の latch（`ls.py:1624-1628`）が `sleep(2)` してから送信。`PyrightServer` は `_get_wait_time_for_cross_file_referencing` を上書きしていない                                                                                                                  |
-| 2.47 s  | プロキシが id=2 を保持                                                                                                                                                                                                                                                                        |
+| 2.47 s  | プロキシが id=2 を pyright へ渡し、pyright は 4 ms で応答。プロキシがその応答を保持                                                                                                                                                                                                           |
 | 7.47 s  | 素の `TimeoutError`（"Request timed out (timeout=5.0)"。2 + 5 秒）。`is_running()` は True。`$/cancelRequest` はプロキシに届かない（`cancel_request` は `lsp_requests.py:557` に定義があるだけで呼び出しがない）。`_pending_requests` に id=2 が残る（`get_result` の `Empty` は pop しない） |
-| 10.47 s | プロキシが解放 → pyright が即答 → 遅れた応答が id=2 を pop し、誰も読まない `Request` のキューに `on_result`（`ls_process.py:416-425`）。ログは出ない。#2003 に書いた「未知の id として捨てられる」は、`Request` が残っているので当たらない                                                   |
+| 10.47 s | プロキシが応答を解放 → 遅れた応答が id=2 を pop し、誰も読まない `Request` のキューに `on_result`（`ls_process.py:416-425`）。ログは出ない。#2003 に書いた「未知の id として捨てられる」は、`Request` が残っているので当たらない                                                              |
 | 15.47 s | `request_references` #2 も打ち切り（5.00 秒。latch は済み）。直後の `request_document_symbols` は 0.00 秒で成功                                                                                                                                                                               |
 
 ### 読み
 
 - 打ち切りはサーバーの健全性について何も語らない。相手の主張のとおりで、再起動の話は取り下げた
-- 残る事実は 2 つで、どちらも小さい。(1) `$/cancelRequest` を送らないので、打ち切った要求はサーバーで計算が続く（単一スレッドのサーバーでは次の要求がその後ろに並ぶ）。LSP では任意の機能。(2) 放棄した `Request` は応答が来るまで `_pending_requests` に残り、永久に来なければ残り続ける（メモリだけ）
+- 測れた事実は 2 つで、どちらも小さい。(1) 打ち切った後も `$/cancelRequest` を送らない（プロキシに届かない）。LSP では任意の機能。(2) 放棄した `Request` は応答が来るまで `_pending_requests` に残り、応答が来れば静かに消える
+- 測れていないこと。(a) 打ち切った要求の計算がサーバー側で続くか。pyright は 2 ファイルの fixture では 4 ms で答えるので、続く計算がそもそもない。「cancel を送らない以上、サーバーは止める術がない」は LSP の仕組みからの推論で、この実測の結論ではない。#2003 に出した文面はこの推論を "keeps running in the server" と事実のように書いていて、言い過ぎだった。(b) 永久に答えないサーバーで `_pending_requests` の項目が残り続けるか。プロキシは 8 秒後に流すので測っていない（ソースからは、pop するのは応答の到着だけ）
 - ツール層では素の `TimeoutError` は `tools_base.py` の `except Exception` で `ToolCallError("TimeoutError: Request timed out (timeout=235.0)")` になる。#2003 に書いた "Tool execution timed out after N seconds" は外側の `tool_timeout`（240 秒）の方で、内側の `ls_timeout`（235 秒）が先に来るので通常は出ない。これも不正確だった
 - 副産物: 起動時に "Found N source files" を待つ pyright でも、最初の横断要求は latch の `sleep(2)` を払う。起動時の待ちと要求経路の待ちが繋がっていないことの実例で、#1988 の issue の材料
 - 返信して not planned で閉じた（2026-09-14 16:10 UTC 頃。[コメント](https://github.com/oraios/serena/issues/2003#issuecomment-5667011948)。文面は [../upstream-submissions.md](../upstream-submissions.md)）
@@ -176,5 +177,5 @@ pyright 1.1.412、solidlsp 直接、要求の打ち切り 5 秒（`SolidLanguage
 ### 一般化してはならない点
 
 - pyright 1 つ、fixture 2 ファイル。`_send_payload` も `_send_request_once` も言語に依らない同じ関数だが、typescript-language-server では動かしていない
-- 「保留中に死ぬ」場合は測っていない（ソースから読める）。(b-1) では、本当に固まった（永久に答えない）サーバーは作っていない。プロキシは 8 秒後に流す
+- 「保留中に死ぬ」場合は測っていない（ソースから読める）。(b-1) では、本当に固まった（永久に答えない）サーバーも、打ち切り後も計算が続くサーバーも作っていない。プロキシは答え終わった応答を 8 秒止めるだけ
 - MCP は挟んでいない。要求の打ち切り（`ls_timeout`）はツール層の打ち切りから 5 秒引いたもの（`project.py:509`、`ls_timeout = tool_timeout - 5`。既定 240 → 235）なので、実運用で先に来るのは要求の打ち切り

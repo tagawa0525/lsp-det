@@ -528,7 +528,7 @@ If you would rather treat this as part of #2003 (the bare `TimeoutError` not rea
 
 「打ち切った応答で LS の再起動の経路に乗せるのは筋が通らない。打ち切りは待つと決めた時間を超えただけで、短い打ち切りや大きなコードベースの重い要求では正常でありうる。LS に再起動を要する問題があることを意味しない。実際にどんな問題に遭遇したのか、なぜ再起動が適切だと思うのか」。
 
-相手の読みは題名（"bypasses the language-server restart path"）から来ていて、その読みでは相手が正しい。出した文面の提案は「`SolidLSPException` の子クラスにして**ツール層が**打ち切りを terminated と見なすかを決められるようにする（health probe の後で等）+ `$/cancelRequest` を送る」で、無条件の再起動ではないが、題名がそう読めるのはこちらの落ち度。#2004 と同じく、実際に踏んだのではなくソースを読んで書いたもの。ユーザーの指示で測ってから返信し（[research/serena-integration-measurement.md](research/serena-integration-measurement.md) の「(b-1) の実測」。生きているが遅いサーバーで、素の `TimeoutError`、`$/cancelRequest` なし、遅れた応答は放棄した `Request` を pop して静かに消える）、再起動の部分を取り下げて not planned で閉じた（2026-09-14、[コメント](https://github.com/oraios/serena/issues/2003#issuecomment-5667011948)）。閉じた理由: 本筋（Serena を状態を読む消費者にする）に寄与しない粗に相手の注意を使わせない。
+相手の読みは題名（"bypasses the language-server restart path"）から来ていて、その読みでは相手が正しい。出した文面の提案は「`SolidLSPException` の子クラスにして**ツール層が**打ち切りを terminated と見なすかを決められるようにする（health probe の後で等）+ `$/cancelRequest` を送る」で、無条件の再起動ではないが、題名がそう読めるのはこちらの落ち度。#2004 と同じく、実際に踏んだのではなくソースを読んで書いたもの。ユーザーの指示で測ってから返信し（[research/serena-integration-measurement.md](research/serena-integration-measurement.md) の「(b-1) の実測」。応答が打ち切りより遅れる状況で、素の `TimeoutError`、`$/cancelRequest` なし、遅れた応答は放棄した `Request` を pop して静かに消える）、再起動の部分を取り下げて not planned で閉じた（2026-09-14、[コメント](https://github.com/oraios/serena/issues/2003#issuecomment-5667011948)）。出した文面の "the timed-out request keeps running in the server" は、cancel を送らないことからの推論で、実測（pyright は 4 ms で答え終わっている）の結論ではない。PR #107 のレビューで指摘され、報告書には測れたこと（cancel なし、`Request` の残留）と推論を分けて書いた。閉じた issue なので文面の訂正は出していない。閉じた理由: 本筋（Serena を状態を読む消費者にする）に寄与しない粗に相手の注意を使わせない。
 
 出した文面:
 

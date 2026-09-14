@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""生きているが遅い言語サーバーへの要求が打ち切られたとき、Serena (solidlsp) に何が見えるかを測る。
+"""要求への応答が打ち切りより遅れたとき、Serena (solidlsp) に何が見えるかを測る。
 
-oraios/serena#2003 の実測。delay-proxy.py で `textDocument/references` の要求だけを
-REQUEST_TIMEOUT より長く止め、(1) 呼び出し側に届く例外の型、(2) クライアントが
-`$/cancelRequest` を送るか (プロキシの stderr)、(3) 遅れて届いた応答の扱い
-(solidlsp のログ) と、その後の要求が普通に通るか、を見る。reference/serena の環境で
-動かす:
+oraios/serena#2003 の実測。delay-proxy.py が `textDocument/references` の要求を即座に
+サーバーへ渡し、サーバーの応答だけを REQUEST_TIMEOUT より長く止める (サーバーは要求を
+受け取って処理を終えている。クライアントから見れば「その要求だけ遅いサーバー」)。
+見るのは (1) 呼び出し側に届く例外の型、(2) クライアントが `$/cancelRequest` を送るか
+(プロキシの stderr)、(3) 遅れて届いた応答の扱い (`_pending_requests` の変化)、(4) その後の
+要求が普通に通るか。測れないもの: 打ち切った要求の計算がサーバー側で続くかどうか
+(pyright は 2 ファイルの fixture では即答するので、続く計算がそもそもない)。
+reference/serena の環境で動かす:
 
     cd reference/serena && uv run --frozen python ../../scripts/serena/timeout-probe.py \\
         python /path/to/repo
@@ -113,16 +116,26 @@ def main() -> None:
             deadline = time.time() + DELAY + 5.0
             while time.time() < deadline and any(i in pending for i in abandoned):
                 time.sleep(0.01)
-            log(
-                f"late response arrived at +{time.time() - t1:.2f} s from the request: "
-                f"pending request ids now {sorted(pending)} (the abandoned Request was popped "
-                f"and completed into a queue nobody reads; no log line is emitted)"
-            )
+            still_pending = [i for i in abandoned if i in pending]
+            if not abandoned:
+                log(
+                    "nothing was pending after the timeout (unexpected; the late-response observation is void)"
+                )
+            elif still_pending:
+                log(
+                    f"no late response within {DELAY + 5.0:.0f} s: request ids {still_pending} are still pending"
+                )
+            else:
+                log(
+                    f"late response arrived at +{time.time() - t1:.2f} s from the request: "
+                    f"pending request ids now {sorted(pending)} (the abandoned Request was popped "
+                    f"and completed into a queue nobody reads; no log line is emitted)"
+                )
             t2 = time.time()
             try:
                 refs2 = ls.request_references(rel, line, col)
                 log(
-                    f"references #2 -> {len(refs2)} locations after {time.time() - t2:.2f} s (held again by the proxy)"
+                    f"references #2 -> {len(refs2)} locations after {time.time() - t2:.2f} s (unexpected: its response should be held)"
                 )
             except Exception as e:  # noqa: BLE001
                 log(

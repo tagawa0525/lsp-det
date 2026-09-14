@@ -477,13 +477,13 @@ PR oraios/serena#2007 と issue oraios/serena#2003〜#2006 に、メンテナか
 
 関連して、vitalyruhl の [oraios/serena#2016](https://github.com/oraios/serena/pull/2016)（2026-09-11）が「registry の導入後、`ls_specific_settings` の string キーが失われ、設定した `ls_path` が起動前に消える」と報告し、opcode81 は 2026-09-12 に「`LanguageServerId` はもう `StrEnum` ではないので、キーは `get_key()` で引くのが正しい」と答えて force-push に取り込んだ。`faed2fd3` の `SolidLSPSettings.ls_specific_settings` は `dict[str | LanguageServerId, dict[str, Any]]` と注釈され、`get_ls_specific_settings()` は string キー（`ls_id.get_key()`）を引き、組み込みの `LanguageServerId` なら enum キーも引く（両方にあれば `ValueError`）という意図だが、`LanguageServerId` を `TYPE_CHECKING` の下でしか import しておらず `from __future__ import annotations` もないので、dataclass の field 注釈の評価で `solidlsp.settings` の import 自体が `NameError` になる。#1988 の CI（run 34689842034）は全 job がこの `NameError` で落ちている。#2016 は draft のまま OPEN。したがって「lsp-det の Serena 統合が依存する `ls_specific_settings.<language>.ls_base_cmd` の経路が #1988 のマージ後も string キーで残る」は作者の意図として読めるだけで、現 head では確認できない。マージされた版で確かめる。
 
-2026-09-12 時点の次: 返信はしない。翌日に返信が来て改めた（「Serena: 提出後の反応（2026-09-15）」）。#1988 がマージされたら、上流 HEAD で [research/serena-integration-measurement.md](research/serena-integration-measurement.md) の経路を再確認し、fork の `tsserver-crash-on-request-path` を rebase する。
+2026-09-12 時点の次: 返信はしない。同日 21:16 UTC（JST では 09-13）に返信が来て #1988 もマージされたので改めた（「Serena: 提出後の反応（2026-09-15）」）。
 
 ### Serena: 提出後の反応（2026-09-15）
 
-#### oraios/serena#1988: opcode81 の返信（2026-09-12）
+#### oraios/serena#1988: opcode81 の返信（2026-09-12 21:16 UTC）とマージ
 
-[返信](https://github.com/oraios/serena/pull/1988#issuecomment-5648743907)の要点。(1)「`references` を索引の完了まで保留する」はどう実現しているのか、サーバーごとに大きく違うのでは、という問い返し。(2) 質問 1（子クラスの新キーか `allow_override` か）は「実装を置き換えたいかどうかで、どちらも可」。(3) 質問 2 の hook は「多くのラッパーがイベントハンドラをローカルなクロージャで書いていて、readiness の信号と他のハンドラの登録を切り分けられないので現実的でない」。(4) 質問 3 は「本物の問題を解くなら本体に入れる価値はあるが、中間にプロキシプロセスを挟むのは避けたい間接化。SolidLSP の中に直接実装する解を望む。issue を立てて、何をしていてどう SolidLSP に足せるのか詳しく書いてほしい」。
+[返信](https://github.com/oraios/serena/pull/1988#issuecomment-5648743907)は 21:16:36 UTC で、その 16 秒後の 21:16:52 に #1988 は main にマージされた（マージコミット `403ad0a5`。私は 09-14 までこれを見落として OPEN と報告していた）。返信の要点。(1)「`references` を索引の完了まで保留する」はどう実現しているのか、サーバーごとに大きく違うのでは、という問い返し。(2) 質問 1（子クラスの新キーか `allow_override` か）は「実装を置き換えたいかどうかで、どちらも可」。(3) 質問 2 の hook は「多くのラッパーがイベントハンドラをローカルなクロージャで書いていて、readiness の信号と他のハンドラの登録を切り分けられないので現実的でない」。(4) 質問 3 は「本物の問題を解くなら本体に入れる価値はあるが、中間にプロキシプロセスを挟むのは避けたい間接化。SolidLSP の中に直接実装する解を望む。issue を立てて、何をしていてどう SolidLSP に足せるのか詳しく書いてほしい」。
 
 ユーザーの決定（2026-09-14）:
 
@@ -492,18 +492,18 @@ PR oraios/serena#2007 と issue oraios/serena#2003〜#2006 に、メンテナか
 - 外部 adapter パッケージ（`python-lsp-det` 等。組み込みの adapter を継承して `lsp-det --` を前置し、`experimental.serverState` を宣言して待ちを状態の読み取りに置き換えるもの）は棚上げ。`ls_base_cmd` の設定だけの経路と観測できる結果は同じで、違いは保留を lsp-det が代行するか Serena 側の Python がやるかだけ。相手が要らないと言った形で、hook が断られた以上は言語ごとに `_start_server` を写して追従する保守費が値打ちに見合わない。再検討の条件は、相手が定義した境界が「adapter は状態を供給する」形になり、写像のないサーバーの供給元として lsp-det 経由の adapter が求められたとき
 - 返信には LSP 本体への提案の準備中であることも書く。ただし「ドラフトで、Serena や LSP 側の反応を見て形を決める」と明記する。rust-analyzer のメンテナが `ready: bool` を選んだこと（「rust-analyzer: 提出後の反応（2026-09-14）」）は、adapter のサーバー固有の半分がサーバー自身の報告に置き換わっていく例として 1 つだけ挙げる
 
-返信の根拠として上流 HEAD `813fd98f` を読み直して分かったこと（返信と issue の草案はこれに基づく。草案は次の PR）:
+返信の根拠として上流 main を読み直して分かったこと（読んだのは #1988 のマージ直前の `813fd98f`。マージ後の HEAD `403ad0a5` で同じ箇所を確かめ、行番号はそちらのもの。返信と issue の草案はこれに基づく。草案は次の PR）:
 
-- 要求経路の継ぎ目は既にある。`SymbolLocationRequest.execute()`（`ls.py:1455-1464`）が definition / implementation / references の毎回の要求で `_pre_open_for_cross_file_references()` → `open_file` → `_wait_for_cross_file_references_if_needed()` → 送信、の順に呼ぶ。hook の依頼は不要
-- そこを流れているのは状態ではなく一度きりの latch。`_has_waited_for_cross_file_references`（`ls.py:586` で False。以後リセットなし）。既定の実装は `sleep(2)` を一度（`ls.py:1628-1633`。docstring は「信頼できる initializing 完了の信号がない LS 向け」）。typescript / Metals / Vue は progress を待つ実装に上書きしているが、どれも timeout で "proceeding anyway"（typescript のコメントは "historical permissive behavior"。"strict companion servers" は失敗させる、とある）
-- #2007 の穴はこの latch そのもの。`TypeScriptServerCrashedError` は `is_language_server_terminated()` が偽なので再起動の経路には乗らない。`map_exception` は -32603 を言い換えるだけで失敗を握りつぶしてはいない。`workspace/symbol`（`ls.py:3102`）と rename（`ls.py:3129`）はこの経路の外
+- 要求経路の継ぎ目は既にある。`SymbolLocationRequest.execute()`（`ls.py:1452-1460`）が definition / implementation / references の毎回の要求で `_pre_open_for_cross_file_references()` → `open_file` → `_wait_for_cross_file_references_if_needed()` → 送信、の順に呼ぶ。hook の依頼は不要
+- そこを流れているのは状態ではなく一度きりの latch。`_has_waited_for_cross_file_references`（`ls.py:582` で False。以後リセットなし）。既定の実装は `sleep(2)` を一度（`ls.py:1624-1628`。docstring は「信頼できる initializing 完了の信号がない LS 向け」）。typescript / Metals / Vue は progress を待つ実装に上書きしているが、どれも timeout で "proceeding anyway"（typescript のコメントは "historical permissive behavior"。"strict companion servers" は失敗させる、とある）
+- #2007 の穴はこの latch そのもの。`TypeScriptServerCrashedError` は `is_language_server_terminated()` が偽なので再起動の経路には乗らない。`map_exception` は -32603 を言い換えるだけで失敗を握りつぶしてはいない。`workspace/symbol`（`ls.py:3122`）と rename（`ls.py:3149`）はこの経路の外
 - 「サーバー固有では」への答え: 半分はそのとおりで、lsp-det は 17 の写像で 18 のサーバー（pyright と basedpyright は 1 つ）。写像が読む pyright の "Found N source files" と typescript-language-server の `$/progress` は、Serena の adapter が待っているものと同じ信号。共通の半分（状態と、要求経路がそれを見る規則）だけがサーバーに依らない
 
 #### oraios/serena#2004: opcode81 の問い返しと返信（2026-09-14 / 15）
 
 問い返し（2026-09-14）: 「実際にどう遭遇したのか。観測したのか。サーバーが本当にいないなら読み取りスレッドが検知して要求をキャンセルする」。
 
-(b) は読んで見つけたもので測っていなかった（[research/serena-integration-measurement.md](research/serena-integration-measurement.md) の「一般化してはならない点」に明記済み）。相手の主張は保留中の要求については正しく、元の文面はその場合まで「打ち切りまで待つ」と読めた。残る場面（保留が空のときに死に、同じツール呼び出しの中で次の要求を送る）を測ったところ事実だった（同報告の「(b-2) の実測」。probe は `scripts/serena/dead-write-probe.py`）。ユーザーの承認のうえで 2026-09-15 に返信した（[コメント](https://github.com/oraios/serena/issues/2004#issuecomment-5666371144)）。読んだだけの主張は「読んだ」と書くか、測ってから出す。
+(b) は読んで見つけたもので測っていなかった（[research/serena-integration-measurement.md](research/serena-integration-measurement.md) の「一般化してはならない点」に明記済み）。相手の主張は保留中の要求については正しく、元の文面はその場合まで「打ち切りまで待つ」と読めた。残る場面（保留が空のときに死に、同じツール呼び出しの中で次の要求を送る）を測ったところ事実だった（同報告の「(b-2) の実測」。probe は `scripts/serena/dead-write-probe.py`）。ユーザーの承認のうえで 2026-09-15（JST。09-14 15:24 UTC）に返信した（[コメント](https://github.com/oraios/serena/issues/2004#issuecomment-5666371144)）。問い返しの前日（09-13 01:42 UTC）に第三者 feiiiiii5 が修正 PR [oraios/serena#2030](https://github.com/oraios/serena/pull/2030)（`_send_payload` の書き込み失敗で `_cancel_pending_requests(LanguageServerTerminatedException(...))`。偽の stdin のテスト 3 件）を出していて、返信の時点で見落としていた。probe をその枝に当てるとコード 0（要求 #2 は 0.00 秒で `LanguageServerTerminatedException`。同報告の「#2030 の枝での結果」）。読んだだけの主張は「読んだ」と書くか、測ってから出す。
 
 出した文面:
 
@@ -524,7 +524,7 @@ request #2:    "Failed to write to stdin: [Errno 32] Broken pipe" (twice: the di
 If you would rather treat this as part of #2003 (the bare `TimeoutError` not reaching the restart path), I am fine closing this one; the fix is the same either way — fail the request with `LanguageServerTerminatedException` when the write fails or when `is_running()` is already false, instead of letting it wait.
 ````
 
-次: #1988 への返信と issue の草案を書いて確認に出す（次の PR）。#2004 は相手の返答を待つ。#2003 に畳まれたら (b-1) と (b-2) を 1 つの修正 PR にする（受け入れ条件は probe の終了コード 0）。
+次: #1988 への返信と issue の草案を書いて確認に出す（次の PR。#1988 はマージ済みなので、返信はそのスレッドに短く、本体は issue）。#2004 の修正は #2030 が既にあるので自前の PR は出さない。probe の結果を #2030 に添えるかはユーザーの判断。(b-1) の #2003 は反応待ち。
 
 ### LSP 本体: microsoft/language-server-protocol#511 へのコメントと proposal issue
 

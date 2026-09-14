@@ -563,20 +563,20 @@ opcode81 の返信（「Serena: 提出後の反応（2026-09-15）」）への�
 
 #### #1988 への返信
 
-長い版（約 680 語）はユーザーが「長すぎて読む気がしない」と却下。要点だけの版に縮め（約 190 語）、ユーザーの指示で末尾に意図（lsp-det はどちらかが状態を持てば不要になる。持ち込めるもの）の 2 文を戻した（約 240 語）。長い版の材料は issue の予備（下）に残す。
+長い版（約 680 語）はユーザーが「長すぎて読む気がしない」と却下。要点だけの版に縮め、ユーザーの意図（2026-09-15）を最初の答えの芯に置いた: 「サーバー固有では」への答えは「今はそのとおりで、だから SolidLSP の adapter がある。本来は各サーバーが同じ言葉を話すべきで、それが目標。lsp-det はそれまでのつなぎ」。約 270 語。長い版の材料は issue の予備（下）に残す。
 
 ````markdown
 Thanks. Short answers, since this PR is merged.
 
 > Isn't this highly server-specific?
 
-Reading the signals is: one mapping per server (pyright's "Found N source files" log line, typescript-language-server's `$/progress` tokens and its "[tsserver] Exited" line, rust-analyzer's `experimental/serverStatus`, …), `unknown` where a server emits nothing. What comes out is not: one state per server, `{health, readiness}`, and one rule — cross-file requests wait while not `ready`, fail at once while `health` is `error`, pass through when `unknown`; nothing else is held; no timers.
+Today, yes — that is exactly why SolidLSP has an adapter per server and lsp-det has a mapping per server, each reading that server's own signals (pyright's "Found N source files" log line, typescript-language-server's `$/progress` tokens and its "[tsserver] Exited" line, rust-analyzer's `experimental/serverStatus`, …). It should not have to be. Every one of those signals says the same two things — is the index complete, is the server functional — and what I am after is servers saying so in one vocabulary: rust-analyzer is adding `ready: bool` to `experimental/serverStatus` (rust-lang/rust-analyzer#23362), and a draft proposal for LSP itself exists (its shape will follow feedback from implementations like SolidLSP). Until then someone has to map; lsp-det does it as a proxy and reports `unknown` where a server emits nothing, SolidLSP does it in adapters. What comes out of the mapping is not server-specific: one state per server, `{health, readiness}`, and one rule — cross-file requests wait while not `ready`, fail at once while `health` is `error`, pass through when `unknown`; nothing else is held; no timers.
 
 > how it could be added to SolidLSP
 
-The server-specific part already exists in your adapters, and so does the seam: `_wait_for_cross_file_references_if_needed()` runs before every cross-file request. What is missing is that it consults a one-shot latch (`_has_waited_for_cross_file_references`, default `sleep(2)`) instead of a state. Smallest change: adapters keep a per-server "ready / broken" state, updated from the handlers they already have; the base request path checks it every time. This is the shape behind #1937, #1858, #1923, #1978, and #2007 (tsserver dead → `references` returns `[]`).
+The mapping already exists in your adapters, and so does the seam: `_wait_for_cross_file_references_if_needed()` runs before every cross-file request. What is missing is that it consults a one-shot latch (`_has_waited_for_cross_file_references`, default `sleep(2)`) instead of a state. Smallest change: adapters keep the server's latest "ready / broken" state, updated from the handlers they already have; the base request path checks it on every cross-file request. This is the shape behind #1937, #1858, #1923, #1978, and #2007 (tsserver dead → `references` returns `[]`).
 
-Hook withdrawn; the seam is enough. Proxy: agreed, not proposing one — lsp-det exists to make this state observable where neither side holds it, and to become unnecessary where one does. I can bring the measurements, an inventory of which signals each of the 18 servers actually emits (plus a desk survey of the 70 SolidLSP supports: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/readiness-vocabulary-corpus.md), and tests for whatever boundary you choose. Happy to open an issue if you want to track it.
+Hook withdrawn; the seam is enough. Proxy: agreed, not proposing one — lsp-det is the bridge until servers speak for themselves, and becomes unnecessary wherever they, or the client, hold the state. I can bring the measurements, an inventory of which signals each of the 18 servers actually emits (plus a desk survey of the 70 SolidLSP supports: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/readiness-vocabulary-corpus.md), and tests for whatever boundary you choose. Happy to open an issue if you want to track it.
 ````
 
 #### issue（予備。相手が追跡用に欲しいと言ったら出す）

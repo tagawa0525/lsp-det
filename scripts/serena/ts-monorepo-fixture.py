@@ -6,7 +6,7 @@ leaf パッケージが `formatDisplay` を export し、複数の consumer パ�
 tsserver に読み込ませるプロジェクトを大きくするための嵩。
 
     ts-monorepo-fixture.py <dir> [--packages 8] [--files 80] [--consumers 2]
-        [--layout relative|pnpm] [--no-solution] [--leaf-no-tsconfig] [--app]
+        [--layout relative|pnpm] [--no-solution] [--leaf-no-tsconfig] [--app] [--force]
 
 --layout relative  consumer が `../../leaf/src/index` を相対 import する
 --layout pnpm      pnpm workspace の形。consumer は `@fixture/leaf` を import し、それは
@@ -101,7 +101,10 @@ def main() -> None:
             parser.error(
                 f"{root} already exists; pass --force to replace it (it will be deleted)"
             )
-        shutil.rmtree(root)
+        if os.path.isdir(root) and not os.path.islink(root):
+            shutil.rmtree(root)
+        else:
+            os.unlink(root)  # 通常のファイルや symlink (壊れたものも)
     os.makedirs(root)
     pnpm = args.layout == "pnpm"
     leaf_import = "@fixture/leaf" if pnpm else "../../leaf/src/index"
@@ -195,7 +198,9 @@ def main() -> None:
             + ", formatDisplay(0)];\n",
         )
         consumers += 1
-        visible_from_app = args.packages + 1  # app 自身 + 各パッケージの入口 f0
+        # app 自身 + 各パッケージの入口 f0。leaf に tsconfig があると app は leaf を dist の d.ts で解決し、
+        # src/index.ts の宣言とは別物になるので、この数は --leaf-no-tsconfig のときだけ意味を持つ
+        visible_from_app = args.packages + 1 if args.leaf_no_tsconfig else None
 
     # root
     if not args.no_solution:
@@ -231,7 +236,7 @@ def main() -> None:
         f"expected reference files = {consumers}"
         + (
             f" in the whole fixture; visible from the app project = {visible_from_app}"
-            if args.app
+            if visible_from_app is not None
             else ""
         )
     )

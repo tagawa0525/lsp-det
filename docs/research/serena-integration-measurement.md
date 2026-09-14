@@ -151,4 +151,4 @@ pyright 1.1.412、solidlsp 直接（lsp-det なし）、要求の打ち切りを
 
 - pyright 1 つ、fixture 2 ファイル。`_send_payload` は言語に依らない同じ関数だが、typescript-language-server では動かしていない
 - 「保留中に死ぬ」場合は測っていない（ソースから読める）
-- MCP は挟んでいない。ツール層の打ち切り（`tool_timeout`）は要求の打ち切りと同じ値から 5 秒引いたものなので、実運用で先に来るのは要求の打ち切り
+- MCP は挟んでいない。要求の打ち切り（`ls_timeout`）はツール層の打ち切りから 5 秒引いたもの（`project.py:509`、`ls_timeout = tool_timeout - 5`。既定 240 → 235）なので、実運用で先に来るのは要求の打ち切り

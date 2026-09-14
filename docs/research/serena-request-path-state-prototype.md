@@ -119,6 +119,6 @@ oraios/serena#1858 は「セッション最初の `find_referencing_symbols` が
 
 ## 次
 
-- 返信の文面は測ったことに合わせて直し、2026-09-14 20:25 UTC に提出した（[../upstream-submissions.md](../upstream-submissions.md)）
+- 返信（2026-09-14 20:25 UTC に提出。[../upstream-submissions.md](../upstream-submissions.md)）への反応を待つ
 - 試作の枝は fork に push 済み: https://github.com/tagawa0525/serena/tree/request-path-consults-state（`b7a7093d`、`403ad0a5` + tsls の 8 行）。Scala の V1 / V2 は reference/serena のローカル枝 `request-path-consults-state-experiment` に残す
 - lsp-det の tsls 写像の反例（solution なし配置で `ready` のまま不完全）は、仕様 8.1 の `unknown` を使う余地（信号が来ない workspace と観測者が判断できるか）を含めて別の報告と ADR で扱う。仕様・写像は勝手に変えない

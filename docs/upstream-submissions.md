@@ -555,82 +555,42 @@ opcode81 は 15:07〜15:54 UTC の間に #2004 → #2003 の順で読み、ど�
 
 次: #1988 への返信と issue の草案を書いて確認に出す（次の PR。#1988 はマージ済みなので、返信はそのスレッドに短く、本体は issue）。#2003 と #2004 は閉じた。#2004 の修正は #2030 に任せる。
 
-### Serena: #1988 への返信と issue（草案。2026-09-15、未提出）
+### Serena: #1988 への返信（草案。2026-09-15、未提出）と issue（予備）
 
-opcode81 の返信（「Serena: 提出後の反応（2026-09-15）」）への対応。#1988 はマージ済みなので、返信はそのスレッドに短く置き、本体は新しい issue にする。issue は設計の提案ではなく、**実測と実害**を先に、要件（仕様 9 章を SolidLSP の語で）を従に置き、境界の定義は相手に頼む（ユーザーの決定 2026-09-14）。読者は「実際に踏んだか」を最初に問う（#2003 / #2004 の経験）ので、Serena 自身の issue（oraios/serena#1937、#1858、#1923、#1978）を筆頭に据える。事実の出典は [research/serena-integration-measurement.md](research/serena-integration-measurement.md)（tsserver クラッシュ後の `[]`、latch の `sleep(2)`）、[research/claude-code-dogfooding.ja.md](research/claude-code-dogfooding.ja.md) 第 6 回（エージェントが関数を消す。これは Claude Code 経由で Serena ではない。その旨を書く）、上流 `403ad0a5` の行番号。
+opcode81 の返信（「Serena: 提出後の反応（2026-09-15）」）への対応。ユーザーの決定（2026-09-15）: **答えは #1988 に書く**。相手の 2 つの問い（どう実現しているか、どう SolidLSP に足せるか）に、マージ済み PR のスレッドで自己完結して答える。issue は相手が「追跡のために欲しい」と言ったときに出す予備で、その草案は下に残す。理由: 相手が求めたのは "more details on what exactly it is your solution does and how it could be added" で、それは返信で答えられる。#2003 / #2004 の直後に同じ報告者が大きな issue を出すより、まず答えて相手に選ばせる。
 
-出す順序: issue を先に立て、その番号を入れて #1988 に返信する。
+読者は「実際に踏んだか」を最初に問うので、Serena 自身の issue（oraios/serena#1937、#1858、#1923、#1978）を根拠の筆頭に置く。事実の出典は [research/serena-integration-measurement.md](research/serena-integration-measurement.md)（tsserver クラッシュ後の `[]`、latch の `sleep(2)`）と上流 `403ad0a5` の行番号。
 
 #### #1988 への返信
 
 ````markdown
-Thanks for the detailed answer. Two short replies here and the rest in #NNNN, since this PR is merged.
+Thanks for the detailed answer. Since this PR is merged I will keep it to your two questions and one concrete suggestion; if you would rather track it as an issue, say so and I will open one.
 
 > How does it achieve this? Isn't this highly server-specific?
 
-Half of it is, by design: lsp-det has one mapping per server (17 mappings for 18 servers), each reading that server's own signals — pyright's "Found N source files" log line, typescript-language-server's `$/progress` tokens and its "[tsserver] Exited" log line, rust-analyzer's `experimental/serverStatus`, clangd's `backgroundIndexProgress`, … — and reporting `unknown` where a server emits nothing. The other half is not: every mapping produces the same `{health, readiness}` state, and the hold is a rule over that state alone (cross-file requests wait while `readiness` is not `ready`, fail at once while `health` is `error`, pass through when `unknown`; nothing else is ever held; no timers). The server-specific half is what SolidLSP's adapters already have; the common half is what I think is missing, and #NNNN lays out the measurements and asks you to decide the boundary.
+Half of it is, by design. lsp-det has one mapping per server (17 mappings for 18 servers), each reading that server's own signals: pyright's "Found N source files" log line, typescript-language-server's `$/progress` tokens and its "[tsserver] Exited" log line, rust-analyzer's `experimental/serverStatus`, gopls's "Setting up workspace" progress, clangd's `backgroundIndexProgress`, jdtls's `language/status` — each checked against the server's source before use — and reporting `unknown` where a server emits nothing (pyrefly). The other half is not server-specific: every mapping produces the same state, `{health, readiness}`, and the hold is a rule over that state and nothing else. Requests from a fixed list of cross-file methods (`references`, `definition`, `implementation`, `workspace/symbol`, `rename`, call hierarchy) are queued while `readiness` is `initializing` or `indexing`, released when it becomes `ready`, passed through when it is `unknown`, and failed at once with an explicit error while `health` is `error`. `hover`, `documentSymbol`, completion are never held. There is no timer anywhere; a held request is answered only by a state change, the client's `$/cancelRequest`, or `shutdown`.
 
-On the hook: understood, withdrawn — reading the request path again, `_wait_for_cross_file_references_if_needed` is already the seam, so nothing needs to move out of the adapters' closures. On the proxy: agreed, and I am not pursuing a proxy-based adapter; SolidLSP holding the state itself is the better outcome, and lsp-det is meant to become unnecessary wherever that happens.
+> how it could be added to SolidLSP
+
+The server-specific half is already here: `PyrightServer` waits for the same log line, `TypeScriptLanguageServer` for the same progress tokens, and the seam on the request path exists too — `SymbolLocationRequest.execute()` (`ls.py:1452-1460` on `main`) calls `_wait_for_cross_file_references_if_needed()` before every definition / implementation / references request. What flows through that seam today is a one-shot latch rather than a state: `_has_waited_for_cross_file_references` is set on the first call and never cleared, the default wait is `sleep(2)`, and the adapters that override it end in "proceeding anyway" on timeout. So the smallest form I can see is:
+
+- each adapter keeps a small per-server state — ready for cross-file answers or not, and functional or not — updated from the event handlers it already has (the closures stay exactly as they are; this is what the hook question was really about, and it does not need a hook);
+- the base request path consults that state on every cross-file request: wait while not ready, fail at once with a reason while not functional, send without waiting when the adapter has no way to know; single-file requests untouched; no timers.
+
+Three choices in that are yours, not mine: where the state lives (a field on the base class, an object the adapter owns, …); what a timeout means (today's "proceeding anyway", which the TypeScript adapter's own comment calls "the historical permissive behavior", versus the strict variant its companion servers use); and the default for adapters with no signal (`sleep(2)` today; an explicit "unknown, do not wait" would be honest and free).
+
+Why I think it is worth it: this is the shape your users already report — #1937 (TypeScript: silently partial after the first query), #1858 (Scala), #1923 (Vue), and #1978 drains one token for one server but stays behind the latch. Two more I measured: with tsserver killed after one successful query, the next `request_references` returns `[]` as a success because the crash check sits inside `wait_for_indexing`, which the latch skips (#2007 moves it in front — the smallest piece of the above); and a fresh pyright pays the 2 s sleep on its first cross-file request even though the adapter already waited for "Found N source files" at startup — the two waits do not know about each other.
+
+On the proxy: agreed, and I am not proposing one for this repository. SolidLSP holding the state itself is the better outcome; lsp-det exists to make the state observable where neither side holds it, and to become unnecessary where one does. I can bring the measurements, a per-server inventory of which signals each of the 18 servers actually emits (plus a desk survey of the 70 SolidLSP supports: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/readiness-vocabulary-corpus.md), and tests for whatever boundary you choose.
 ````
 
-#### issue
+#### issue（予備。相手が追跡用に欲しいと言ったら出す）
 
 題名: `Cross-file requests consult a one-shot latch, not the server's state: partial and empty results after the first query`
 
-````markdown
-## Summary
+内容は上の返信と同じ材料を issue の形に組み直したもの（Summary → What happens today (measured) 1〜5 → What I am asking (a)(b)(c) と規則 5 つ → What I can bring → Later, not now → Context）。返信に入れなかった項目は次の 3 つで、出すときに足す: エージェントの実害の事例（Claude Code 経由。第 6 回のドッグフーディング: `didOpen` の 1 ms 後の `findReferences` で宣言だけを得て export された関数を消し `tsc` が TS2305、gopls で新規ファイルの参照 0 件で消し `go build` 失敗。Serena ではないことを明記）、仕様（https://github.com/tagawa0525/lsp-det/blob/main/docs/spec/server-state.md。9 章がクライアント側の規則）、サーバー自身が報告し始めている例（rust-analyzer の `ready: bool`、rust-lang/rust-analyzer#23331 / #23362）と LSP 本体への提案（ドラフト。こうした実装からの反応の後に形を決める、と明記）、その先（`ready` が保証する範囲の宣言、`didChangeWatchedFiles` 後の鮮度）。
 
-SolidLSP waits for a language server's readiness once, in `_start_server` and in the first cross-file request, then never consults it again. After that point a cross-file request (`references`, `definition`, `implementation`, `workspace/symbol`, `rename`) is sent regardless of what the server is doing, and the answer — partial, empty, or from a server whose backend has died — comes back as a normal success. This is a known shape in this tracker (#1937, #1858, #1923, #1978); I have measured three more instances below, and #2007 fixes the smallest one. What I am asking for is not a specific design but a decision on the boundary: what the core keeps per server, and what each adapter supplies, so that the request path can consult a state instead of a latch. I can bring measurements, a per-server signal inventory, and tests to whatever boundary you draw.
-
-## What happens today (measured)
-
-All line numbers are for `main` at 403ad0a5.
-
-**1. The request path consults a latch that is set once and never cleared.** `SymbolLocationRequest.execute()` (`ls.py:1452-1460`) calls `_pre_open_for_cross_file_references()` → `open_file` → `_wait_for_cross_file_references_if_needed()` before every definition / implementation / references request. The default implementation of the wait is `sleep(2)` once (`ls.py:1624-1628`), guarded by `_has_waited_for_cross_file_references` (`ls.py:582`), which is set on the first call and never reset. The adapters that override it (typescript, Metals, Vue) wait for progress instead, but keep the latch and end in "proceeding anyway" when their timeout expires. `workspace/symbol` (`ls.py:3122`) and rename (`ls.py:3149`) do not go through this path at all.
-
-**2. Reported by your users.** #1937: TypeScript `find_referencing_symbols` returns silently partial results while the project graph is still loading, because Serena waits only before the first cross-file query. #1858: the first Scala `find_referencing_symbols` of a session is partial because a fixed 5 s was waited instead of Metals's indexing. #1923: the Vue companion server is marked "indexing complete" even when every file failed to open. #1978 (open PR) drains an in-flight progress token on later TypeScript queries — one server, one signal, still behind the latch.
-
-**3. A crashed backend answers `[]` as a success.** typescript-language-server survives when tsserver dies and answers `textDocument/references` with an empty array (upstream: typescript-language-server/typescript-language-server#1125). Serena detects the crash (`_TSSERVER_EXITED_PATTERN`, #1848), but the check runs only inside `wait_for_indexing`, which the latch skips on every query after the first. Measured (solidlsp directly, typescript-language-server 5.3.0, SIGKILL tsserver after one successful `request_references`): the next `request_references` returns 0 locations with no error. #2007 moves the check in front of the latch; with it the same call raises `TypeScriptServerCrashedError`.
-
-**4. The startup wait and the request path do not talk to each other.** `PyrightServer` waits for pyright's "Found N source files" at startup; the first `request_references` then still pays the default 2 s sleep (measured: request timeout 5 s → `TimeoutError` after 7.00 s). `TypeScriptLanguageServer` waits for `$/progress` at startup, but no file is open yet, so the wait resolves in 52 ms with nothing to wait for; the real project load happens later, inside `request_references`, after Serena itself opens the file.
-
-**5. What an agent does with such an answer.** This one is not through Serena but through Claude Code's built-in LSP client, with the same servers: told to delete a function if `findReferences` reports no usages, the agent asked 1 ms after `didOpen`, got the declaration only, deleted an exported function that `b.ts` imports, and `tsc` failed with TS2305; with gopls and a file created by a shell command, it got 0 references for a function the new file calls, deleted it, and `go build` failed. Agents act on the first answer; a person would have waited for the spinner.
-
-## What I am asking
-
-A decision on the boundary between core and adapters. Concretely, three choices that are yours:
-
-- **(a) Where the state lives.** Today `_has_waited_for_cross_file_references` is a boolean on the base class, set from adapter code. If instead each adapter kept a small state — is the server ready for cross-file answers right now, and is it functional — updated from the same event handlers it already has (the closures can stay exactly as they are), the base class's request path could consult it on every cross-file request. Whether that state is a field on `SolidLanguageServer`, an object the adapter owns, or something else is the boundary question.
-- **(b) What happens on timeout.** Today every override ends in "proceeding anyway"; the TypeScript adapter's own comment calls this "the historical permissive behavior" and notes that "strict companion servers override this hook to fail before serving requests from a partially indexed program". Whether the default should stay permissive, become strict, or be a setting is a behaviour decision.
-- **(c) What the default is for adapters with no signal.** `sleep(2)` says "we do not know". An explicit "unknown — do not wait, do not claim" would be honest and free; keeping the sleep is also a choice.
-
-The rule I would hope the request path ends up implementing is small, and testable against a fake server for any adapter:
-
-1. while the server is not ready for cross-file answers, a cross-file request is not sent; it is sent once the server becomes ready
-2. while the server is known to be broken (tsserver gone, backend failed), a cross-file request fails at once with a reason, instead of waiting or returning `[]`
-3. when the adapter has no way to know, the request is sent without waiting (today's behaviour, made explicit)
-4. single-file requests (`hover`, `documentSymbol`, completion) are never held
-5. a held request is released only by a state change, a cancellation, or shutdown — never by a timer that declares the server ready
-
-(1) and (2) are the two things I would put in a first change; #2007 is a one-server instance of (2).
-
-## What I can bring
-
-- Measurements above, and the probes that produce them, against any boundary you draw.
-- A per-server inventory of which readiness and health signals each server actually emits, checked against each server's source: 18 servers today (pyright and basedpyright, typescript-language-server, rust-analyzer, gopls, clangd, jdtls, Dart, Sorbet, Metals, Expert, Nextflow, haskell-language-server, crystalline, Gleam, haxe, nixd, nil), plus pyrefly, which emits nothing on the protocol and is reported as such, plus a desk survey of the 70 servers SolidLSP supports: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/readiness-vocabulary-corpus.md
-- The vocabulary in a written form, if useful as a reference for the state's values: `readiness` ∈ {initializing, indexing, ready, unknown}, `health` ∈ {ok, warning, error, unknown} — https://github.com/tagawa0525/lsp-det/blob/main/docs/spec/server-state.md (chapter 9 is the client-side rule above)
-- Servers are starting to report this themselves, which shrinks the adapter's half over time: a rust-analyzer maintainer asked for a single `ready: bool` next to `health` in `experimental/serverStatus` (rust-lang/rust-analyzer#23331, PR #23362). A proposal for the LSP specification itself exists as a draft (https://github.com/tagawa0525/vscode-languageserver-node/tree/server-state); its shape will be decided after feedback from implementations like this one, not before.
-
-## Later, not now
-
-Two things that would follow naturally but are out of scope for this issue: declaring what a given server version's "ready" actually guarantees (which requests are complete after it, with which limits), and freshness after `didChangeWatchedFiles` (Serena already re-scans mtimes per tool call; some servers re-index asynchronously after the notification, and the next request can see the old index).
-
-## Context
-
-lsp-det (https://github.com/tagawa0525/lsp-det) is the proxy mentioned in #1988. It exists to make this state observable where neither server nor client holds it, and to become unnecessary wherever one of them does. Serena already runs through it with only `ls_specific_settings.<language>.ls_base_cmd`; that stays available as an interim, but I am not proposing a proxy-based adapter for this repository.
-````
-
-和訳と、出す前に確かめること（各事実の出典、行番号が `main` の最新で動いていないか、#1978 が動いていないか、第 6 回の数字）は提出の直前にもう一度当てる。
+出す前に当て直すこと（返信・issue 共通）: 行番号が `main` の最新で動いていないか、#1978 と #2007 が動いていないか、リンク先。
 
 ### LSP 本体: microsoft/language-server-protocol#511 へのコメントと proposal issue
 

@@ -138,6 +138,9 @@ class Proxy:
         with self.lock:
             if self.held.pop(response_id, None) is None:
                 return
+            self.watched.discard(
+                response_id
+            )  # id は再利用されうるので、観測が済んだら外す
         log(f"releasing the response for id={response_id}")
         self.write_to_client(message)
 

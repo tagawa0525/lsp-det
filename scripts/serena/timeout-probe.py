@@ -17,8 +17,10 @@ reference/serena の環境で動かす:
     REQUEST_TIMEOUT  要求の打ち切り秒数 (既定 5)
     DELAY            プロキシがサーバーの応答を止める秒数 (既定 8。REQUEST_TIMEOUT より長くする)
 
-観測できた実行の終了コードは 0 (受け入れ条件はまだ置かない。観測のみ)。DELAY が
-REQUEST_TIMEOUT 以下なら打ち切りが起きないので、起動前に拒んで 0 以外で終わる。
+観測できた実行の終了コードは 0 (受け入れ条件はまだ置かない。観測のみ)。DELAY は
+REQUEST_TIMEOUT より長いことを起動前に要求する (満たさなければ 0 以外で終わる)。最初の
+横断要求は SolidLSP の latch の 2 秒も払うので、短い DELAY でも合計で打ち切られることは
+あるが、それでは止めた応答が打ち切りの原因だと言えない。この検査はそれを切り分ける。
 観測の記録は docs/research/serena-integration-measurement.md。
 """
 
@@ -67,7 +69,7 @@ def main() -> None:
     lang, repo = sys.argv[1], sys.argv[2]
     if DELAY <= REQUEST_TIMEOUT:
         sys.exit(
-            f"DELAY ({DELAY}) must exceed REQUEST_TIMEOUT ({REQUEST_TIMEOUT}); otherwise nothing times out"
+            f"DELAY ({DELAY}) must exceed REQUEST_TIMEOUT ({REQUEST_TIMEOUT}) so that the held response alone causes the timeout (the first cross-file request also pays SolidLSP's 2 s latch)"
         )
     logging.basicConfig(
         level=logging.INFO,

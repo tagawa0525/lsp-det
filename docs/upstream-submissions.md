@@ -553,7 +553,7 @@ So the two things that remain are small: no `$/cancelRequest` is sent after the 
 
 opcode81 は 15:07〜15:54 UTC の間に #2004 → #2003 の順で読み、どちらも「実際に踏んだのか」を最初に問うた。読んで書いた issue は、実測を添えても "not an actual issue" になりうる。そもそも Serena に期待した役割は、下流の被験者（ADR 0010 M7）と、状態を読む消費者（本文書「位置づけ」）であり、(b) の 4 件は研究報告の副産物で本筋ではなかった。残す価値があったのは LSP 準拠と誠実さに関わる #2005 / #2006 で、どちらも第三者が修正 PR を出している。#1988 の issue（下）は要件の一覧ではなく、**実測と実害**（tsls の `references` が `[]` を成功として返す事例、ドッグフーディング第 6 回でエージェントが使われている関数を消した事例）を中心に据える。
 
-次: #1988 への返信と issue の草案を書いて確認に出す（次の PR。#1988 はマージ済みなので、返信はそのスレッドに短く、本体は issue）。#2003 と #2004 は閉じた。#2004 の修正は #2030 に任せる。
+2026-09-14 時点の次: #1988 への返信と issue の草案を書いて確認に出す。翌日、issue は予備にして返信で答えることに改めた（次の節）。#2003 と #2004 は閉じた。#2004 の修正は #2030 に任せる。
 
 ### Serena: #1988 への返信（草案。2026-09-15、未提出）と issue（予備）
 
@@ -563,7 +563,7 @@ opcode81 の返信（「Serena: 提出後の反応（2026-09-15）」）への�
 
 #### #1988 への返信
 
-長い版（約 680 語）はユーザーが「長すぎて読む気がしない」と却下。要点だけの版に縮めた（約 190 語）。長い版の材料は issue の予備（下）に残す。
+長い版（約 680 語）はユーザーが「長すぎて読む気がしない」と却下。要点だけの版に縮め（約 190 語）、ユーザーの指示で末尾に意図（lsp-det はどちらかが状態を持てば不要になる。持ち込めるもの）の 2 文を戻した（約 240 語）。長い版の材料は issue の予備（下）に残す。
 
 ````markdown
 Thanks. Short answers, since this PR is merged.
@@ -576,7 +576,7 @@ Reading the signals is: one mapping per server (pyright's "Found N source files"
 
 The server-specific part already exists in your adapters, and so does the seam: `_wait_for_cross_file_references_if_needed()` runs before every cross-file request. What is missing is that it consults a one-shot latch (`_has_waited_for_cross_file_references`, default `sleep(2)`) instead of a state. Smallest change: adapters keep a per-server "ready / broken" state, updated from the handlers they already have; the base request path checks it every time. This is the shape behind #1937, #1858, #1923, #1978, and #2007 (tsserver dead → `references` returns `[]`).
 
-Hook withdrawn; the seam is enough. Proxy: agreed, not proposing one. Happy to open an issue with the measurements if you want to track it.
+Hook withdrawn; the seam is enough. Proxy: agreed, not proposing one — lsp-det exists to make this state observable where neither side holds it, and to become unnecessary where one does. I can bring the measurements, an inventory of which signals each of the 18 servers actually emits (plus a desk survey of the 70 SolidLSP supports: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/readiness-vocabulary-corpus.md), and tests for whatever boundary you choose. Happy to open an issue if you want to track it.
 ````
 
 #### issue（予備。相手が追跡用に欲しいと言ったら出す）

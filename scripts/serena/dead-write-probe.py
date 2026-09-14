@@ -115,9 +115,11 @@ def main() -> None:
                     f"victims={victims} reader_threads={len(reader_threads())}"
                 )
                 sys.exit(2)
+            # 時刻は最初の kill の前に取る。後に取ると、読み取りスレッドのキャンセルが
+            # その前に走って first_cancels が空になる競合がある。
+            t_kill = time.time()
             for pid in victims:
                 os.kill(pid, signal.SIGKILL)
-            t_kill = time.time()
             log(f"SIGKILL {victims} (no request pending)")
 
             # 読み取りスレッドの終了 (= キャンセルの完了) を待つ。sleep では同期にならない。
@@ -130,7 +132,11 @@ def main() -> None:
                 f"(still alive: {alive}); cancel events since kill: "
                 f"{[n for _, n in first_cancels]}; ls.is_running()={ls.is_running()}"
             )
-            if alive or not first_cancels or first_cancels[0][1] != 0:
+            if (
+                alive or first_cancels != [(first_cancels[0][0], 0)]
+                if first_cancels
+                else True
+            ):
                 log(
                     "precondition failed: expected exactly one 'Cancelling 0 pending' before request #2"
                 )

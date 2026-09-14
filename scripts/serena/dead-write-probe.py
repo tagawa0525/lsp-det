@@ -20,7 +20,8 @@ oraios/serena#2004 (stdin への書き込み失敗の握りつぶし) の実測�
 要求 #2 を送る前に、stdout の読み取りスレッド (`LSP-stdout-reader:<ls_id>`) の終了を
 join で待ち、そのキャンセルが "Cancelling 0 pending" だったことをログで確かめる。
 これで #2 が読み取りスレッドのキャンセルに拾われる競合 (偽陽性) を除く。
-言語サーバーは PATH で解決される。自分の子孫のプロセスを全部 SIGKILL するので、
+言語サーバーは `ls_base_cmd` で PATH のものを指定する (指定しないと Serena の既定の
+dependency provider が uvx / npm で自前の版を起動する)。自分の子孫のプロセスを全部 SIGKILL するので、
 lsp-det は挟まない (挟むと lsp-det も落ちて別の経路になる)。プロセス探索は pgrep に
 依存する (Linux 専用)。観測の記録は docs/research/serena-integration-measurement.md。
 """
@@ -41,6 +42,11 @@ from solidlsp.ls_exceptions import SolidLSPException
 from solidlsp.settings import SolidLSPSettings
 
 REQUEST_TIMEOUT = float(os.environ.get("REQUEST_TIMEOUT", "8"))
+# adapter が extra_args で "--stdio" を足すので、ここには書かない。
+UPSTREAM = {
+    "python": ["pyright-langserver"],
+    "typescript": ["typescript-language-server"],
+}
 READER_THREAD_PREFIX = "LSP-stdout-reader:"
 CANCEL_LOG = re.compile(r"^Cancelling (\d+) pending language server requests$")
 
@@ -98,7 +104,9 @@ def main() -> None:
     verdict = 1
     with tempfile.TemporaryDirectory(prefix="dead-write-") as tmp:
         settings = SolidLSPSettings(
-            solidlsp_dir=tmp, project_data_path=os.path.join(repo, ".serena")
+            solidlsp_dir=tmp,
+            project_data_path=os.path.join(repo, ".serena"),
+            ls_specific_settings={ls_id: {"ls_base_cmd": UPSTREAM[lang]}},
         )
         config = LanguageServerConfig(ls_id=ls_id, workspace_folders=["."])
         ls = SolidLanguageServer.create(

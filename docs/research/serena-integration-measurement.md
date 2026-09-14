@@ -117,7 +117,7 @@ opcode81 が #2004 に「実際にどう遭遇したのか。サーバーが本�
 
 ### 方法
 
-pyright 1.1.412、solidlsp 直接（lsp-det なし）、要求の打ち切りを 8 秒に設定（`SolidLanguageServer.create(..., timeout=8)`。Serena の既定は 235 秒で、窓の長さがそれに比例するだけ）。`request_references` を 1 回 → 保留中の要求がない状態で pyright のプロセス（自分の子孫全部）を SIGKILL → stdout の読み取りスレッド（`LSP-stdout-reader:python`）の終了を join で待ち、そのキャンセルのログが "Cancelling 0 pending" だったことを確かめる（sleep では、読み取りスレッドの終了が遅れたときに要求 #2 が保留中に登録されてキャンセルされる競合が残る）→ `request_references` をもう 1 回。fixture は `a.py`（`def target()`）と `b.py`（import と呼び出し）。
+solidlsp 直接（lsp-det なし）、要求の打ち切りを 8 秒に設定（`SolidLanguageServer.create(..., timeout=8)`。Serena の既定は 235 秒で、窓の長さがそれに比例するだけ）。pyright の版: 最初の実行と #2004 への返信は `ls_base_cmd` を設定しておらず、Serena の既定の dependency provider が `uvx --from pyright==1.1.403` を起動していた（返信に書いた 1.1.412 は誤り。PR #107 のレビューの指摘）。checkout 済みの probe は `ls_base_cmd` で PATH の `pyright-langserver`（1.1.412）を指定し、再実行の結果は同じ（下）。機構は solidlsp 側なので pyright の版は結果に関わらない。`request_references` を 1 回 → 保留中の要求がない状態で pyright のプロセス（自分の子孫全部）を SIGKILL → stdout の読み取りスレッド（`LSP-stdout-reader:python`）の終了を join で待ち、そのキャンセルのログが "Cancelling 0 pending" だったことを確かめる（sleep では、読み取りスレッドの終了が遅れたときに要求 #2 が保留中に登録されてキャンセルされる競合が残る）→ `request_references` をもう 1 回。fixture は `a.py`（`def target()`）と `b.py`（import と呼び出し）。
 
 ### 結果（最初の実行。kill の後に 1 秒 sleep してから要求 #2 を送る版の probe。#2004 への返信に載せた数字はこれ）
 
@@ -130,7 +130,7 @@ pyright 1.1.412、solidlsp 直接（lsp-det なし）、要求の打ち切りを
 | 5.53 s  | `references` #2: "Failed to write to stdin: [Errno 32] Broken pipe" が 2 回（`didOpen` と要求本体。`ls_process.py:664-667` で `log.error` して return）   |
 | 13.34 s | 素の `TimeoutError`（"Request timed out (timeout=8.0)"。打ち切りいっぱい）。`SolidLSPException` ではないので `tools_base.py:383` の再起動の判定に届かない |
 
-同期版（checkout 済みの probe。sleep の代わりに読み取りスレッドの join と "Cancelling 0 pending" の確認）での再実行は、2.32 s SIGKILL → 2.33 s 読み取りスレッド終了（kill から 7 ms）と "Cancelling 0 pending" → 2.33 s 要求 #2（"Failed to write to stdin" が 2 回）→ 10.33 s 素の `TimeoutError`（8.00 s）。1 秒の間が消えただけで形は同じ。
+同期版（checkout 済みの probe。sleep の代わりに読み取りスレッドの join と "Cancelling 0 pending" の確認。PATH の pyright 1.1.412）での再実行は、2.46 s SIGKILL → 2.46 s 読み取りスレッド終了（kill から 8 ms）と "Cancelling 0 pending" → 要求 #2（"Failed to write to stdin" が 2 回）→ 10.47 s 素の `TimeoutError`（8.00 s）。1 秒の間が消えただけで形は同じ。
 
 ### 読み
 
@@ -141,7 +141,7 @@ pyright 1.1.412、solidlsp 直接（lsp-det なし）、要求の打ち切りを
 
 ### #2030 の枝での結果
 
-[oraios/serena#2030](https://github.com/oraios/serena/pull/2030)（feiiiiii5、2026-09-13 01:42 UTC、OPEN。`_send_payload` の書き込み失敗で `_cancel_pending_requests(LanguageServerTerminatedException("Stdio send error", self.ls_id, cause=e))` を呼ぶ。偽の stdin のテスト 3 件付き）の head `6e9d8dcc` を checkout して同じ probe を走らせると、要求 #2 は 0.00 秒で `SolidLSPException`（`is_language_server_terminated()` が真、原因 `LanguageServerTerminatedException`）になり、コード 0 で終わる。書き込み失敗のたびにキャンセルが走る（`didOpen` で "Cancelling 0 pending"、要求本体で "Cancelling 1 pending"）。
+[oraios/serena#2030](https://github.com/oraios/serena/pull/2030)（feiiiiii5、2026-09-13 01:42 UTC、OPEN。`_send_payload` の書き込み失敗で `_cancel_pending_requests(LanguageServerTerminatedException("Stdio send error", self.ls_id, cause=e))` を呼ぶ。偽の stdin のテスト 3 件付き）の head `6e9d8dcc` を checkout して同じ probe（PATH の pyright 1.1.412）を走らせると、要求 #2 は 0.00 秒で `SolidLSPException`（`is_language_server_terminated()` が真、原因 `LanguageServerTerminatedException`）になり、コード 0 で終わる。書き込み失敗のたびにキャンセルが走る（`didOpen` で "Cancelling 0 pending"、要求本体で "Cancelling 1 pending"）。
 
 ### 帰趨（2026-09-14 15:54 UTC）
 

@@ -492,7 +492,7 @@ PR oraios/serena#2007 と issue oraios/serena#2003〜#2006 に、メンテナか
 - 外部 adapter パッケージ（`python-lsp-det` 等。組み込みの adapter を継承して `lsp-det --` を前置し、`experimental.serverState` を宣言して待ちを状態の読み取りに置き換えるもの）は棚上げ。`ls_base_cmd` の設定だけの経路と観測できる結果は同じで、違いは保留を lsp-det が代行するか Serena 側の Python がやるかだけ。相手が要らないと言った形で、hook が断られた以上は言語ごとに `_start_server` を写して追従する保守費が値打ちに見合わない。再検討の条件は、相手が定義した境界が「adapter は状態を供給する」形になり、写像のないサーバーの供給元として lsp-det 経由の adapter が求められたとき
 - 返信には LSP 本体への提案の準備中であることも書く。ただし「ドラフトで、Serena や LSP 側の反応を見て形を決める」と明記する。rust-analyzer のメンテナが `ready: bool` を選んだこと（「rust-analyzer: 提出後の反応（2026-09-14）」）は、adapter のサーバー固有の半分がサーバー自身の報告に置き換わっていく例として 1 つだけ挙げる
 
-返信の根拠として上流 main を読み直して分かったこと（読んだのは #1988 のマージ直前の `813fd98f`。マージ後の HEAD `403ad0a5` で同じ箇所を確かめ、行番号はそちらのもの。返信と issue の草案はこれに基づく。草案は下の「Serena: #1988 への返信（草案）」の節）:
+返信の根拠として上流 main を読み直して分かったこと（読んだのは #1988 のマージ直前の `813fd98f`。マージ後の HEAD `403ad0a5` で同じ箇所を確かめ、行番号はそちらのもの。返信と issue の草案はこれに基づく。草案は下の「Serena: #1988 への返信」の節）:
 
 - 要求経路の継ぎ目は既にある。`SymbolLocationRequest.execute()`（`ls.py:1452-1460`）が definition / implementation / references の毎回の要求で `_pre_open_for_cross_file_references()` → `open_file` → `_wait_for_cross_file_references_if_needed()` → 送信、の順に呼ぶ。hook の依頼は不要
 - そこを流れているのは状態ではなく一度きりの latch。`_has_waited_for_cross_file_references`（`ls.py:582` で False。以後リセットなし）。既定の実装は `sleep(2)` を一度（`ls.py:1624-1628`。docstring は「信頼できる initializing 完了の信号がない LS 向け」）。typescript / Metals / Vue は progress を待つ実装に上書きしているが、どれも timeout で "proceeding anyway"（typescript のコメントは "historical permissive behavior"。"strict companion servers" は失敗させる、とある）
@@ -555,7 +555,7 @@ opcode81 は 15:07〜15:54 UTC の間に #2004 → #2003 の順で読み、ど�
 
 2026-09-14 時点の次: #1988 への返信と issue の草案を書いて確認に出す。翌日、issue は予備にして返信で答えることに改め、出す前に試作と再現で確かめ（[research/serena-request-path-state-prototype.md](research/serena-request-path-state-prototype.md)）、そのうえで返信した（次の節）。#2003 と #2004 は閉じた。#2004 の修正は #2030 に任せる。次: 返信への反応を待つ。issue を求められたら予備の草案を出す。催促はしない。
 
-### Serena: #1988 への返信（草案。2026-09-15、未提出）と issue（予備）
+### Serena: #1988 への返信（提出済み 2026-09-14 UTC）と issue（予備）
 
 opcode81 の返信（「Serena: 提出後の反応（2026-09-15）」）への対応。ユーザーの決定（2026-09-15 JST）: **答えは #1988 に書く**。相手の 2 つの問い（どう実現しているか、どう SolidLSP に足せるか）に、マージ済み PR のスレッドで自己完結して答える。issue は相手が「追跡のために欲しい」と言ったときに出す予備で、その草案は下に残す。理由: 相手が求めたのは "more details on what exactly it is your solution does and how it could be added" で、それは返信で答えられる。#2003 / #2004 の直後に同じ報告者が大きな issue を出すより、まず答えて相手に選ばせる。
 
@@ -563,7 +563,7 @@ opcode81 の返信（「Serena: 提出後の反応（2026-09-15）」）への�
 
 #### #1988 への返信
 
-**提出済み（2026-09-14 20:29 UTC、JST では 09-15。[コメント](https://github.com/oraios/serena/pull/1988#issuecomment-5670324283)）。** 出す直前にリンク先の生存（fork の枝 `b7a7093d`、#23331 / #23362 / #1937 / #1978 / #2007 は open、#1858 は closed）と、上流 main（`18fa47bf`）に `_wait_for_cross_file_references_if_needed()` の呼び出しが残っていることを確かめた。2026-09-15 JST に、この会話の文脈を持たないサブエージェントに事実の箇条書きだけを渡して起草させ（既存の草案も研究報告も読ませない。相手の語と普通の英語だけ、完全な文、比喩なし、進捗を盛らない、構成は自分で決める）、ユーザーの指摘で 3 点を直した版: (1) lsp-det の信号の説明は相手の adapter が同じものを読んでいるので「違いは読んだ結果の使い方だけ」の 3 文に縮める、(2) 18 サーバーの信号の一覧（corpus.md）の申し出は落とす、(3) 13 ファイルと 12 project の出どころ（共有パッケージ 1 + それを使うパッケージ 12 + app 1。13 = app のファイル + 各パッケージの入口 1 つ、12 project = 各パッケージの tsconfig）を明記する。事実は [research/serena-request-path-state-prototype.md](research/serena-request-path-state-prototype.md) と一致することを確認済み（c8827191 の時点で tsls の adapter が `$/progress` を `do_nothing` で捨てていたことも履歴で確認）。
+**提出済み（2026-09-14 20:25 UTC、JST では 09-15。[コメント](https://github.com/oraios/serena/pull/1988#issuecomment-5670324283)）。** 出す直前にリンク先の生存（fork の枝 `b7a7093d`、#23331 / #23362 / #1937 / #1978 / #2007 は open、#1858 は closed）と、上流 main（`18fa47bf`）に `_wait_for_cross_file_references_if_needed()` の呼び出しが残っていることを確かめた。2026-09-15 JST に、この会話の文脈を持たないサブエージェントに事実の箇条書きだけを渡して起草させ（既存の草案も研究報告も読ませない。相手の語と普通の英語だけ、完全な文、比喩なし、進捗を盛らない、構成は自分で決める）、ユーザーの指摘で 3 点を直した版: (1) lsp-det の信号の説明は相手の adapter が同じものを読んでいるので「違いは読んだ結果の使い方だけ」の 3 文に縮める、(2) 18 サーバーの信号の一覧（corpus.md）の申し出は落とす、(3) 13 ファイルと 12 project の出どころ（共有パッケージ 1 + それを使うパッケージ 12 + app 1。13 = app のファイル + 各パッケージの入口 1 つ、12 project = 各パッケージの tsconfig）を明記する。事実は [research/serena-request-path-state-prototype.md](research/serena-request-path-state-prototype.md) と一致することを確認済み（c8827191 の時点で tsls の adapter が `$/progress` を `do_nothing` で捨てていたことも履歴で確認）。
 
 ````markdown
 Thank you for the answers, and for merging the PR.

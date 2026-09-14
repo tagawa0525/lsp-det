@@ -492,7 +492,7 @@ PR oraios/serena#2007 と issue oraios/serena#2003〜#2006 に、メンテナか
 - 外部 adapter パッケージ（`python-lsp-det` 等。組み込みの adapter を継承して `lsp-det --` を前置し、`experimental.serverState` を宣言して待ちを状態の読み取りに置き換えるもの）は棚上げ。`ls_base_cmd` の設定だけの経路と観測できる結果は同じで、違いは保留を lsp-det が代行するか Serena 側の Python がやるかだけ。相手が要らないと言った形で、hook が断られた以上は言語ごとに `_start_server` を写して追従する保守費が値打ちに見合わない。再検討の条件は、相手が定義した境界が「adapter は状態を供給する」形になり、写像のないサーバーの供給元として lsp-det 経由の adapter が求められたとき
 - 返信には LSP 本体への提案の準備中であることも書く。ただし「ドラフトで、Serena や LSP 側の反応を見て形を決める」と明記する。rust-analyzer のメンテナが `ready: bool` を選んだこと（「rust-analyzer: 提出後の反応（2026-09-14）」）は、adapter のサーバー固有の半分がサーバー自身の報告に置き換わっていく例として 1 つだけ挙げる
 
-返信の根拠として上流 main を読み直して分かったこと（読んだのは #1988 のマージ直前の `813fd98f`。マージ後の HEAD `403ad0a5` で同じ箇所を確かめ、行番号はそちらのもの。返信と issue の草案はこれに基づく。草案は下の「Serena: #1988 への返信」の節）:
+返信の根拠として上流 main を読み直して分かったこと（読んだのは #1988 のマージ直前の `813fd98f`。マージ後の HEAD `403ad0a5` で同じ箇所を確かめ、行番号はそちらのもの。返信（提出済み）と issue の予備の草案はこれに基づく。どちらも下の「Serena: #1988 への返信」の節）:
 
 - 要求経路の継ぎ目は既にある。`SymbolLocationRequest.execute()`（`ls.py:1452-1460`）が definition / implementation / references の毎回の要求で `_pre_open_for_cross_file_references()` → `open_file` → `_wait_for_cross_file_references_if_needed()` → 送信、の順に呼ぶ。hook の依頼は不要
 - そこを流れているのは状態ではなく一度きりの latch。`_has_waited_for_cross_file_references`（`ls.py:582` で False。以後リセットなし）。既定の実装は `sleep(2)` を一度（`ls.py:1624-1628`。docstring は「信頼できる initializing 完了の信号がない LS 向け」）。typescript / Metals / Vue は progress を待つ実装に上書きしているが、どれも timeout で "proceeding anyway"（typescript のコメントは "historical permissive behavior"。"strict companion servers" は失敗させる、とある）

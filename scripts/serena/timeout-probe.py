@@ -64,6 +64,10 @@ class LogTap(logging.Handler):
 
 def main() -> None:
     lang, repo = sys.argv[1], sys.argv[2]
+    if DELAY <= REQUEST_TIMEOUT:
+        sys.exit(
+            f"DELAY ({DELAY}) must exceed REQUEST_TIMEOUT ({REQUEST_TIMEOUT}); otherwise nothing times out"
+        )
     logging.basicConfig(
         level=logging.INFO,
         format="%(relativeCreated)6d %(name)s %(levelname)s %(message)s",

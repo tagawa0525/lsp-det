@@ -44,7 +44,13 @@ def read_message(stream) -> bytes | None:
             length = int(line.split(b":", 1)[1].strip())
     if length is None:
         return None
-    body = stream.read(length)
+    # BufferedReader.read(n) はパイプでは n バイトか EOF まで読むが、それに頼らず揃える。
+    body = b""
+    while len(body) < length:
+        chunk = stream.read(length - len(body))
+        if not chunk:
+            return None
+        body += chunk
     return headers + body
 
 

@@ -528,13 +528,30 @@ If you would rather treat this as part of #2003 (the bare `TimeoutError` not rea
 
 「打ち切った応答で LS の再起動の経路に乗せるのは筋が通らない。打ち切りは待つと決めた時間を超えただけで、短い打ち切りや大きなコードベースの重い要求では正常でありうる。LS に再起動を要する問題があることを意味しない。実際にどんな問題に遭遇したのか、なぜ再起動が適切だと思うのか」。
 
-相手の読みは題名（"bypasses the language-server restart path"）から来ていて、その読みでは相手が正しい。出した文面の提案は「`SolidLSPException` の子クラスにして**ツール層が**打ち切りを terminated と見なすかを決められるようにする（health probe の後で等）+ `$/cancelRequest` を送る」で、無条件の再起動ではないが、題名がそう読めるのはこちらの落ち度。#2004 と同じく、実際に踏んだのではなくソースを読んで書いたもの。返信の方針はユーザーの判断待ち（案: 再起動の話は取り下げ、`$/cancelRequest` が送られず打ち切った要求がサーバーで走り続け、遅れた応答が未知の id として捨てられることに絞る。その前に probe で測る）。
+相手の読みは題名（"bypasses the language-server restart path"）から来ていて、その読みでは相手が正しい。出した文面の提案は「`SolidLSPException` の子クラスにして**ツール層が**打ち切りを terminated と見なすかを決められるようにする（health probe の後で等）+ `$/cancelRequest` を送る」で、無条件の再起動ではないが、題名がそう読めるのはこちらの落ち度。#2004 と同じく、実際に踏んだのではなくソースを読んで書いたもの。ユーザーの指示で測ってから返信し（[research/serena-integration-measurement.md](research/serena-integration-measurement.md) の「(b-1) の実測」。生きているが遅いサーバーで、素の `TimeoutError`、`$/cancelRequest` なし、遅れた応答は放棄した `Request` を pop して静かに消える）、再起動の部分を取り下げて not planned で閉じた（2026-09-14、[コメント](https://github.com/oraios/serena/issues/2003#issuecomment-5667011948)）。閉じた理由: 本筋（Serena を状態を読む消費者にする）に寄与しない粗に相手の注意を使わせない。
+
+出した文面:
+
+````markdown
+No, I did not encounter it in practice; like #2004, this came from reading the code, and the title overstates it. You are right that a timeout says nothing about the server's health, and I withdraw the restart part.
+
+I measured what actually happens (solidlsp directly, pyright 1.1.412, request timeout 5 s, a stdio proxy in front of pyright that holds `textDocument/references` requests for 8 s and passes everything else through):
+
+```text
+7.47 s   request_references raises TimeoutError("Request timed out (timeout=5.0)")  — 2 s of that is the default sleep in _wait_for_cross_file_references_if_needed
+         is_running() == True; no $/cancelRequest reaches the proxy; the Request stays in _pending_requests
+10.47 s  the proxy releases the request, pyright answers at once; the late response pops the abandoned Request and completes it into a queue nobody reads (no log line — so "dropped as an unknown id" in my report was wrong about the mechanism)
+15.47 s  a second references request times out the same way; documentSymbol right after it succeeds in 0.00 s — the server is fine throughout
+```
+
+So the two things that remain are small: the timed-out request keeps running in the server because no `$/cancelRequest` is sent (a single-threaded server serves the next request behind it), and the abandoned `Request` stays in `_pending_requests` until the server eventually answers. Neither is what the title claims. Closing this; the two measured points are recorded here in case they become relevant.
+````
 
 #### 09-14 の 3 件から読めること
 
-opcode81 は 15:07〜15:54 UTC の間に #2004 → #2003 の順で読み、どちらも「実際に踏んだのか」を最初に問うた。読んで書いた issue は、実測を添えても "not an actual issue" になりうる。#1988 の issue（下）は要件の一覧ではなく、**実測と実害**（tsls の `references` が `[]` を成功として返す事例、ドッグフーディング第 6 回でエージェントが使われている関数を消した事例）を中心に据える。
+opcode81 は 15:07〜15:54 UTC の間に #2004 → #2003 の順で読み、どちらも「実際に踏んだのか」を最初に問うた。読んで書いた issue は、実測を添えても "not an actual issue" になりうる。そもそも Serena に期待した役割は、下流の被験者（ADR 0010 M7）と、状態を読む消費者（本文書「位置づけ」）であり、(b) の 4 件は研究報告の副産物で本筋ではなかった。残す価値があったのは LSP 準拠と誠実さに関わる #2005 / #2006 で、どちらも第三者が修正 PR を出している。#1988 の issue（下）は要件の一覧ではなく、**実測と実害**（tsls の `references` が `[]` を成功として返す事例、ドッグフーディング第 6 回でエージェントが使われている関数を消した事例）を中心に据える。
 
-次: #1988 への返信と issue の草案を書いて確認に出す（次の PR。#1988 はマージ済みなので、返信はそのスレッドに短く、本体は issue）。#2003 は返信の方針をユーザーに諮る。#2004 は閉じられ、修正は #2030 に任せる。
+次: #1988 への返信と issue の草案を書いて確認に出す（次の PR。#1988 はマージ済みなので、返信はそのスレッドに短く、本体は issue）。#2003 と #2004 は閉じた。#2004 の修正は #2030 に任せる。
 
 ### LSP 本体: microsoft/language-server-protocol#511 へのコメントと proposal issue
 

@@ -419,39 +419,51 @@ mod tests {
     }
 
     #[test]
-    fn prefers_the_readiness_field_when_the_upstream_sends_one() {
-        // The proposed field addition (docs/upstream-submissions.md, preparation 4): a
-        // rust-analyzer that reports `readiness` itself says `initializing` while nothing is
-        // loaded yet, where `quiescent: true` alone would read as ready.
+    fn prefers_the_ready_field_when_the_upstream_sends_one() {
+        // The proposed field addition (docs/upstream-submissions.md, preparation 4, in the
+        // shape the maintainers asked for in rust-lang/rust-analyzer#23331): a rust-analyzer
+        // that reports `ready` itself says `false` while nothing is loaded yet, where
+        // `quiescent: true` alone would read as ready.
         let mut adapter = RustAnalyzerAdapter::new();
-        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"readiness":"initializing","message":null}}"#;
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"ready":false,"message":null}}"#;
         let state = interpret(&mut adapter, body).unwrap();
-        assert_eq!(state.readiness, Readiness::Initializing);
+        assert_eq!(state.readiness, Readiness::Indexing);
         assert_eq!(state.health, Health::Ok);
     }
 
     #[test]
-    fn ignores_a_status_whose_readiness_is_not_a_value_of_this_protocol() {
+    fn a_ready_status_is_ready_even_while_caches_are_primed() {
+        // `quiescent` is `false` while rust-analyzer primes its caches, but the workspaces are
+        // loaded and answers are complete (only slower): the server's own `ready: true` wins
+        // over the derivation from `quiescent`.
+        let mut adapter = RustAnalyzerAdapter::new();
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":false,"ready":true,"message":null}}"#;
+        let state = interpret(&mut adapter, body).unwrap();
+        assert_eq!(state.readiness, Readiness::Ready);
+    }
+
+    #[test]
+    fn ignores_a_status_whose_ready_is_not_a_boolean() {
         // Like a health value outside the protocol: the status is not read at all rather than
         // guessed from `quiescent` (spec chapter 8.1 reasoning applies to both axes).
-        for claimed in ["unknown", "warming"] {
+        for claimed in ["\"true\"", "1", "\"ready\""] {
             let mut adapter = RustAnalyzerAdapter::new();
             let body = format!(
-                r#"{{"method":"experimental/serverStatus","params":{{"health":"ok","quiescent":true,"readiness":"{claimed}"}}}}"#
+                r#"{{"method":"experimental/serverStatus","params":{{"health":"ok","quiescent":true,"ready":{claimed}}}}}"#
             );
             assert!(
                 interpret(&mut adapter, &body).is_none(),
-                "must not accept readiness {claimed} from the upstream"
+                "must not accept ready {claimed} from the upstream"
             );
         }
     }
 
     #[test]
-    fn ignores_a_status_whose_readiness_is_null() {
-        // `null` is not a value of the protocol either. Reading it as "absent" would fall back
-        // to `quiescent`, which is the reading the field exists to replace.
+    fn ignores_a_status_whose_ready_is_null() {
+        // `null` is not a boolean either. Reading it as "absent" would fall back to
+        // `quiescent`, which is the reading the field exists to replace.
         let mut adapter = RustAnalyzerAdapter::new();
-        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"readiness":null}}"#;
+        let body = r#"{"method":"experimental/serverStatus","params":{"health":"ok","quiescent":true,"ready":null}}"#;
         assert!(interpret(&mut adapter, body).is_none());
     }
 

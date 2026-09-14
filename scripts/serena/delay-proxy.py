@@ -123,7 +123,7 @@ def main() -> None:
     )
     down = threading.Thread(
         target=pump_server_to_client,
-        args=(server.stdout, client_out, True),
+        args=(server.stdout, client_out),
         daemon=True,
     )
     up.start()

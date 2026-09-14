@@ -136,7 +136,7 @@ rust-lang/rust-analyzer#23331 に ChayimFriedman2 が 2026-09-13 に返答した
 
 - `is_quiescent()`（`reload.rs`）が見るのは VFS の一括ロード、ワークスペースの取得、ビルドスクリプト、proc macro、discover、設定の版で、priming は入っていない。これが「読み込み中」の全部
 - priming（`crates/ide-db/src/prime_caches.rs`）の冒頭: 「rust-analyzer は lazy で、頼まれるまで何も計算しない。最初の goto definition が遅くなるのを避けるための、キャッシュの事前計算」。要求は priming の有無に関係なく同じ salsa の問い合わせをその場で計算するので、答えの集合は変わらない。`is_fully_ready()` の注釈の「priming 中は salsa のロックを持つので応答できない」は遅延であって不完全ではない。メンテナの主張はソースと一致する
-- したがって `ready = !nothing_loaded_yet && is_quiescent()`（fork `tagawa0525/rust-analyzer` の `server-status-ready` 7d79ab49d1、上流 master f312032107 起点。`reload.rs` の `is_ready`）。3 値版との差は priming 中が `indexing` から `ready` になることだけ。初期の `last_reported_status` は `ready: false` で、通知の回数は変わらない。`cargo xtask tidy` と lib tests 99 件が通る
+- したがって `ready = !nothing_loaded_yet && is_quiescent()`（fork `tagawa0525/rust-analyzer` の `server-status-ready`。測定時は 7d79ab49d1、上流 master f312032107 起点。提出時は 83449b2f18 に rebase した dd80082bde と、slow-tests 2 件を足した c6b47b9bef。`reload.rs` の `is_ready`）。3 値版との差は priming 中が `indexing` から `ready` になることだけ。初期の `last_reported_status` は `ready: false` で、通知の回数は変わらない。`cargo xtask tidy` と lib tests 99 件が通り、fork の CI（tagawa0525/rust-analyzer#2）で全ジョブが通る。rust-lang/rust-analyzer#23362 として提出（2026-09-15）
 
 ### 結果
 

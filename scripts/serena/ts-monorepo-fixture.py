@@ -177,6 +177,7 @@ def main() -> None:
             write(os.path.join(pkg, "src", f"f{k}.ts"), body)
 
     # app
+    visible_from_app = None
     if args.app:
         app = os.path.join(root, "apps", "web")
         write(os.path.join(app, "tsconfig.json"), tsconfig([]))

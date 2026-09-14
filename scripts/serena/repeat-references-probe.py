@@ -10,7 +10,8 @@ ts-monorepo-fixture.py が作った workspace で、`formatDisplay` の referenc
         ../../scripts/serena/repeat-references-probe.py /path/to/fixture
 
 環境変数:
-    EXPECTED   期待する参照ファイル数 (fixture 生成時の表示)。未指定なら判定せず観測のみ
+    EXPECTED   期待する参照ファイル数 (fixture 生成時の表示)。一致だけを OK とする (多くても不合格)。
+               未指定なら判定せず観測のみ
     SEQUENCE   呼び出し間の待ち秒数をカンマ区切りで (既定 "0,0,2,0,2" = 6 回)
     TARGET     問い合わせる位置 "relative/path.ts:line:col" (0 始まり。既定は fixture の formatDisplay)
     PREOPEN    6 連続の前に didOpen して開いたままにする相対パス。references を多く持つ package の
@@ -138,8 +139,8 @@ def main() -> None:
                     if EXPECTED is None
                     else (
                         " OK"
-                        if len(files) >= EXPECTED
-                        else f" PARTIAL (expected {EXPECTED} files)"
+                        if len(files) == EXPECTED
+                        else f" MISMATCH (expected {EXPECTED} files)"
                     )
                 )
                 log(
@@ -151,7 +152,7 @@ def main() -> None:
     for t, line in tap.lines:
         log(f"  [{t - t0:7.3f}] {line}")
     log(f"files per call: {counts}")
-    if EXPECTED is not None and any(c < EXPECTED for c in counts):
+    if EXPECTED is not None and any(c != EXPECTED for c in counts):
         sys.exit(1)
 
 

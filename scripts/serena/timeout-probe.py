@@ -124,6 +124,11 @@ def main() -> None:
             while time.time() < deadline and any(i in pending for i in abandoned):
                 time.sleep(0.01)
             still_pending = [i for i in abandoned if i in pending]
+            # pending が空になる理由は応答の到着だけではない。サーバーが死ねば読み取り
+            # スレッドの _cancel_pending_requests も空にするので、そちらでないことを確かめる。
+            cancelled = [
+                m for t, m in tap.lines if t >= t1 and m.startswith("Cancelling")
+            ]
             if not abandoned:
                 log(
                     "nothing was pending after the timeout (unexpected; the late-response observation is void)"
@@ -131,6 +136,10 @@ def main() -> None:
             elif still_pending:
                 log(
                     f"no late response within {DELAY + 5.0:.0f} s: request ids {still_pending} are still pending"
+                )
+            elif cancelled or not ls.is_running():
+                log(
+                    f"pending was cleared by cancellation, not by a response (is_running={ls.is_running()}, {cancelled})"
                 )
             else:
                 log(

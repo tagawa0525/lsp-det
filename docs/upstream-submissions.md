@@ -485,7 +485,7 @@ PR oraios/serena#2007 と issue oraios/serena#2003〜#2006 に、メンテナか
 
 [返信](https://github.com/oraios/serena/pull/1988#issuecomment-5648743907)は 21:16:36 UTC で、その 16 秒後の 21:16:52 に #1988 は main にマージされた（マージコミット `403ad0a5`。私は 09-14 までこれを見落として OPEN と報告していた）。返信の要点。(1)「`references` を索引の完了まで保留する」はどう実現しているのか、サーバーごとに大きく違うのでは、という問い返し。(2) 質問 1（子クラスの新キーか `allow_override` か）は「実装を置き換えたいかどうかで、どちらも可」。(3) 質問 2 の hook は「多くのラッパーがイベントハンドラをローカルなクロージャで書いていて、readiness の信号と他のハンドラの登録を切り分けられないので現実的でない」。(4) 質問 3 は「本物の問題を解くなら本体に入れる価値はあるが、中間にプロキシプロセスを挟むのは避けたい間接化。SolidLSP の中に直接実装する解を望む。issue を立てて、何をしていてどう SolidLSP に足せるのか詳しく書いてほしい」。
 
-ユーザーの決定（2026-09-14）:
+ユーザーの決定（2026-09-15 JST。以下この節の日付は上流の出来事が UTC、こちらの決定が JST）:
 
 - 招待に乗って issue を立てる。内容は設計の提案ではなく、事実（実測）と要件（仕様 9 章の規則と 9.1 のテスト可能な形）を出し、**境界の定義はそちらに頼む**（core が持つもの: サーバーごとの状態、保留の規則、要求経路の検査。adapter が供給するもの: 状態の遷移。書き方はクロージャのままでよい）。SolidLSP に取り込まれる方が望ましく、Serena の経路では lsp-det は消える運命（構想の「準拠すれば補正が不要になる」）
 - 提案の大きさは (i) health の要求経路への反映と横断要求が見る readiness の 2 点を本文に、(ii) `coverage` の宣言と `didChangeWatchedFiles` の鮮度は「その先」として 1 段落
@@ -557,13 +557,13 @@ opcode81 は 15:07〜15:54 UTC の間に #2004 → #2003 の順で読み、ど�
 
 ### Serena: #1988 への返信（草案。2026-09-15、未提出）と issue（予備）
 
-opcode81 の返信（「Serena: 提出後の反応（2026-09-15）」）への対応。ユーザーの決定（2026-09-15）: **答えは #1988 に書く**。相手の 2 つの問い（どう実現しているか、どう SolidLSP に足せるか）に、マージ済み PR のスレッドで自己完結して答える。issue は相手が「追跡のために欲しい」と言ったときに出す予備で、その草案は下に残す。理由: 相手が求めたのは "more details on what exactly it is your solution does and how it could be added" で、それは返信で答えられる。#2003 / #2004 の直後に同じ報告者が大きな issue を出すより、まず答えて相手に選ばせる。
+opcode81 の返信（「Serena: 提出後の反応（2026-09-15）」）への対応。ユーザーの決定（2026-09-15 JST）: **答えは #1988 に書く**。相手の 2 つの問い（どう実現しているか、どう SolidLSP に足せるか）に、マージ済み PR のスレッドで自己完結して答える。issue は相手が「追跡のために欲しい」と言ったときに出す予備で、その草案は下に残す。理由: 相手が求めたのは "more details on what exactly it is your solution does and how it could be added" で、それは返信で答えられる。#2003 / #2004 の直後に同じ報告者が大きな issue を出すより、まず答えて相手に選ばせる。
 
 読者は「実際に踏んだか」を最初に問うので、Serena 自身の issue（oraios/serena#1937、#1858、#1923、#1978）を根拠の筆頭に置く。事実の出典は [research/serena-integration-measurement.md](research/serena-integration-measurement.md)（tsserver クラッシュ後の `[]`、latch の `sleep(2)`）と上流 `403ad0a5` の行番号。
 
 #### #1988 への返信
 
-長い版（約 680 語）はユーザーが「長すぎて読む気がしない」と却下。要点だけの版に縮め、ユーザーの意図（2026-09-15）を最初の答えの芯に置いた: 「サーバー固有では」への答えは「今はそのとおりで、だから SolidLSP の adapter がある。本来は各サーバーが同じ言葉を話すべきで、それが目標。lsp-det はそれまでのつなぎ」。約 270 語。長い版の材料は issue の予備（下）に残す。ユーザーの修正（同日）: rust-analyzer は「足しつつある」ではなく「提案している」（#23331 は返答あり、PR #23362 は未マージ）。プロキシは「同意して取り下げる」ではなく、そもそも提案するものではない。**相手に出すリンクは英語の文書に限る**（この返信の `readiness-vocabulary-corpus.md` は英語が正。日本語の報告を出すなら先に英訳し、日本語版を `.ja.md` にリネームする）。
+長い版（約 680 語）はユーザーが「長すぎて読む気がしない」と却下。要点だけの版に縮め、ユーザーの意図（2026-09-15）を最初の答えの芯に置いた: 「サーバー固有では」への答えは「今はそのとおりで、だから SolidLSP の adapter がある。本来は各サーバーが同じ言葉を話すべきで、それが目標。lsp-det はそれまでのつなぎ」。約 270 語。長い版の材料は issue の予備（下）に残す。ユーザーの修正（同日）: rust-analyzer は「足しつつある」ではなく「提案している」（#23331 は返答あり、PR #23362 は未マージ）。プロキシは「同意して取り下げる」ではなく、そもそも提案するものではない。「クライアントが状態を持てば lsp-det は不要」は誤り——SolidLSP はクライアントで、状態を知ることはできず推定するだけ。adapter の写しも lsp-det と同じ橋で、到達点はサーバー自身の報告。「SolidLSP が本当のサーバーならよかった」は相手に取れる行動がないので書かない。**相手に出すリンクは英語の文書に限る**（この返信の `readiness-vocabulary-corpus.md` は英語が正。日本語の報告を出すなら先に英訳し、日本語版を `.ja.md` にリネームする）。
 
 ````markdown
 Thanks. Short answers, since this PR is merged.
@@ -576,7 +576,7 @@ Today, yes — that is exactly why SolidLSP has an adapter per server and lsp-de
 
 The mapping already exists in your adapters, and so does the seam: `_wait_for_cross_file_references_if_needed()` runs before every cross-file request. What is missing is that it consults a one-shot latch (`_has_waited_for_cross_file_references`, default `sleep(2)`) instead of a state. Smallest change: adapters keep the server's latest "ready / broken" state, updated from the handlers they already have; the base request path checks it on every cross-file request. This is the shape behind #1937, #1858, #1923, #1978, and #2007 (tsserver dead → `references` returns `[]`).
 
-Hook withdrawn; the seam is enough. The proxy is not the proposal and never was meant to be: lsp-det is the bridge until servers speak for themselves, and becomes unnecessary wherever they, or the client, hold the state. I can bring the measurements, an inventory of which signals each of the 18 servers actually emits (plus a desk survey of the 70 SolidLSP supports: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/readiness-vocabulary-corpus.md), and tests for whatever boundary you choose. Happy to open an issue if you want to track it.
+Hook withdrawn; the seam is enough. The proxy is not the proposal and never was meant to be. lsp-det is a bridge until servers speak for themselves — and so is the mapping in your adapters; the difference is only where it runs. Until servers do speak, the least either bridge can do is consult the state on every request rather than once. I can bring the measurements, an inventory of which signals each of the 18 servers actually emits (plus a desk survey of the 70 SolidLSP supports: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/readiness-vocabulary-corpus.md), and tests for whatever boundary you choose. Happy to open an issue if you want to track it.
 ````
 
 #### issue（予備。相手が追跡用に欲しいと言ったら出す）

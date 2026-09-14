@@ -127,7 +127,10 @@ def main() -> None:
             # その前に走って first_cancels が空になる競合がある。
             t_kill = time.time()
             for pid in victims:
-                os.kill(pid, signal.SIGKILL)
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass  # 先に kill した親に連れて既に消えた子 (tsserver 等)
             log(f"SIGKILL {victims} (no request pending)")
 
             # 読み取りスレッドの終了 (= キャンセルの完了) を待つ。sleep では同期にならない。

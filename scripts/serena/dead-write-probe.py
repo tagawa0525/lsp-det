@@ -132,11 +132,10 @@ def main() -> None:
                 f"(still alive: {alive}); cancel events since kill: "
                 f"{[n for _, n in first_cancels]}; ls.is_running()={ls.is_running()}"
             )
-            if (
-                alive or first_cancels != [(first_cancels[0][0], 0)]
-                if first_cancels
-                else True
-            ):
+            exactly_one_empty_cancel = (
+                len(first_cancels) == 1 and first_cancels[0][1] == 0
+            )
+            if alive or not exactly_one_empty_cancel:
                 log(
                     "precondition failed: expected exactly one 'Cancelling 0 pending' before request #2"
                 )

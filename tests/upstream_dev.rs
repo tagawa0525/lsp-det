@@ -241,8 +241,10 @@ fn rust_analyzer_reports_ready_in_server_status() {
         let ready = status["ready"]
             .as_bool()
             .unwrap_or_else(|| panic!("the status carries no boolean ready field: {status}"));
-        // The first notification is sent while the workspaces are still being fetched: the
-        // moment `quiescent` alone misleads, and the moment the field exists for.
+        // The first notification is sent while the workspaces are still being fetched. This is
+        // the moment `quiescent` alone misleads (it is trivially `true` before the first load,
+        // nothing being in flight yet), and the moment the field exists for: `ready` separates
+        // that trivial quiescence from a loaded workspace.
         if seen.is_empty() {
             assert!(!ready, "the first status already claims ready: {status}");
         }

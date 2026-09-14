@@ -1,6 +1,6 @@
 # Serena の要求経路に状態を持たせる提案の検証（2026-09-15）
 
-`docs/upstream-submissions.md` の「Serena: #1988 への返信（草案）」で提案する方法——adapter がサーバーの最新の ready / broken の状態を持ち、基底クラスの要求経路が毎回の横断要求でそれを見る——で、Serena 自身の issue（oraios/serena#1937 等）の症状が実際に消えることを、返信を出す前に試作と再現で確かめる（ユーザーの決定 2026-09-15 JST。読んだだけの主張は #2003 / #2004 で却下された）。
+`docs/upstream-submissions.md` の「Serena: #1988 への返信」で提案する方法（返信は 2026-09-14 20:25 UTC に提出済み。本報告はその前に行った検証）——adapter がサーバーの最新の ready / broken の状態を持ち、基底クラスの要求経路が毎回の横断要求でそれを見る——で、Serena 自身の issue（oraios/serena#1937 等）の症状が実際に消えることを、返信を出す前に試作と再現で確かめる（ユーザーの決定 2026-09-15 JST。読んだだけの主張は #2003 / #2004 で却下された）。
 
 検証済みだったのは #2007 の 1 件（tsserver を SIGKILL した後の `references` が `[]` を成功として返す → latch の前で検査すれば例外。[serena-integration-measurement.md](serena-integration-measurement.md)）だけで、#1937 / #1858 / #1923 / #1978 は「同じ形と読んだ」に留まっていた。本報告は #1937 を再現し、試作で消えるかを測る。
 
@@ -119,6 +119,6 @@ oraios/serena#1858 は「セッション最初の `find_referencing_symbols` が
 
 ## 次
 
-- 返信の文面は測ったことに合わせて直した（[../upstream-submissions.md](../upstream-submissions.md) の草案。未提出）
+- 返信（2026-09-14 20:25 UTC に提出。[../upstream-submissions.md](../upstream-submissions.md)）への反応を待つ
 - 試作の枝は fork に push 済み: https://github.com/tagawa0525/serena/tree/request-path-consults-state（`b7a7093d`、`403ad0a5` + tsls の 8 行）。Scala の V1 / V2 は reference/serena のローカル枝 `request-path-consults-state-experiment` に残す
 - lsp-det の tsls 写像の反例（solution なし配置で `ready` のまま不完全）は、仕様 8.1 の `unknown` を使う余地（信号が来ない workspace と観測者が判断できるか）を含めて別の報告と ADR で扱う。仕様・写像は勝手に変えない

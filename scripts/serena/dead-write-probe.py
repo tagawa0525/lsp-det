@@ -153,9 +153,11 @@ def main() -> None:
                     f"terminated={terminated} cause={type(e.cause).__name__}; "
                     f"cancel events after request #2: {later_cancels}"
                 )
-                # 受け入れ: 打ち切りの前に terminated で失敗し、それが #2 の後のキャンセル
-                # (書き込み失敗の経路) によるもの。
-                if terminated and elapsed < REQUEST_TIMEOUT and later_cancels:
+                # 受け入れ: 打ち切りの前に terminated で失敗すること。読み取りスレッドの
+                # キャンセルが #2 を拾う競合は kill 後の "Cancelling 0 pending" の検査で
+                # 除いてあるので、直し方 (書き込み失敗でのキャンセルか、送信前の
+                # is_running() の検査か) は問わない。later_cancels はログに出すだけ。
+                if terminated and elapsed < REQUEST_TIMEOUT:
                     verdict = 0
             except Exception as e:  # noqa: BLE001 - 素の TimeoutError がここに来る (不合格)
                 log(

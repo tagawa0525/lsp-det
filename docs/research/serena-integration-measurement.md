@@ -109,4 +109,36 @@ lsp-det を載せる形は「`SolidLanguageServer` の子クラスを持つ Pyth
 
 - fixture は前回と同じ 2 ファイル。上の「一般化してはならない点」はそのまま当てはまる
 - #1978 と #1988 は OPEN で、マージ時に形が変わりうる。特に #1988 の `ExternalLanguageServerId` の引数と entry point の group 名はマージ後に読み直す
-- (b) の 4 件はコードを読んで所在を確かめたもので、動かして測ったのは (a) だけ
+- (b) の 4 件はコードを読んで所在を確かめたもの。動かして測ったのは (a) と、oraios/serena#2004 の問い返しを受けて測った (b-2)（下の節）だけ
+
+## (b-2) の実測（2026-09-15、oraios/serena#2004 の問い返しへの答え）
+
+opcode81 が #2004 に「実際にどう遭遇したのか。サーバーが本当にいないなら読み取りスレッドが検知して要求をキャンセルする」と問い返した（2026-09-14）。(b-2) は読んで見つけたもので動かしていなかったので、測った。道具は `scripts/serena/dead-write-probe.py`。上流 HEAD `813fd98f` の `ls_process.py` は測った checkout（`3bed94f3`）と差分がない。
+
+### 方法
+
+pyright 1.1.412、solidlsp 直接（lsp-det なし）、要求の打ち切りを 8 秒に設定（`SolidLanguageServer.create(..., timeout=8)`。Serena の既定は 235 秒で、窓の長さがそれに比例するだけ）。`request_references` を 1 回 → 保留中の要求がない状態で pyright のプロセスを SIGKILL → 1 秒待つ → `request_references` をもう 1 回。fixture は `a.py`（`def target()`）と `b.py`（import と呼び出し）。
+
+### 結果
+
+| 時刻    | 出来事                                                                                                                                                    |
+| ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 4.21 s  | `references` #1 → 2 箇所                                                                                                                                  |
+| 4.34 s  | SIGKILL（保留なし）                                                                                                                                       |
+| 4.53 s  | 読み取りスレッドが終了し、"Cancelling 0 pending language server requests"（`ls_process.py:629` → `326-335`。キャンセルはこの一度だけ）                    |
+| 5.34 s  | `ls.is_running()` は False                                                                                                                                |
+| 5.53 s  | `references` #2: "Failed to write to stdin: [Errno 32] Broken pipe" が 2 回（`didOpen` と要求本体。`ls_process.py:664-667` で `log.error` して return）   |
+| 13.34 s | 素の `TimeoutError`（"Request timed out (timeout=8.0)"。打ち切りいっぱい）。`SolidLSPException` ではないので `tools_base.py:383` の再起動の判定に届かない |
+
+### 読み
+
+- 相手の主張は、プロセスが死んだ時点で要求が保留中の場合には正しい。読み取りスレッドが `_cancel_pending_requests` でその要求に `LanguageServerTerminatedException` を配る。#2004 の元の文面はこの場合まで「打ち切りまで待つ」と読めたので、返信で狭めた
+- キャンセルは読み取りスレッドが終わる瞬間の一度きり。その後に `_send_request_once`（`ls_process.py:337-349`）で登録された要求は誰も失敗させない。保留が空のときに死に、同じツール呼び出しの中で次の要求を送る場面（`include_info` 付きの `find_symbol` の hover のループ、`open_file` → 要求の並び）で起きる。`_ensure_functional_ls`（`ls_manager.py`）はツール呼び出しの間でしか `is_running()` を見ない
+- 直す場所は書き込みの失敗か、`_send_request_once` の冒頭の `is_running()`。どちらでも要求を `LanguageServerTerminatedException` で失敗させれば再起動の経路（`tools_base.py:383-389`）に乗る。probe の受け入れ条件はこれ（要求 #2 が打ち切りの前に `is_language_server_terminated()` の真な `SolidLSPException` になる）
+- 返信の文面は [../upstream-submissions.md](../upstream-submissions.md) の「Serena: 提出後の反応（2026-09-15）」
+
+### 一般化してはならない点
+
+- pyright 1 つ、fixture 2 ファイル。`_send_payload` は言語に依らない同じ関数だが、typescript-language-server では動かしていない
+- 「保留中に死ぬ」場合は測っていない（ソースから読める）
+- MCP は挟んでいない。ツール層の打ち切り（`tool_timeout`）は要求の打ち切りと同じ値から 5 秒引いたものなので、実運用で先に来るのは要求の打ち切り

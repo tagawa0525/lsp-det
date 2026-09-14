@@ -563,25 +563,20 @@ opcode81 の返信（「Serena: 提出後の反応（2026-09-15）」）への�
 
 #### #1988 への返信
 
+長い版（約 680 語）はユーザーが「長すぎて読む気がしない」と却下。要点だけの版に縮めた（約 190 語）。長い版の材料は issue の予備（下）に残す。
+
 ````markdown
-Thanks for the detailed answer. Since this PR is merged I will keep it to your two questions and one concrete suggestion; if you would rather track it as an issue, say so and I will open one.
+Thanks. Short answers, since this PR is merged.
 
-> How does it achieve this? Isn't this highly server-specific?
+> Isn't this highly server-specific?
 
-Half of it is, by design. lsp-det has one mapping per server (17 mappings for 18 servers), each reading that server's own signals: pyright's "Found N source files" log line, typescript-language-server's `$/progress` tokens and its "[tsserver] Exited" log line, rust-analyzer's `experimental/serverStatus`, gopls's "Setting up workspace" progress, clangd's `backgroundIndexProgress`, jdtls's `language/status` — each checked against the server's source before use — and reporting `unknown` where a server emits nothing (pyrefly). The other half is not server-specific: every mapping produces the same state, `{health, readiness}`, and the hold is a rule over that state and nothing else. Requests from a fixed list of cross-file methods (`references`, `definition`, `implementation`, `workspace/symbol`, `rename`, call hierarchy) are queued while `readiness` is `initializing` or `indexing`, released when it becomes `ready`, passed through when it is `unknown`, and failed at once with an explicit error while `health` is `error`. `hover`, `documentSymbol`, completion are never held. There is no timer anywhere; a held request is answered only by a state change, the client's `$/cancelRequest`, or `shutdown`.
+Reading the signals is: one mapping per server (pyright's "Found N source files" log line, typescript-language-server's `$/progress` tokens and its "[tsserver] Exited" line, rust-analyzer's `experimental/serverStatus`, …), `unknown` where a server emits nothing. What comes out is not: one state per server, `{health, readiness}`, and one rule — cross-file requests wait while not `ready`, fail at once while `health` is `error`, pass through when `unknown`; nothing else is held; no timers.
 
 > how it could be added to SolidLSP
 
-The server-specific half is already here: `PyrightServer` waits for the same log line, `TypeScriptLanguageServer` for the same progress tokens, and the seam on the request path exists too — `SymbolLocationRequest.execute()` (`ls.py:1452-1460` on `main`) calls `_wait_for_cross_file_references_if_needed()` before every definition / implementation / references request. What flows through that seam today is a one-shot latch rather than a state: `_has_waited_for_cross_file_references` is set on the first call and never cleared, the default wait is `sleep(2)`, and the adapters that override it end in "proceeding anyway" on timeout. So the smallest form I can see is:
+The server-specific part already exists in your adapters, and so does the seam: `_wait_for_cross_file_references_if_needed()` runs before every cross-file request. What is missing is that it consults a one-shot latch (`_has_waited_for_cross_file_references`, default `sleep(2)`) instead of a state. Smallest change: adapters keep a per-server "ready / broken" state, updated from the handlers they already have; the base request path checks it every time. This is the shape behind #1937, #1858, #1923, #1978, and #2007 (tsserver dead → `references` returns `[]`).
 
-- each adapter keeps a small per-server state — ready for cross-file answers or not, and functional or not — updated from the event handlers it already has (the closures stay exactly as they are; this is what the hook question was really about, and it does not need a hook);
-- the base request path consults that state on every cross-file request: wait while not ready, fail at once with a reason while not functional, send without waiting when the adapter has no way to know; single-file requests untouched; no timers.
-
-Three choices in that are yours, not mine: where the state lives (a field on the base class, an object the adapter owns, …); what a timeout means (today's "proceeding anyway", which the TypeScript adapter's own comment calls "the historical permissive behavior", versus the strict variant its companion servers use); and the default for adapters with no signal (`sleep(2)` today; an explicit "unknown, do not wait" would be honest and free).
-
-Why I think it is worth it: this is the shape your users already report — #1937 (TypeScript: silently partial after the first query), #1858 (Scala), #1923 (Vue), and #1978 drains one token for one server but stays behind the latch. Two more I measured: with tsserver killed after one successful query, the next `request_references` returns `[]` as a success because the crash check sits inside `wait_for_indexing`, which the latch skips (#2007 moves it in front — the smallest piece of the above); and a fresh pyright pays the 2 s sleep on its first cross-file request even though the adapter already waited for "Found N source files" at startup — the two waits do not know about each other.
-
-On the proxy: agreed, and I am not proposing one for this repository. SolidLSP holding the state itself is the better outcome; lsp-det exists to make the state observable where neither side holds it, and to become unnecessary where one does. I can bring the measurements, a per-server inventory of which signals each of the 18 servers actually emits (plus a desk survey of the 70 SolidLSP supports: https://github.com/tagawa0525/lsp-det/blob/main/docs/research/readiness-vocabulary-corpus.md), and tests for whatever boundary you choose.
+Hook withdrawn; the seam is enough. Proxy: agreed, not proposing one. Happy to open an issue with the measurements if you want to track it.
 ````
 
 #### issue（予備。相手が追跡用に欲しいと言ったら出す）

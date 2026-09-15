@@ -172,7 +172,7 @@ pyright 1.1.412、solidlsp 直接、要求の打ち切り 5 秒（`SolidLanguage
 - 測れていないこと。(a) 打ち切った要求の計算がサーバー側で続くか。pyright は 2 ファイルの fixture では 4 ms で答えるので、続く計算がそもそもない。「cancel を送らない以上、サーバーは止める術がない」は LSP の仕組みからの推論で、この実測の結論ではない。#2003 に出した文面はこの推論を "keeps running in the server" と事実のように書いていて、言い過ぎだった（投稿済みのコメントを訂正済み。2026-09-14 16:26 UTC）。(b) 永久に答えないサーバーで `_pending_requests` の項目が残り続けるか。プロキシは 8 秒後に流すので測っていない（ソースからは、pop するのは応答の到着だけ）
 - ツール層では素の `TimeoutError` は `tools_base.py` の `except Exception` で `ToolCallError("TimeoutError: Request timed out (timeout=235.0)")` になる。#2003 に書いた "Tool execution timed out after N seconds" は外側の `tool_timeout`（240 秒）の方で、内側の `ls_timeout`（235 秒）が先に来るので通常は出ない。これも不正確だった
 - 副産物: 起動時に "Found N source files" を待つ pyright でも、最初の横断要求は latch の `sleep(2)` を払う。起動時の待ちと要求経路の待ちが繋がっていないことの実例で、#1988 の issue の材料
-- 返信して not planned で閉じた（2026-09-14 16:10 UTC 頃。[コメント](https://github.com/oraios/serena/issues/2003#issuecomment-5667011948)。文面は [../upstream-submissions.md](../upstream-submissions.md)）
+- 返信して not planned で閉じた（2026-09-14 16:10 UTC 頃。[コメント](https://github.com/oraios/serena/issues/2003#issuecomment-5667011948)。文面は [../upstream-submissions/serena.md](../upstream-submissions/serena.md)）
 
 ### 一般化してはならない点
 

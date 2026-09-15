@@ -103,7 +103,7 @@ oraios/serena#1978 でも変わらない理由: #1978 は latch（`_has_waited_f
 - 外部の登録は Python パッケージの entry point（group `solidlsp.language_server_registration`）か、Serena を起動する自前のスクリプトからの `register()`。`allow_override=True` で既存の key を置き換えられる
 - 登録した key は `project.yml` の `language_servers` にそのまま書ける。文書は `docs/03-special-guides/external_language_server_registration.md`
 
-lsp-det を載せる形は「`SolidLanguageServer` の子クラスを持つ Python パッケージ」になる。組み込みの adapter（`PyrightServer` 等）を継承して起動コマンドを `lsp-det -- …` にし、readiness の待ちを `experimental/serverState` の読み取りに置き換えるものが 1 言語 1 クラス。提案の草案は `docs/upstream-submissions.md`。
+lsp-det を載せる形は「`SolidLanguageServer` の子クラスを持つ Python パッケージ」になる。組み込みの adapter（`PyrightServer` 等）を継承して起動コマンドを `lsp-det -- …` にし、readiness の待ちを `experimental/serverState` の読み取りに置き換えるものが 1 言語 1 クラス。提案の草案は `docs/upstream-submissions/serena.md`。
 
 ### 一般化してはならない点
 

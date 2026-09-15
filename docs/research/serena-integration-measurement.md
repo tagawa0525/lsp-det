@@ -103,7 +103,7 @@ oraios/serena#1978 でも変わらない理由: #1978 は latch（`_has_waited_f
 - 外部の登録は Python パッケージの entry point（group `solidlsp.language_server_registration`）か、Serena を起動する自前のスクリプトからの `register()`。`allow_override=True` で既存の key を置き換えられる
 - 登録した key は `project.yml` の `language_servers` にそのまま書ける。文書は `docs/03-special-guides/external_language_server_registration.md`
 
-lsp-det を載せる形は「`SolidLanguageServer` の子クラスを持つ Python パッケージ」になる。組み込みの adapter（`PyrightServer` 等）を継承して起動コマンドを `lsp-det -- …` にし、readiness の待ちを `experimental/serverState` の読み取りに置き換えるものが 1 言語 1 クラス。提案の草案は `docs/upstream-submissions.md`。
+lsp-det を載せる形は「`SolidLanguageServer` の子クラスを持つ Python パッケージ」になる。組み込みの adapter（`PyrightServer` 等）を継承して起動コマンドを `lsp-det -- …` にし、readiness の待ちを `experimental/serverState` の読み取りに置き換えるものが 1 言語 1 クラス。提案の草案は `docs/upstream-submissions/serena.md`。
 
 ### 一般化してはならない点
 
@@ -137,7 +137,7 @@ solidlsp 直接（lsp-det なし）、要求の打ち切りを 8 秒に設定（
 - 相手の主張は、プロセスが死んだ時点で要求が保留中の場合には正しい。読み取りスレッドが `_cancel_pending_requests` でその要求に `LanguageServerTerminatedException` を配る。#2004 の元の文面はこの場合まで「打ち切りまで待つ」と読めたので、返信で狭めた
 - キャンセルは読み取りスレッドが終わる瞬間の一度きり。その後に `_send_request_once`（`ls_process.py:337-349`）で登録された要求は誰も失敗させない。保留が空のときに死に、同じツール呼び出しの中で次の要求を送る場面（`include_info` 付きの `find_symbol` の hover のループ、`open_file` → 要求の並び）で起きる。`_ensure_functional_ls`（`ls_manager.py`）はツール呼び出しの間でしか `is_running()` を見ない
 - 直す場所は書き込みの失敗か、`_send_request_once` の冒頭の `is_running()`。どちらでも要求を `LanguageServerTerminatedException` で失敗させれば再起動の経路（`tools_base.py:383-389`）に乗る。probe の受け入れ条件はこれ（要求 #2 が打ち切りの前に `is_language_server_terminated()` の真な `SolidLSPException` になること。直し方は問わない。読み取りスレッドのキャンセルが #2 を拾う競合は、kill の後のキャンセルが "0 pending" 1 回だったことの検査で除く）。第三者の [oraios/serena#2030](https://github.com/oraios/serena/pull/2030) がまさにこの形（下）
-- 返信の文面は [../upstream-submissions.md](../upstream-submissions.md) の「Serena: 提出後の反応（2026-09-15）」
+- 返信の文面は [../upstream-submissions/serena.md](../upstream-submissions/serena.md) の「提出後の反応（2026-09-15）」
 
 ### #2030 の枝での結果
 
@@ -172,7 +172,7 @@ pyright 1.1.412、solidlsp 直接、要求の打ち切り 5 秒（`SolidLanguage
 - 測れていないこと。(a) 打ち切った要求の計算がサーバー側で続くか。pyright は 2 ファイルの fixture では 4 ms で答えるので、続く計算がそもそもない。「cancel を送らない以上、サーバーは止める術がない」は LSP の仕組みからの推論で、この実測の結論ではない。#2003 に出した文面はこの推論を "keeps running in the server" と事実のように書いていて、言い過ぎだった（投稿済みのコメントを訂正済み。2026-09-14 16:26 UTC）。(b) 永久に答えないサーバーで `_pending_requests` の項目が残り続けるか。プロキシは 8 秒後に流すので測っていない（ソースからは、pop するのは応答の到着だけ）
 - ツール層では素の `TimeoutError` は `tools_base.py` の `except Exception` で `ToolCallError("TimeoutError: Request timed out (timeout=235.0)")` になる。#2003 に書いた "Tool execution timed out after N seconds" は外側の `tool_timeout`（240 秒）の方で、内側の `ls_timeout`（235 秒）が先に来るので通常は出ない。これも不正確だった
 - 副産物: 起動時に "Found N source files" を待つ pyright でも、最初の横断要求は latch の `sleep(2)` を払う。起動時の待ちと要求経路の待ちが繋がっていないことの実例で、#1988 の issue の材料
-- 返信して not planned で閉じた（2026-09-14 16:10 UTC 頃。[コメント](https://github.com/oraios/serena/issues/2003#issuecomment-5667011948)。文面は [../upstream-submissions.md](../upstream-submissions.md)）
+- 返信して not planned で閉じた（2026-09-14 16:10 UTC 頃。[コメント](https://github.com/oraios/serena/issues/2003#issuecomment-5667011948)。文面は [../upstream-submissions/serena.md](../upstream-submissions/serena.md)）
 
 ### 一般化してはならない点
 

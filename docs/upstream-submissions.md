@@ -110,24 +110,6 @@ lsp-det の最終目標は、サーバー状態プロトコルを言語サーバ
 
 出す前にユーザーの確認をもらう文面。確認が取れたものから出し、出したら上の表の状態を更新する。
 
-### pyright: enhancement request（`InitializeResult.serverInfo`）
-
-feature_request の欄に合わせる。Title: `Report serverInfo (name and version) in the initialize result`
-
-````markdown
-**Is your feature request related to a problem? Please describe.**
-
-A client, or a proxy in front of the server, cannot tell from the LSP handshake which server it is talking to or which version: pyright's `InitializeResult` has no `serverInfo`. The name and version appear only in the startup `window/logMessage` ("Pyright language server 1.1.412 starting"), which a client has to parse. `serverInfo` has been a standard field since LSP 3.15, and basedpyright already returns it.
-
-**Describe the solution you'd like**
-
-`InitializeResult.serverInfo = { name: productName, version }` in `LanguageServerBase.initialize` (`packages/pyright-internal/src/languageServerBase.ts`). It is a four-line change; I have it ready and can open a PR if this is acceptable.
-
-**Additional context**
-
-I use it in lsp-det (https://github.com/tagawa0525/lsp-det), a proxy that selects a per-server readiness mapping by the server's name and version. Today it has to read pyright's startup log for that.
-````
-
 ### rust-analyzer: issue（両案）
 
 issue 先: `rust-lang/rust-analyzer`。ブランチ: `tagawa0525/rust-analyzer` の `server-status-readiness`（案 A、1 コミット）と `server-state`（案 B、3 コミット）。PR は相手が選んだ方だけを出す。第 2 段（準備 5〜6 の後）。題名: `experimental/serverStatus: tell clients when answers to workspace-wide requests are complete (a readiness field, or a successor notification)`

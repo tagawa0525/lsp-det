@@ -137,7 +137,7 @@ solidlsp 直接（lsp-det なし）、要求の打ち切りを 8 秒に設定（
 - 相手の主張は、プロセスが死んだ時点で要求が保留中の場合には正しい。読み取りスレッドが `_cancel_pending_requests` でその要求に `LanguageServerTerminatedException` を配る。#2004 の元の文面はこの場合まで「打ち切りまで待つ」と読めたので、返信で狭めた
 - キャンセルは読み取りスレッドが終わる瞬間の一度きり。その後に `_send_request_once`（`ls_process.py:337-349`）で登録された要求は誰も失敗させない。保留が空のときに死に、同じツール呼び出しの中で次の要求を送る場面（`include_info` 付きの `find_symbol` の hover のループ、`open_file` → 要求の並び）で起きる。`_ensure_functional_ls`（`ls_manager.py`）はツール呼び出しの間でしか `is_running()` を見ない
 - 直す場所は書き込みの失敗か、`_send_request_once` の冒頭の `is_running()`。どちらでも要求を `LanguageServerTerminatedException` で失敗させれば再起動の経路（`tools_base.py:383-389`）に乗る。probe の受け入れ条件はこれ（要求 #2 が打ち切りの前に `is_language_server_terminated()` の真な `SolidLSPException` になること。直し方は問わない。読み取りスレッドのキャンセルが #2 を拾う競合は、kill の後のキャンセルが "0 pending" 1 回だったことの検査で除く）。第三者の [oraios/serena#2030](https://github.com/oraios/serena/pull/2030) がまさにこの形（下）
-- 返信の文面は [../upstream-submissions.md](../upstream-submissions.md) の「Serena: 提出後の反応（2026-09-15）」
+- 返信の文面は [../upstream-submissions/serena.md](../upstream-submissions/serena.md) の「提出後の反応（2026-09-15）」
 
 ### #2030 の枝での結果
 

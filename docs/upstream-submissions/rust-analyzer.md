@@ -124,4 +124,22 @@ PR #23362 に ChayimFriedman2 が 2026-09-15 にコメントした（2026-09-23 
 
 Copilot のレビュー（2026-09-14、コメント生成 0 件、抑制 1 件）は「priming 中に `ready && !quiescent` の status があることを assert すべき」と言う。priming は `prefill_caches` かつ proc macro の読み込みが成功したときにだけ始まるので、この assert は環境次第で落ちる。入れない。
 
-次: ユーザーの判断待ち。返信は方針どおりユーザーが自分の言葉で書く（開示して続けるか、閉じるか）。lsp-det 側は結果を記すだけ
+返信（2026-09-23）: ユーザーが日本語で書き、Claude は文法 1 箇所と用語 2 箇所（「LSP の状態」→「言語サーバーの状態」、「チェック」→「ワークスペースの読み込み」）の指摘と文体の調整、事実の確認（同じ環境での保留時間: rust-analyzer 2.7〜80.6 秒、gopls 0.67 秒、pyright 0.25 秒、tsls 0.2 秒。「Rust は読み込みに時間を要する」は実測と一致）だけを行った。投稿は日本語の本文をそのまま置き、「The following is an English translation by Claude.」の 1 行の下に訳を引用ブロックで添える形（方針が勧める形。訳の言語は方針が指定していない）。issue #23331 への 1 行の返信も Claude が書いたものだが、開示の文には含めなかった（ユーザーの判断）。投稿した本文:
+
+> ご指摘のとおり、当該ポリシーを読んでおりませんでした。申し訳ありません。issue および PR の文面は Claude が書いたものです。私はその和訳を確認し、英訳を Claude に行わせました。
+>
+> 本変更の動機は次のとおりです。Claude Code などの LSP クライアントから、言語サーバーの状態をより詳しく把握したいと考えています。特に、ワークスペースの読み込みに時間を要する Rust では、参照検索のようなワークスペース全体にわたる要求の結果が揃っているかを確認したいのです。また、LSP 本体に取り込まれることが望ましいと考えています。
+>
+> 本コメントを含め、以後の日本語の文章は私自身が書きます。ただし、私の文章は Claude にレビューさせています。
+>
+> The following is an English translation by Claude.
+>
+> > As you pointed out, I had not read that policy. I apologize. The text of the issue and the PR was written by Claude; I reviewed its Japanese translation and had Claude produce the English.
+> >
+> > The motivation for this change is as follows. I want LSP clients such as Claude Code to be able to grasp the state of the language server in more detail. In particular, for Rust, where loading the workspace takes time, I want to be able to check whether the results of workspace-wide requests such as find-references are complete. I also think it is desirable for this to be adopted into LSP itself.
+> >
+> > From this comment on, I will write the Japanese text myself. I do, however, have Claude review my text.
+
+（投稿: <https://github.com/rust-lang/rust-analyzer/pull/23362#issuecomment-5780378533>）
+
+次: 応答待ち（催促は 2 週間後に 1 回だけ）。閉じられたら fork で維持するかをそのとき決める（本文の規則）

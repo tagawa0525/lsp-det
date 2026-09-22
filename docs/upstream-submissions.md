@@ -29,8 +29,8 @@ lsp-det の最終目標は、サーバー状態プロトコルを言語サーバ
 - **再現を最初から添える**。gopls は情報不足の issue を凍結する運用なので、fixture と実測ログを最初から添える。他の上流も同じにする
 - **手続きの前提を先に済ませる**。gopls は golang/go に issue を立て、CL は Gerrit で Google CLA が要る。pyright は CONTRIBUTING が「新機能は先に enhancement request」なので issue から。Serena も小さな修正以外は issue から。rust-analyzer は `lsp-extensions.md` の hash の更新と `cargo xtask tidy`。LSP 本体は issue → `vscode-languageserver-node` の `proposed.<name>.ts`（メタモデル生成器はこの名前か JSDoc の `@proposed` で「提案中」と印を付ける。3.17 の開発時の `proposed.diagnostic.ts` / `proposed.typeHierarchy.ts` と同名の `.md` が前例）→ 仕様への PR の順
 - **相手の AI 方針を確かめてから出す**。出す前にリポジトリの `AI_POLICY.md` と CONTRIBUTING の AI の項を読む。rust-analyzer は `AI_POLICY.md` で、AI の利用の開示、メンテナへのコメント・PR 本文・返答は人が自分の言葉で書くこと、自律エージェントが開いた PR は閉じることを定めている（rust-lang/rust-analyzer#23362 で指摘を受けた。2026-09-15）。方針のある上流には、文面をユーザーが書き、lsp-det 側は事実の整理と測定だけを渡す。母語で書いて訳を引用ブロックで添える形は rust-analyzer の方針が勧めるもので、訳の言語は指定されていない
-- **催促は 1 回まで**。返事がなくても 2 週間おいて 1 度だけ確認し、それ以上は追わない。却下されたら写像で吸収し、fork のブランチは閉じる
-- **fork は提出の直前にだけ追従させる**。取り込まれなかったパッチを維持しない
+- **催促は 1 回まで**。返事がなくても 2 週間おいて 1 度だけ確認し、それ以上は追わない。却下されたら写像で吸収する（fork のブランチの扱いは次の規則）
+- **open の PR の head になっている fork のブランチは動かさない**。追従させるのは提出の直前（上流 HEAD への rebase）と、相手の求めに応じるときだけ。閉じられた後にそのパッチを fork で維持するかは、そのときに決める（lsp-det の写像はパッチなしでも動くので、維持する理由は自分の環境で使いたいかどうかで決まる。2026-09-23、rust-lang/rust-analyzer#23362 の判断の際に改めた）
 - **文面は英語で、ユーザーの確認をもらってから出す**。出したら一覧表の状態を更新する
 
 ## 提出前の準備

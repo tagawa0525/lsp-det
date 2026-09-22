@@ -131,5 +131,15 @@ Copilot のレビュー（2026-09-14、コメント生成 0 件、抑制 1 件�
 > 本変更の動機は次のとおりです。Claude Code などの LSP クライアントから、言語サーバーの状態をより詳しく把握したいと考えています。特に、ワークスペースの読み込みに時間を要する Rust では、参照検索のようなワークスペース全体にわたる要求の結果が揃っているかを確認したいのです。また、LSP 本体に取り込まれることが望ましいと考えています。
 >
 > 本コメントを含め、以後の日本語の文章は私自身が書きます。ただし、私の文章は Claude にレビューさせています。
+>
+> The following is an English translation by Claude.
+>
+> > As you pointed out, I had not read that policy. I apologize. The text of the issue and the PR was written by Claude; I reviewed its Japanese translation and had Claude produce the English.
+> >
+> > The motivation for this change is as follows. I want LSP clients such as Claude Code to be able to grasp the state of the language server in more detail. In particular, for Rust, where loading the workspace takes time, I want to be able to check whether the results of workspace-wide requests such as find-references are complete. I also think it is desirable for this to be adopted into LSP itself.
+> >
+> > From this comment on, I will write the Japanese text myself. I do, however, have Claude review my text.
+
+（投稿: <https://github.com/rust-lang/rust-analyzer/pull/23362#issuecomment-5780378533>）
 
 次: 応答待ち（催促は 2 週間後に 1 回だけ）。閉じられたら fork で維持するかをそのとき決める（本文の規則）

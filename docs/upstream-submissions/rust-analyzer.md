@@ -108,4 +108,20 @@ Measured over stdio with the script from the issue:
 Two slow tests observe the transitions: on a one-crate project the first status says `ready: false`, the load ends in `ready: true` and `ready` does not go back during the first load; on a directory without `Cargo.toml` the trivially quiescent first status says `ready: false`, and the failed load settles as `ready: true` with `health: error`. `cargo xtask tidy` and the `rust-analyzer` tests pass locally and on my fork's CI (all jobs, with the `github.repository` gate lifted there).
 ````
 
-次: 応答待ち（催促は 2 週間後に 1 回だけ）。取り込まれて配布版に `ready` が載ったら、`TESTED_VERSIONS` にその版を足す前に準拠テストを当て、仕様 10 章の rust-analyzer の行を `ready` に改める（版を上げて 11 章に記す）
+取り込まれて配布版に `ready` が載ったら、`TESTED_VERSIONS` にその版を足す前に準拠テストを当て、仕様 10 章の rust-analyzer の行を `ready` に改める（版を上げて 11 章に記す）
+
+## 提出後の反応（2026-09-15）
+
+PR #23362 に ChayimFriedman2 が 2026-09-15 にコメントした（2026-09-23 時点でそれ以外の動きはなく、`S-waiting-on-review` のまま）:
+
+> CC @rust-lang/rust-analyzer for opinions on the new LSP extension.
+>
+> Also, @tagawa0525, I suspect you've used LLM for this. Please read [our AI policy](https://github.com/rust-lang/rust-analyzer/blob/master/AI_POLICY.md).
+
+`AI_POLICY.md` の要点: AI を道具として使うのは可だが利用を開示する。メンテナへのコメント・PR 本文・質問への返答は人が自分の言葉で書き、AI の応答を貼らない。AI 由来の文脈は `>` の引用で開示し人の説明を添える。自律エージェントが開いた PR は閉じる。非母語話者には、母語で書いて AI 訳を引用ブロックで添える形を勧める（訳の言語は指定していない）。解析系クレートの規則と E-easy+E-has-instructions の規則は今回の変更には当たらない。
+
+事実: issue #23331、PR #23362、issue への返信の文面はいずれも lsp-det 側（Claude）が起草し、ユーザーが判断と承認をした。開示はしていなかった。提出前に相手の AI 方針を確かめる工程がなかった（本文の規則に足した）。
+
+Copilot のレビュー（2026-09-14、コメント生成 0 件、抑制 1 件）は「priming 中に `ready && !quiescent` の status があることを assert すべき」と言う。priming は `prefill_caches` かつ proc macro の読み込みが成功したときにだけ始まるので、この assert は環境次第で落ちる。入れない。
+
+次: ユーザーの判断待ち。返信は方針どおりユーザーが自分の言葉で書く（開示して続けるか、閉じるか）。lsp-det 側は結果を記すだけ

@@ -42,6 +42,9 @@ args = ap.parse_args()
 
 root = Path(args.workspace).resolve()
 target_path, target_line, target_col = args.target.rsplit(":", 2)
+target_path = os.path.normpath(
+    target_path
+)  # compared with os.path.relpath of the answers
 target_line, target_col = int(target_line), int(target_col)
 T0 = time.time()
 
@@ -245,7 +248,8 @@ log(f"declaration serverStateProvider = {json.dumps(provider)}")
 notify("initialized", {})
 
 open_file(target_path)
-wait_until(lambda: readiness == "ready", "ready after opening the target")
+if not wait_until(lambda: readiness == "ready", "ready after opening the target"):
+    raise SystemExit("the target's load never reached ready; nothing to measure")
 first = references("references after the target's load")
 
 if args.open_after:
@@ -255,8 +259,18 @@ if args.open_after:
         lambda: any(r == "indexing" for _, r in transitions[mark:]),
         "indexing after the second open",
     )
-    if loaded:
-        wait_until(lambda: readiness == "ready", "ready after the second open")
+    # No indexing means the open loaded no project (the file was already in a loaded one), and
+    # the state is still the ready the first question was asked in.
+    if loaded and not wait_until(
+        lambda: readiness == "ready", "ready after the second open"
+    ):
+        raise SystemExit(
+            "the second open's load never reached ready; nothing to measure"
+        )
+    if readiness != "ready":
+        raise SystemExit(
+            f"readiness is {readiness} before the second question; nothing to measure"
+        )
     # tsserver loads the projects one after another and lsp-det reports ready between two loads,
     # so this answer is taken at the first ready after the first indexing: a lower bound of what
     # the open eventually adds. The question here is only whether it grows at all.

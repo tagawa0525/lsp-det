@@ -178,7 +178,7 @@ def wait_until(predicate, label):
 
 
 def open_file(relative):
-    text = (root / relative).read_text()
+    text = (root / relative).read_text(encoding="utf-8")
     language = "typescriptreact" if relative.endswith(".tsx") else "typescript"
     notify(
         "textDocument/didOpen",

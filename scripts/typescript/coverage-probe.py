@@ -9,10 +9,13 @@ target symbol is declared in, waits for `ready`, and asks `textDocument/referenc
 --open-after it then opens a second file, waits for the load that opening triggers to finish
 (`indexing` followed by `ready`), and asks again: a declaration of `coverage.scope` "workspace"
 promises that the second answer is not larger than the first (spec 6.1). Nothing is judged by
-time; --observe only bounds how long the probe waits for a state it expects.
+time; --observe only bounds how long the probe waits for a state it expects. A second open that
+triggers no load cannot be told apart from a load whose signal never came, so it is accepted only
+with --no-load (the caller asserts the file is already in a loaded project); without it, no
+`indexing` within --observe voids the measurement.
 
 usage: coverage-probe.py --workspace DIR --target PATH:LINE:COL [--open-after PATH]
-       [--expected N] [--server CMD] [--observe SECS]
+       [--no-load] [--expected N] [--server CMD] [--observe SECS]
 
 PATH is relative to DIR; LINE and COL are 0-based. --expected is the number of files the complete
 answer contains (the declaration's own file excluded), when known. The exit status is 0 when the
@@ -35,6 +38,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--workspace", required=True)
 ap.add_argument("--target", required=True)
 ap.add_argument("--open-after")
+ap.add_argument("--no-load", action="store_true")
 ap.add_argument("--expected", type=int)
 ap.add_argument("--server", default="lsp-det -- typescript-language-server --stdio")
 ap.add_argument("--observe", type=float, default=120)
@@ -259,8 +263,16 @@ if args.open_after:
         lambda: any(r == "indexing" for _, r in transitions[mark:]),
         "indexing after the second open",
     )
-    # No indexing means the open loaded no project (the file was already in a loaded one), and
-    # the state is still the ready the first question was asked in.
+    if not loaded and not args.no_load:
+        raise SystemExit(
+            "no indexing after the second open; the measurement is void"
+            " (pass --no-load if the file is in an already loaded project)"
+        )
+    if not loaded:
+        log(
+            f"no indexing within {args.observe}s after the second open (--no-load);"
+            " asking in the same ready as the first question"
+        )
     if loaded and not wait_until(
         lambda: readiness == "ready", "ready after the second open"
     ):

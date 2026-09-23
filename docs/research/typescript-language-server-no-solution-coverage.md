@@ -12,7 +12,7 @@ Serena の #1937 の再現（[serena-request-path-state-prototype.md](serena-req
 
 ## 方法
 
-- probe: `scripts/typescript/coverage-probe.py`。サーバーのコマンド（既定は `lsp-det -- typescript-language-server --stdio`）を stdio で起動し、`experimental.serverState` を宣言するクライアントとして振る舞う（宣言したクライアントを lsp-det は保留しないので、probe が自分で `ready` を待つ。仕様 9 章の挙動）。`InitializeResult` の宣言を出し、対象のシンボルのファイルを開いて `ready` を待ち、`textDocument/references`（宣言を含めない）を送る。`--open-after` で 2 つ目のファイルを開き、それが起こす読み込み（`indexing` の後の `ready`）を待って同じ問い合わせを送る。使われた TypeScript の版は `window/logMessage` の "Using Typescript version" で出す
+- probe: `scripts/typescript/coverage-probe.py`。サーバーのコマンド（既定は `lsp-det -- typescript-language-server --stdio`）を stdio で起動し、`experimental.serverState` を宣言するクライアントとして振る舞う（宣言したクライアントを lsp-det は保留しないので、probe が自分で `ready` を待つ。仕様 9 章の挙動）。`InitializeResult` の宣言を出し、対象のシンボルのファイルを開いて `ready` を待ち、`textDocument/references`（宣言を含めない）を送る。`--open-after` で 2 つ目のファイルを開き、それが起こす読み込み（`indexing` の後の最初の `ready`）を待って同じ問い合わせを送る。tsserver は project を 1 つずつ読み込み、lsp-det は読み込みの間に `ready` を報告するので、2 回目の数は「開いたことで増えた分」の下限で、問いは増えるかどうかだけ。`health` が `error`（tsserver の終了）になったら測定は無効として止める。使われた TypeScript の版は `window/logMessage` の "Using Typescript version" で出す
 - lsp-det: main `26989d0` の release ビルド。typescript-language-server 5.3.0。TypeScript は flake の 5.9.3（user-setting。保証を宣言する組）、pnpm/pnpm だけ workspace の 6.0.3
 - workspace:
   - **single**: tsconfig.json 1 つ（`include: ["*.ts"]`）と `a.ts`（`export function target`）、それを使う `b.ts`、`c.ts`。準拠テストの fixture と同じ形
@@ -22,12 +22,12 @@ Serena の #1937 の再現（[serena-request-path-state-prototype.md](serena-req
 
 ## 結果
 
-| workspace   | TypeScript | 宣言                                     | 対象を開いて `ready` の後 | 2 つ目のファイルを開いた後                        |
-| ----------- | ---------- | ---------------------------------------- | ------------------------- | ------------------------------------------------- |
-| single      | 5.9.3      | `coverage: {scope: "workspace"}`         | 2 / 2                     | 2 / 2（読み込みは起きない）                       |
-| solution    | 5.9.3      | `coverage: {scope: "workspace"}`         | 16 / 16                   | 16 / 16（読み込みは起きない）                     |
-| no-solution | 5.9.3      | `coverage: {scope: "workspace"}`         | **0 / 16**                | **2 / 16**（`indexing` → `ready` の後）           |
-| pnpm/pnpm   | 6.0.3      | `{}`（未検証の版なので保証を宣言しない） | 0 / 247                   | 22 / 247（`indexing` → `ready` が 19 回続いた後） |
+| workspace   | TypeScript | 宣言                                     | 対象を開いて `ready` の後 | 2 つ目のファイルを開いた後（最初の `ready`。下限）               |
+| ----------- | ---------- | ---------------------------------------- | ------------------------- | ---------------------------------------------------------------- |
+| single      | 5.9.3      | `coverage: {scope: "workspace"}`         | 2 / 2                     | 2 / 2（読み込みは起きない）                                      |
+| solution    | 5.9.3      | `coverage: {scope: "workspace"}`         | 16 / 16                   | 16 / 16（読み込みは起きない）                                    |
+| no-solution | 5.9.3      | `coverage: {scope: "workspace"}`         | **0 / 16**                | **2 / 16**（`indexing` → `ready` の後）                          |
+| pnpm/pnpm   | 6.0.3      | `{}`（未検証の版なので保証を宣言しない） | 0 / 247                   | 22 / 247（この実行全体では `indexing` → `ready` が 19 回続いた） |
 
 どの行も、問い合わせは `readiness` が `ready` の状態で送っている。no-solution では、宣言が約束する「`ready` の間は後から結果が増えない」が、クライアントがファイルを 1 つ開くだけで破れる。pnpm/pnpm の 1 回目の 2 箇所は宣言のファイル自身の中で、表からは除いている。
 

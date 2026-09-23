@@ -28,6 +28,8 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--workspace", required=True)
@@ -88,6 +90,7 @@ def reader():
 threading.Thread(target=reader, daemon=True).start()
 next_id = 0
 readiness = None  # latest readiness from experimental/serverStateChanged
+health = None  # latest health; "error" (tsserver exited) voids the measurement
 transitions = []  # (time, readiness) in arrival order
 
 
@@ -103,7 +106,7 @@ def notify(method, params):
 
 def handle(message):
     """Answers server-to-client requests and records state notifications."""
-    global readiness
+    global readiness, health
     if "method" in message and "id" in message:
         # workspace/configuration, window/workDoneProgress/create, client/registerCapability
         result = (
@@ -121,6 +124,7 @@ def handle(message):
         log(f"logMessage {message['params']['message'].splitlines()[0]}")
     elif message.get("method") == "experimental/serverStateChanged":
         readiness = message["params"].get("readiness")
+        health = message["params"].get("health")
         transitions.append((time.time() - T0, readiness))
         log(f"serverStateChanged {json.dumps(message['params'])}")
 
@@ -148,6 +152,10 @@ def wait_until(predicate, label):
     """Pumps messages until predicate() holds. Returns False if --observe runs out first."""
     deadline = time.time() + args.observe
     while not predicate():
+        if health == "error":
+            raise SystemExit(
+                f"{label}: health is error (tsserver exited); the measurement is void"
+            )
         remaining = deadline - time.time()
         if remaining <= 0:
             log(f"{label}: not observed within {args.observe}s")
@@ -179,6 +187,11 @@ def open_file(relative):
     log(f"didOpen {relative}")
 
 
+def path_of(file_uri):
+    """A local path from a file URI (percent-decoded, with the drive letter on Windows)."""
+    return Path(url2pathname(unquote(urlparse(file_uri).path)))
+
+
 def references(label):
     answer = request(
         "textDocument/references",
@@ -188,12 +201,16 @@ def references(label):
             "context": {"includeDeclaration": False},
         },
     )
+    if health == "error":
+        raise SystemExit(
+            f"{label}: health is error (tsserver exited); the measurement is void"
+        )
     if "error" in answer:
         log(f"{label}: error {json.dumps(answer['error'])}")
         return None
     files = sorted(
         {
-            os.path.relpath(Path(loc["uri"].removeprefix("file://")), root)
+            os.path.relpath(path_of(loc["uri"]), root)
             for loc in answer.get("result") or []
         }
     )
@@ -240,7 +257,12 @@ if args.open_after:
     )
     if loaded:
         wait_until(lambda: readiness == "ready", "ready after the second open")
-    second = references(f"references after opening {args.open_after}")
+    # tsserver loads the projects one after another and lsp-det reports ready between two loads,
+    # so this answer is taken at the first ready after the first indexing: a lower bound of what
+    # the open eventually adds. The question here is only whether it grows at all.
+    second = references(
+        f"references after opening {args.open_after} (at the first ready; a lower bound)"
+    )
     if first is not None and second is not None:
         added = sorted(set(second) - set(first))
         log(

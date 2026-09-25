@@ -695,6 +695,20 @@ mod tests {
     }
 
     #[test]
+    fn compiler_options_this_reader_cannot_interpret_are_not_complete() {
+        for (tag, config) in [
+            ("allowjs-null", r#"{"compilerOptions":{"allowJs":null}}"#),
+            ("options-array", r#"{"compilerOptions":[]}"#),
+            ("options-null", r#"{"compilerOptions":null}"#),
+            ("outdir-number", r#"{"compilerOptions":{"outDir":1}}"#),
+        ] {
+            let w = TempWorkspace::new(tag);
+            w.write("jsconfig.json", config).write("a.js", SOURCE);
+            assert!(!complete(&w), "deemed complete: {config}");
+        }
+    }
+
+    #[test]
     fn an_unterminated_block_comment_is_not_complete() {
         let w = TempWorkspace::new("open-comment");
         w.write("tsconfig.json", r#"{"include":["**/*"]} /*"#)

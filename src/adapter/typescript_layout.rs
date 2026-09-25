@@ -638,6 +638,30 @@ mod tests {
     }
 
     #[test]
+    fn an_allow_js_value_that_is_not_a_boolean_is_not_complete() {
+        let js = TempWorkspace::new("allowjs-string-js");
+        js.write(
+            "jsconfig.json",
+            r#"{"compilerOptions":{"allowJs":"false"}}"#,
+        )
+        .write("a.js", SOURCE);
+        assert!(!complete(&js));
+
+        let ts = TempWorkspace::new("allowjs-string-ts");
+        ts.write("tsconfig.json", r#"{"compilerOptions":{"allowJs":"true"}}"#)
+            .write("a.ts", SOURCE);
+        assert!(!complete(&ts));
+    }
+
+    #[test]
+    fn an_unterminated_block_comment_is_not_complete() {
+        let w = TempWorkspace::new("open-comment");
+        w.write("tsconfig.json", r#"{"include":["**/*"]} /*"#)
+            .write("a.ts", SOURCE);
+        assert!(!complete(&w));
+    }
+
+    #[test]
     fn an_unreadable_config_is_not_complete() {
         let w = TempWorkspace::new("broken");
         w.write("tsconfig.json", "{ not json").write("a.ts", SOURCE);
@@ -681,6 +705,48 @@ mod tests {
         js.write("jsconfig.json", "{}").write("a.js", SOURCE);
         let layout = &assess(std::slice::from_ref(&js.path))[0];
         assert!(!change_breaks_verdict(layout, &js.path.join("b.js"), true));
+    }
+
+    #[test]
+    fn a_new_source_outside_the_project_breaks_the_verdict() {
+        let w = TempWorkspace::new("change-outside-include");
+        w.write(
+            "tsconfig.json",
+            r#"{"compilerOptions":{"allowJs":true},"include":["src"]}"#,
+        )
+        .write("src/a.ts", SOURCE);
+        let layout = &assess(std::slice::from_ref(&w.path))[0];
+        assert!(layout.complete);
+        assert!(change_breaks_verdict(
+            layout,
+            &w.path.join("tools.ts"),
+            true
+        ));
+        assert!(change_breaks_verdict(
+            layout,
+            &w.path.join("tools.js"),
+            true
+        ));
+        assert!(change_breaks_verdict(
+            layout,
+            &w.path.join("src/.hidden/b.ts"),
+            true
+        ));
+        assert!(!change_breaks_verdict(
+            layout,
+            &w.path.join("src/b.ts"),
+            true
+        ));
+        assert!(!change_breaks_verdict(
+            layout,
+            &w.path.join("src/b.js"),
+            true
+        ));
+        assert!(!change_breaks_verdict(
+            layout,
+            &w.path.join("tools.ts"),
+            false
+        ));
     }
 
     #[test]

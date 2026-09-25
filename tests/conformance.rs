@@ -1182,12 +1182,85 @@ fn typescript_language_server_spec_8_2_5_declares_no_guarantees_for_an_untested_
 fn typescript_language_server_spec_5_declares_the_measured_guarantees_for_a_tested_version() {
     // 7.2 / 7.3 were run against the real server (TypeScript 5.9.3) and
     // passed. The version is read from the startup log, so it is available
-    // in time for the initialize response.
-    let (mut client, result) = tsls_client(true);
+    // in time for the initialize response. coverage also needs a workspace
+    // layout that rule R1 deems complete, the layout of the 7.2 fixture
+    // (ADR 0023).
+    let project = support::TempTsProject::with_cross_file_reference("fake-declared");
+    let server = ServerUnderTest::lsp_det_with_fake_typescript_language_server();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize_with_root(true, &project.root);
     assert_eq!(
         result["result"]["capabilities"]["experimental"]["serverStateProvider"],
         json!({"coverage": {"scope": "workspace", "incomplete": {}}, "freshness": {"fileChanges": ["Changed"]}}),
         "did not declare a guarantee for a measured version: {result}"
+    );
+    client.shutdown();
+}
+
+/// The declaration a tested version makes when rule R1 does not deem the
+/// workspace complete: freshness stays, coverage is not declared (ADR 0023).
+fn freshness_only() -> Value {
+    json!({"freshness": {"fileChanges": ["Changed"]}})
+}
+
+#[test]
+fn typescript_language_server_spec_8_2_5_declares_no_coverage_without_a_workspace_root() {
+    let (mut client, result) = tsls_client(true);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        freshness_only(),
+        "declared coverage without knowing the workspace: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn typescript_language_server_spec_8_2_5_declares_no_coverage_for_projects_without_a_solution() {
+    let project = support::TempTsProject::without_solution("fake-no-solution");
+    let server = ServerUnderTest::lsp_det_with_fake_typescript_language_server();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize_with_root(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        freshness_only(),
+        "declared coverage for a layout tsserver does not search as a whole: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn typescript_language_server_reads_the_layout_under_a_root_uri_without_workspace_folders() {
+    let project = support::TempTsProject::with_cross_file_reference("fake-root-uri");
+    let server = ServerUnderTest::lsp_det_with_fake_typescript_language_server();
+    let mut client = ConformanceClient::start(&server);
+    let result = client.initialize_with_root_uri_only(true, &project.root);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"]["coverage"],
+        json!({"scope": "workspace", "incomplete": {}}),
+        "did not read the layout under rootUri: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn typescript_language_server_a_config_change_after_declaring_coverage_makes_readiness_unknown() {
+    let project = support::TempTsProject::with_cross_file_reference("fake-config-change");
+    let server = ServerUnderTest::lsp_det_with_fake_typescript_language_server();
+    let mut client = ConformanceClient::start(&server);
+    client.initialize_with_root(true, &project.root);
+    client.make_upstream_begin_project_load("1");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.make_upstream_end_project_load("1");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+
+    client.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": support::file_uri(&project.file("tsconfig.json")), "type": 2}]}),
+    );
+    assert_eq!(
+        client.await_state_changed().readiness,
+        Readiness::Unknown,
+        "kept the coverage promise after the layout it rests on changed"
     );
     client.shutdown();
 }
@@ -1499,6 +1572,28 @@ fn typescript_language_server_spec_7_2_coverage_through_lsp_det_with_real_server
             .iter()
             .any(|location| location["range"]["start"]["line"] == 3),
         "missed the call in b.ts while declaring ready (completeness violation): {found:#?}"
+    );
+    client.shutdown();
+}
+
+/// ADR 0023: in a multi-project workspace without a solution, references
+/// from one project miss the others after `ready`, so coverage must not be
+/// declared there.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn typescript_language_server_declares_no_coverage_without_a_solution_with_real_server() {
+    let project = support::TempTsProject::without_solution("no-solution");
+    let mut client = ConformanceClient::start(&real_tsls(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    let provider = &result["result"]["capabilities"]["experimental"]["serverStateProvider"];
+    assert!(
+        provider["coverage"].is_null(),
+        "declared coverage for projects tsserver does not search as a whole: {provider}"
+    );
+    assert_eq!(
+        provider["freshness"],
+        json!({"fileChanges": ["Changed"]}),
+        "lost the freshness promise: {provider}"
     );
     client.shutdown();
 }

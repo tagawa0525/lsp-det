@@ -152,6 +152,15 @@ impl ServerStateProvider {
         }
     }
 
+    /// `freshness` that incorporates the listed kinds of changes, with no `coverage` claim at
+    /// all -- for a server whose completeness at `ready` the observer cannot vouch for in this
+    /// workspace but whose incorporation of changes it can (typescript-language-server in a
+    /// layout rule R1 does not deem complete, ADR 0023). The `coverage` key is omitted.
+    pub fn freshness_only(file_changes: &[FileChangeType]) -> Self {
+        let _ = file_changes;
+        todo!("ADR 0023")
+    }
+
     /// `coverage` based on the index of the requesting document only (with the list of methods
     /// that cap, if any), with no `freshness` claim -- for a server whose name resolution does
     /// not follow references across files (nixd, nil; ADR 0021 decision E, answer (b)). 7.3's
@@ -393,6 +402,17 @@ mod tests {
             json,
             r#"{"coverage":{"scope":"workspace","incomplete":{"workspace/symbol":100}}}"#
         );
+    }
+
+    #[test]
+    fn freshness_only_omits_the_coverage_key_entirely() {
+        // typescript-language-server in a layout that rule R1 does not deem complete (ADR 0023):
+        // the promise on changes stays, the one on completeness is not made at all.
+        let json = serde_json::to_string(&ServerStateProvider::freshness_only(&[
+            FileChangeType::Changed,
+        ]))
+        .unwrap();
+        assert_eq!(json, r#"{"freshness":{"fileChanges":["Changed"]}}"#);
     }
 
     #[test]

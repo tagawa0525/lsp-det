@@ -23,3 +23,10 @@ The `exitCode` check dates from 507db40 (2022), a logging-only refactor made rig
 
 Two cases in `ts-client.test.ts` pin down the two facts the change rests on: a tsserver killed by a signal reaches `onExit` with a null exit code, and `shutdown()` does not reach `onExit`. `pnpm test`, `lint` and `typecheck` pass (CI on my fork: Linux, macOS, Windows × Node 22 / 24). End to end, with this change the server exits with code 1 right after the `kill -9` above.
 ```
+
+## 提出後の反応（2026-09-25）
+
+- 2026-09-09: Copilot の自動レビューの指摘 2 件（`onExit` の同期 throw が exit handler の残りを飛ばす、テストの private 連鎖に実行時チェック）に fork の 6c21094 で対応し、両スレッドに返信した
+- 2026-09-23: メンテナ rchl が承認（"Thanks"）してマージ（db557ce）
+- 2026-09-24: rchl が続きの typescript-language-server/typescript-language-server#1132 をマージ（本文で @tagawa0525 に言及。返信は求められていない）。syntax server（既定の `useSyntaxServer: 'auto'`）だけが死んだ場合も言語サーバーを落とし、死んだ `SingleTsServer` への保留中・以後の要求を `Cancelled` で返す
+- 2026-09-24: 両方を含む v6.0.1 がリリースされた。npm の 6.0.1 に `tests/upstream_dev.rs` の `typescript_language_server_exits_when_tsserver_is_killed` を当てて通過、flake の 5.3.0 は従来どおり失敗（2026-09-25）

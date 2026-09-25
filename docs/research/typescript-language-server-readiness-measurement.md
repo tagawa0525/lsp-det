@@ -115,3 +115,9 @@ harness の落とし穴: 被験者そのものの終了を `wait_until_exited`�
 - テストが private 状態を辿る連鎖（`serverState.server._process._process`）は、取り出した値が `ChildProcess` でなければ期待した経路を名指しした Error を投げるようにした。内部の改名で `TypeError` になるのを避ける
 
 vitest 141 件、typecheck、lint は通過。Copilot の再レビューの依頼は保守者の操作（API は fork の側に書き込み権限がなく 404）。
+
+### 上流への取り込み（2026-09-25）
+
+typescript-language-server/typescript-language-server#1125 は 2026-09-23 にマージされ、2026-09-24 の v6.0.1 で配布された。同じ版に、メンテナによる続きの #1132（syntax server だけが死んだ場合も言語サーバーを落とす）が入った。npm の 6.0.1 に受け入れ条件 `typescript_language_server_exits_when_tsserver_is_killed` を当てて通過した（SIGKILL の直後に非 0 で終了し、stderr に "tsserver process has exited"）。flake の 5.3.0 は従来どおり 10 秒後も生き残って失敗する。
+
+flake の版が 6.0.1 以上になると、tsserver のクラッシュで言語サーバーごと落ちる。準拠テスト `typescript_language_server_tsserver_crash_becomes_health_error_with_real_server` の前提（言語サーバーが生き残り、写像が health `error` を合成する）が崩れるので、そのとき上流消失（仕様 8 章）を確かめるテストに書き換える。

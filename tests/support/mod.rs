@@ -472,6 +472,29 @@ impl ConformanceClient {
         self.initialize_raw_with_capabilities(capabilities)
     }
 
+    /// Completes `initialize` → `initialized` with only `rootUri` (no `workspaceFolders`), as a
+    /// client that predates workspace folders sends it.
+    pub fn initialize_with_root_uri_only(
+        &mut self,
+        declare_server_state: bool,
+        root: &std::path::Path,
+    ) -> Value {
+        let mut capabilities = json!({"textDocument": {"hover": {}}});
+        if declare_server_state {
+            capabilities["experimental"] = json!({"serverState": true});
+        }
+        let result = self.request(
+            "initialize",
+            json!({
+                "processId": std::process::id(),
+                "rootUri": file_uri(root),
+                "capabilities": capabilities,
+            }),
+        );
+        self.notify("initialized", json!({}));
+        result
+    }
+
     /// Completes `initialize` → `initialized` with `rootUri` and `workspaceFolders` specified.
     /// gopls emits progress per workspace folder, so without a folder "Setting up workspace"
     /// does not appear.
@@ -2141,6 +2164,29 @@ impl TempTsProject {
 }
 
 impl TempTsProject {
+    /// Two projects without a solution tsconfig (ADR 0023): `packages/a` defines `target`,
+    /// `packages/b` calls it. tsserver searches only the projects it has loaded, so references
+    /// from `packages/a/a.ts` miss `packages/b/b.ts` until b is opened.
+    pub fn without_solution(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-ts-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        for package in ["a", "b"] {
+            let dir = root.join("packages").join(package);
+            std::fs::create_dir_all(&dir).expect("cannot create the temporary project");
+            std::fs::write(dir.join("tsconfig.json"), TSCONFIG).unwrap();
+        }
+        std::fs::write(root.join("packages/a/a.ts"), TS_A).unwrap();
+        std::fs::write(
+            root.join("packages/b/b.ts"),
+            "import { target } from '../a/a';\n\nexport function caller(): number {\n  return target();\n}\n",
+        )
+        .unwrap();
+        TempTsProject { root }
+    }
+
     pub fn with_many_symbols(tag: &str, n: usize) -> Self {
         let project = Self::with_cross_file_reference(tag);
         for file in 0..3 {

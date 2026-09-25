@@ -31,6 +31,7 @@ pub mod pyright;
 pub mod rust_analyzer;
 pub mod sorbet;
 pub mod typescript_language_server;
+pub mod typescript_layout;
 
 pub use gopls::{GoplsAdapter, TESTED_VERSIONS as GOPLS_TESTED_VERSIONS};
 pub use pyright::{
@@ -77,6 +78,12 @@ pub trait Mapping {
     /// reconstructs the set of files the server scans. Does nothing by default.
     fn learn_workspace_folders(&mut self, folders: &[std::path::PathBuf]) {
         let _ = folders;
+    }
+    /// The workspace roots of the client's `initialize` (`workspaceFolders`, or `rootUri` if
+    /// absent). Read by a mapping (typescript-language-server) whose guarantee depends on the
+    /// layout of the workspace (ADR 0023). Does nothing by default.
+    fn learn_workspace_roots(&mut self, roots: &[std::path::PathBuf]) {
+        let _ = roots;
     }
     /// The arguments lsp-det itself launched the upstream with (its own argv, not the
     /// client's). Read by a mapping (clangd) that needs to reproduce a piece of the upstream's

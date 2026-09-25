@@ -33,12 +33,17 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::Mapping;
+use super::typescript_layout::{self, FolderLayout};
 use crate::initialize::ServerInfo;
 use crate::peek::MessageView;
 use crate::state::{FileChangeType, Health, Readiness, ServerState, ServerStateProvider};
 
 const PROGRESS_METHOD: &str = "$/progress";
 const LOG_MESSAGE_METHOD: &str = "window/logMessage";
+const DID_CHANGE_WATCHED_FILES_METHOD: &str = "workspace/didChangeWatchedFiles";
+const DID_CHANGE_WORKSPACE_FOLDERS_METHOD: &str = "workspace/didChangeWorkspaceFolders";
+/// `FileChangeType.Created`.
+const CREATED: u64 = 1;
 /// The notification specific to typescript-language-server. Arrives after the `initialize`
 /// response.
 const TYPESCRIPT_VERSION_METHOD: &str = "$/typescriptVersion";
@@ -129,6 +134,13 @@ pub struct TypescriptLanguageServerAdapter {
     state: ServerState,
     /// Tokens of a project load that have begun and are awaiting end.
     loading: Vec<Value>,
+    /// The layout of each workspace folder (ADR 0023, rule R1). Empty until the roots are
+    /// known, and then `coverage` is not declared.
+    layouts: Vec<FolderLayout>,
+    /// The layout that `coverage` rests on may have changed after it was declared. The promise
+    /// cannot be withdrawn from `InitializeResult`, so `readiness` stays `unknown` from then on
+    /// (ADR 0023 decision 4).
+    layout_changed: bool,
 }
 
 impl Default for TypescriptLanguageServerAdapter {
@@ -151,6 +163,41 @@ impl TypescriptLanguageServerAdapter {
             version_is_tested,
             state: ServerState::initializing(),
             loading: Vec::new(),
+            layouts: Vec::new(),
+            layout_changed: false,
+        }
+    }
+
+    /// Whether `coverage` is declared: a tested version, in a layout rule R1 deems complete.
+    fn declares_coverage(&self) -> bool {
+        self.version_is_tested && typescript_layout::all_complete(&self.layouts)
+    }
+
+    /// Whether a client notification can have changed the layout `coverage` rests on.
+    fn breaks_layout(&self, method: &str, body: &[u8]) -> bool {
+        let Ok(message) = serde_json::from_slice::<Value>(body) else {
+            return false;
+        };
+        let params = &message["params"];
+        match method {
+            DID_CHANGE_WATCHED_FILES_METHOD => params["changes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|change| {
+                    let Some(path) = change["uri"].as_str().and_then(crate::uri::uri_to_path)
+                    else {
+                        return false;
+                    };
+                    let created = change["type"].as_u64() == Some(CREATED);
+                    self.layouts.iter().any(|layout| {
+                        typescript_layout::change_breaks_verdict(layout, &path, created)
+                    })
+                }),
+            DID_CHANGE_WORKSPACE_FOLDERS_METHOD => params["event"]["added"]
+                .as_array()
+                .is_some_and(|added| !added.is_empty()),
+            _ => false,
         }
     }
 
@@ -159,7 +206,9 @@ impl TypescriptLanguageServerAdapter {
         match value.kind.as_str() {
             "begin" if value.title.as_deref() == Some(PROJECT_LOAD_TITLE) => {
                 self.loading.push(token);
-                self.state.readiness = Readiness::Indexing;
+                if !self.layout_changed {
+                    self.state.readiness = Readiness::Indexing;
+                }
             }
             "end" => {
                 let index = self.loading.iter().position(|t| *t == token)?;
@@ -167,7 +216,9 @@ impl TypescriptLanguageServerAdapter {
                 if !self.loading.is_empty() {
                     return None;
                 }
-                self.state.readiness = Readiness::Ready;
+                if !self.layout_changed {
+                    self.state.readiness = Readiness::Ready;
+                }
                 // A successful load was observed. But an end after tsserver has crashed (the
                 // indicator resetting) is not a success. There is no restart, so it is not
                 // reverted.
@@ -196,11 +247,35 @@ impl Mapping for TypescriptLanguageServerAdapter {
     }
 
     fn guarantees(&self) -> ServerStateProvider {
-        if self.version_is_tested {
+        if !self.version_is_tested {
+            ServerStateProvider::notifications_only()
+        } else if self.declares_coverage() {
             ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
         } else {
-            ServerStateProvider::notifications_only()
+            // tsserver searches only the projects it has loaded; outside the layouts rule R1
+            // deems complete, `ready` does not mean the whole workspace (ADR 0023).
+            ServerStateProvider::freshness_only(&[FileChangeType::Changed])
         }
+    }
+
+    fn learn_workspace_roots(&mut self, roots: &[std::path::PathBuf]) {
+        self.layouts = typescript_layout::assess(roots);
+    }
+
+    /// After `coverage` is declared, a change to the layout it rests on (a configuration file,
+    /// a JavaScript file outside `allowJs`, an added folder) makes `readiness` `unknown` for the
+    /// rest of the connection, and holding stops (ADR 0023 decision 4). A change the client
+    /// does not tell lsp-det about is not seen.
+    fn observe_client(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
+        if self.layout_changed || !self.declares_coverage() || !view.is_notification() {
+            return None;
+        }
+        if !self.breaks_layout(view.method()?, body) {
+            return None;
+        }
+        self.layout_changed = true;
+        self.state.readiness = Readiness::Unknown;
+        Some(self.state.clone())
     }
 
     /// The serverInfo version is the wrapper's (typescript-language-server's) version, not the
@@ -254,6 +329,7 @@ impl Mapping for TypescriptLanguageServerAdapter {
 
 #[cfg(test)]
 mod tests {
+    use super::super::typescript_layout::TempWorkspace;
     use super::*;
     use crate::peek::peek;
     use crate::state::{Health, Readiness};
@@ -288,6 +364,39 @@ mod tests {
     fn interpret(adapter: &mut TypescriptLanguageServerAdapter, body: &str) -> Option<ServerState> {
         let view = peek(body.as_bytes()).expect("test bodies are valid JSON");
         adapter.interpret(&view, body.as_bytes())
+    }
+
+    fn observe(adapter: &mut TypescriptLanguageServerAdapter, body: &str) -> Option<ServerState> {
+        let view = peek(body.as_bytes()).expect("test bodies are valid JSON");
+        adapter.observe_client(&view, body.as_bytes())
+    }
+
+    /// The layout of the 7.2 fixture: one tsconfig.json at the root taking in every source.
+    fn complete_workspace(tag: &str) -> TempWorkspace {
+        let workspace = TempWorkspace::new(&format!("tsls-{tag}"));
+        workspace
+            .write("tsconfig.json", r#"{"include":["**/*.ts"]}"#)
+            .write("a.ts", "export const a = 1;\n");
+        workspace
+    }
+
+    /// A tested version that has learned `workspace` and has seen its first project load
+    /// finish.
+    fn ready_on(workspace: &TempWorkspace) -> TypescriptLanguageServerAdapter {
+        let mut adapter = TypescriptLanguageServerAdapter::for_version(Some("5.9.3"));
+        adapter.learn_workspace_roots(std::slice::from_ref(&workspace.path));
+        interpret(&mut adapter, &load_begin("1"));
+        interpret(&mut adapter, &load_end("1"));
+        adapter
+    }
+
+    fn watched(path: &std::path::Path, kind: u8) -> String {
+        json!({
+            "jsonrpc": "2.0",
+            "method": "workspace/didChangeWatchedFiles",
+            "params": {"changes": [{"uri": crate::uri::path_to_uri(path), "type": kind}]},
+        })
+        .to_string()
     }
 
     // --- what the server calls itself -------------------------------------------
@@ -475,7 +584,9 @@ mod tests {
         // After a tested version is settled by the startup log, the basis is not discarded even
         // if $/typescriptVersion arrives lacking a version (per Copilot's feedback). If a
         // version is present, it updates the basis.
+        let workspace = complete_workspace("basis");
         let mut adapter = TypescriptLanguageServerAdapter::for_version(Some("5.9.3"));
+        adapter.learn_workspace_roots(std::slice::from_ref(&workspace.path));
         assert_eq!(
             adapter.guarantees(),
             ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
@@ -504,16 +615,149 @@ mod tests {
     fn declares_guarantees_only_for_typescript_versions_the_conformance_suite_passed_on() {
         // 7.2 / 7.3 were run against typescript-language-server 5.3.0 + TypeScript 5.9.3 and
         // passed. Only TypeScript's version appears in the identity announcement.
+        let workspace = complete_workspace("versions");
+        let learned = |version: Option<&str>| {
+            let mut adapter = TypescriptLanguageServerAdapter::for_version(version);
+            adapter.learn_workspace_roots(std::slice::from_ref(&workspace.path));
+            adapter
+        };
         assert_eq!(
-            TypescriptLanguageServerAdapter::for_version(Some("5.9.3")).guarantees(),
+            learned(Some("5.9.3")).guarantees(),
             ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
         );
         for version in [Some("5.9.2"), Some("5.3.0"), Some("garbage"), None] {
             assert_eq!(
-                TypescriptLanguageServerAdapter::for_version(version).guarantees(),
+                learned(version).guarantees(),
                 ServerStateProvider::notifications_only(),
                 "declared a guarantee for unmeasured version {version:?}"
             );
         }
+    }
+
+    // --- the workspace layout (ADR 0023) ---------------------------------------------
+
+    #[test]
+    fn declares_coverage_only_for_a_layout_rule_r1_deems_complete() {
+        let complete = complete_workspace("r1-complete");
+        let mut adapter = TypescriptLanguageServerAdapter::for_version(Some("5.9.3"));
+        adapter.learn_workspace_roots(std::slice::from_ref(&complete.path));
+        assert_eq!(
+            adapter.guarantees(),
+            ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
+        );
+
+        let split = TempWorkspace::new("tsls-r1-split");
+        split
+            .write("packages/a/tsconfig.json", "{}")
+            .write("packages/a/index.ts", "export const a = 1;\n")
+            .write("packages/b/tsconfig.json", "{}")
+            .write("packages/b/use.ts", "export const b = 1;\n");
+        let mut adapter = TypescriptLanguageServerAdapter::for_version(Some("5.9.3"));
+        adapter.learn_workspace_roots(std::slice::from_ref(&split.path));
+        assert_eq!(
+            adapter.guarantees(),
+            ServerStateProvider::freshness_only(&[FileChangeType::Changed]),
+            "declared coverage for projects without a solution"
+        );
+    }
+
+    #[test]
+    fn declares_no_coverage_without_a_known_workspace_root() {
+        let adapter = TypescriptLanguageServerAdapter::for_version(Some("5.9.3"));
+        assert_eq!(
+            adapter.guarantees(),
+            ServerStateProvider::freshness_only(&[FileChangeType::Changed])
+        );
+    }
+
+    #[test]
+    fn a_config_change_after_declaring_coverage_makes_readiness_unknown_for_good() {
+        let workspace = complete_workspace("config-change");
+        let mut adapter = ready_on(&workspace);
+        let state = observe(
+            &mut adapter,
+            &watched(&workspace.path.join("tsconfig.json"), 2),
+        )
+        .expect("a config change must move the state");
+        assert_eq!(state.readiness, Readiness::Unknown);
+
+        // A later project load does not bring the promise back.
+        interpret(&mut adapter, &load_begin("2"));
+        let after = interpret(&mut adapter, &load_end("2"));
+        assert!(
+            after
+                .as_ref()
+                .is_none_or(|s| s.readiness == Readiness::Unknown),
+            "readiness came back after the layout changed: {after:?}"
+        );
+    }
+
+    #[test]
+    fn a_new_config_in_a_subdirectory_makes_readiness_unknown() {
+        let workspace = complete_workspace("new-config");
+        let mut adapter = ready_on(&workspace);
+        let state = observe(
+            &mut adapter,
+            &watched(&workspace.path.join("packages/b/tsconfig.json"), 1),
+        )
+        .expect("a new config must move the state");
+        assert_eq!(state.readiness, Readiness::Unknown);
+    }
+
+    #[test]
+    fn a_new_javascript_file_outside_allow_js_makes_readiness_unknown() {
+        let workspace = complete_workspace("new-js");
+        let mut adapter = ready_on(&workspace);
+        let state = observe(&mut adapter, &watched(&workspace.path.join("tool.js"), 1))
+            .expect("a JavaScript file outside the project must move the state");
+        assert_eq!(state.readiness, Readiness::Unknown);
+    }
+
+    #[test]
+    fn source_changes_and_node_modules_do_not_touch_readiness() {
+        let workspace = complete_workspace("unrelated");
+        let mut adapter = ready_on(&workspace);
+        for (path, kind) in [
+            (workspace.path.join("b.ts"), 1),
+            (workspace.path.join("a.ts"), 2),
+            (workspace.path.join("node_modules/dep/tsconfig.json"), 1),
+        ] {
+            assert_eq!(
+                observe(&mut adapter, &watched(&path, kind)),
+                None,
+                "moved the state on {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_added_workspace_folder_makes_readiness_unknown() {
+        let workspace = complete_workspace("folders");
+        let mut adapter = ready_on(&workspace);
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "workspace/didChangeWorkspaceFolders",
+            "params": {"event": {"added": [{"uri": "file:///other", "name": "other"}], "removed": []}},
+        })
+        .to_string();
+        let state = observe(&mut adapter, &body).expect("an added folder must move the state");
+        assert_eq!(state.readiness, Readiness::Unknown);
+    }
+
+    #[test]
+    fn without_a_coverage_declaration_layout_changes_are_not_watched() {
+        // Nothing was promised, so there is nothing to withdraw; holding stays as it was.
+        let split = TempWorkspace::new("tsls-no-promise");
+        split
+            .write("packages/a/tsconfig.json", "{}")
+            .write("packages/b/tsconfig.json", "{}");
+        let mut adapter = TypescriptLanguageServerAdapter::for_version(Some("5.9.3"));
+        adapter.learn_workspace_roots(std::slice::from_ref(&split.path));
+        interpret(&mut adapter, &load_begin("1"));
+        interpret(&mut adapter, &load_end("1"));
+        assert_eq!(
+            observe(&mut adapter, &watched(&split.path.join("tsconfig.json"), 1)),
+            None
+        );
     }
 }

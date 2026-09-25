@@ -56,3 +56,7 @@ TypeScript 5.9.3（flake の `typescript/lib/typescript.js`）と 6.0.3 で、�
 - workspace は 4 つ。完全だった 2 つ（single、solution）と不完全だった 2 つ（no-solution、pnpm/pnpm）の違いは tsserver のソースから読んだ規則と一致するが、中間のディレクトリにある tsconfig.json、`extends` で継承した `composite`、`disableSolutionSearching` / `disableReferencedProjectLoad`、tsconfig.json のない workspace（inferred project）は測っていない
 - 測ったのは `textDocument/references` だけ。7.0 の他のメソッド（`workspace/symbol`、`rename`、call hierarchy 等）も読み込み済みの project だけを探すと読めるが、測っていない
 - pnpm/pnpm の完全な答えの数は文字列の数え上げで、型を通した厳密な数ではない
+
+## 実装（2026-09-25）
+
+ADR 0023 の案 A と規則 R1 を写像に入れた（`src/adapter/typescript_layout.rs`）。検証済みの版でも、workspace の各フォルダの根に設定ファイルが 1 つだけあり、`extends` を持たず全ソースを含むときだけ `coverage` を宣言し、それ以外では `freshness` だけを宣言する。本報告の solution のない workspace を実サーバーで当てると `coverage` を宣言しなくなった（`tests/conformance.rs` の `typescript_language_server_declares_no_coverage_without_a_solution_with_real_server`）。7.2 の fixture（設定ファイル 1 つ）では従来どおり宣言し、7.2 / 7.3 も通る。`coverage` を宣言した後にクライアントが設定ファイルの変化を知らせると、tsserver が読み込みをやり直しても `readiness` は `unknown` のまま戻らない（決定 4）。仕様は 1.1 に上げ、8.2 の 5 と 10 章の typescript-language-server の行を改めた。

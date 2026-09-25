@@ -59,7 +59,7 @@ lsp-det の次段階は上流への働きかけである（ADR 0009 決定 A-3�
 - `gopls_spec_7_1_through_lsp_det_with_real_gopls` の「`initialize` 直後は `ready` でない」: 小さな fixture では上流が正直に `ready` を答える（仕様 7.1 の 1 は ADR 0009 決定 C-5 で緩めてある）
 - `gopls_does_not_reemit_workspace_setup_on_go_mod_change`: 上流の初期ロードの通知（`indexing` → `ready`）が `wait_until_ready` の後にも受信待ちに残っていて拾われる。go.mod の変更で上流が再発行しているのではない（gopls は go.mod 変更後のリロードをリクエストの中で同期的に行うので `ready` のまま正しい）
 
-typescript-language-server の `tsserver-exit-by-signal` のビルドでは、準拠テストの 2 つの断言が失敗し、それが正しい: `typescript_language_server_tsserver_crash_becomes_health_error_with_real_server`（言語サーバーが tsserver と一緒に終了するので lsp-det も終了し、テストの書き込みが Broken pipe で失敗する。嘘をつくのではなく上流が消える。仕様 8 章）と `typescript_language_server_spec_7_1_through_lsp_det_with_real_server`（ソースビルドが同梱する TypeScript が `TESTED_VERSIONS` にないので保証が宣言されない）。
+typescript-language-server の `tsserver-exit-by-signal` のビルドでは、準拠テストの 2 つの断言が失敗し、それが正しい: `typescript_language_server_tsserver_crash_becomes_health_error_with_real_server`（言語サーバーが tsserver と一緒に終了するので lsp-det も終了し、テストの書き込みが Broken pipe で失敗する。嘘をつくのではなく上流が消える。仕様 8 章）と `typescript_language_server_spec_7_1_through_lsp_det_with_real_server`（ソースビルドが同梱する TypeScript が `TESTED_VERSIONS` にないので保証が宣言されない）。この変更は上流に取り込まれ（typescript-language-server/typescript-language-server#1125）、v6.0.1 で配布された。flake の版が 6.0.1 以上になると前者の断言は配布版でも失敗するので、そのとき上流消失を確かめる形に書き換える。
 
 lsp-det 側は、名前の大文字小文字を区別せず（pyright は "Pyright" と名乗る）、`serverInfo` の版で保証の根拠を置き換えるかを写像が決める（typescript-language-server の版は包み紙の版）ようにしてある。rust-analyzer のパッチに当てたことで、恒等写像の初期状態の問い合わせが `initialized` より前だった不具合も見つかり直した（PR #26）
 

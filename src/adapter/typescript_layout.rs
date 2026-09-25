@@ -15,7 +15,18 @@
 //! Nothing is asked of tsserver. Whatever the reader does not understand counts as incomplete:
 //! what is lost is only the promise, never an answer (ADR 0023).
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+
+use serde_json::Value;
+
+/// The configuration files tsserver looks for, nearest first.
+const CONFIG_NAMES: [&str; 2] = ["tsconfig.json", "jsconfig.json"];
+/// Directories that are not part of the workspace's own sources.
+const SKIPPED_DIRS: [&str; 2] = ["node_modules", ".git"];
+const TYPESCRIPT_EXTENSIONS: [&str; 4] = ["ts", "tsx", "mts", "cts"];
+const JAVASCRIPT_EXTENSIONS: [&str; 4] = ["js", "jsx", "mjs", "cjs"];
+/// tsserver's `exclude` when a configuration writes none (the `outDir` is added to it).
+const DEFAULT_EXCLUDE: [&str; 3] = ["node_modules", "bower_components", "jspm_packages"];
 
 /// What rule R1 found in one workspace folder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,22 +41,339 @@ pub struct FolderLayout {
 
 /// Reads each workspace folder.
 pub fn assess(roots: &[PathBuf]) -> Vec<FolderLayout> {
-    let _ = roots;
-    todo!("ADR 0023 rule R1")
+    roots.iter().map(|root| assess_folder(root)).collect()
 }
 
 /// Whether every folder is complete. A workspace without any known folder is not.
 pub fn all_complete(layouts: &[FolderLayout]) -> bool {
-    let _ = layouts;
-    todo!("ADR 0023 rule R1")
+    !layouts.is_empty() && layouts.iter().all(|layout| layout.complete)
 }
 
 /// Whether a change to `path` can break the verdict of [`assess`] for `layout`: a
 /// configuration file anywhere in the folder, or (when `created`) a JavaScript file the
 /// configuration does not take in. Paths under `node_modules` and `.git` never do.
 pub fn change_breaks_verdict(layout: &FolderLayout, path: &Path, created: bool) -> bool {
-    let _ = (layout, path, created);
-    todo!("ADR 0023 rule R1")
+    let Ok(relative) = path.strip_prefix(&layout.root) else {
+        return false;
+    };
+    if relative.components().any(|component| {
+        matches!(component, Component::Normal(name) if SKIPPED_DIRS.iter().any(|d| name == *d))
+    }) {
+        return false;
+    }
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    CONFIG_NAMES.contains(&name)
+        || (created && has_extension(path, &JAVASCRIPT_EXTENSIONS) && !layout.allow_js)
+}
+
+fn assess_folder(root: &Path) -> FolderLayout {
+    let incomplete = |allow_js| FolderLayout {
+        root: root.to_path_buf(),
+        complete: false,
+        allow_js,
+    };
+    let mut configs = Vec::new();
+    let mut sources = Vec::new();
+    if walk(root, root, &mut configs, &mut sources).is_err() {
+        return incomplete(false);
+    }
+    let [config] = configs.as_slice() else {
+        return incomplete(false);
+    };
+    if config.parent() != Some(root) {
+        return incomplete(false);
+    }
+    let Some(settings) = std::fs::read_to_string(config)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&strip_jsonc(&text)).ok())
+        .filter(Value::is_object)
+    else {
+        return incomplete(false);
+    };
+    let is_jsconfig = config
+        .file_name()
+        .is_some_and(|name| name == "jsconfig.json");
+    let allow_js_setting = &settings["compilerOptions"]["allowJs"];
+    let allow_js = if is_jsconfig {
+        allow_js_setting != &Value::Bool(false)
+    } else {
+        allow_js_setting == &Value::Bool(true)
+    };
+    let complete = settings.get("extends").is_none()
+        && sources
+            .iter()
+            .all(|source| allow_js || !has_extension(Path::new(source), &JAVASCRIPT_EXTENSIONS))
+        && project_contains(&settings, &sources);
+    FolderLayout {
+        root: root.to_path_buf(),
+        complete,
+        allow_js,
+    }
+}
+
+/// Collects the configuration files (absolute paths) and the source files (paths relative to
+/// `root`, joined by `/`). Symbolic links are not followed.
+fn walk(
+    root: &Path,
+    dir: &Path,
+    configs: &mut Vec<PathBuf>,
+    sources: &mut Vec<String>,
+) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let path = entry.path();
+        let name = entry.file_name();
+        if file_type.is_dir() {
+            if !SKIPPED_DIRS.iter().any(|skipped| name == *skipped) {
+                walk(root, &path, configs, sources)?;
+            }
+        } else if file_type.is_file() {
+            if CONFIG_NAMES.iter().any(|config| name == *config) {
+                configs.push(path);
+            } else if has_extension(&path, &TYPESCRIPT_EXTENSIONS)
+                || has_extension(&path, &JAVASCRIPT_EXTENSIONS)
+            {
+                let Some(relative) = relative_slash_path(root, &path) else {
+                    // A name that is not UTF-8 cannot be matched against the patterns.
+                    sources.push(String::new());
+                    continue;
+                };
+                sources.push(relative);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn relative_slash_path(root: &Path, path: &Path) -> Option<String> {
+    let relative = path.strip_prefix(root).ok()?;
+    let parts: Option<Vec<&str>> = relative
+        .components()
+        .map(|component| match component {
+            Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .collect();
+    Some(parts?.join("/"))
+}
+
+fn has_extension(path: &Path, extensions: &[&str]) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extensions.contains(&extension))
+}
+
+/// Whether the configuration's `files` / `include` / `exclude` take in every source.
+fn project_contains(settings: &Value, sources: &[String]) -> bool {
+    let list = |key: &str| -> Result<Option<Vec<String>>, ()> {
+        match settings.get(key) {
+            None => Ok(None),
+            Some(Value::Array(items)) => items
+                .iter()
+                .map(|item| item.as_str().map(normalize_entry).ok_or(()))
+                .collect::<Result<Vec<_>, _>>()
+                .map(Some),
+            Some(_) => Err(()),
+        }
+    };
+    let (Ok(files), Ok(include), Ok(exclude)) = (list("files"), list("include"), list("exclude"))
+    else {
+        return false;
+    };
+    let include = include.unwrap_or_else(|| {
+        if files.is_some() {
+            Vec::new()
+        } else {
+            vec!["**/*".to_string()]
+        }
+    });
+    let exclude = exclude.unwrap_or_else(|| {
+        let mut defaults: Vec<String> = DEFAULT_EXCLUDE.iter().map(|d| d.to_string()).collect();
+        if let Some(out_dir) = settings["compilerOptions"]["outDir"].as_str() {
+            defaults.push(normalize_entry(out_dir));
+        }
+        defaults
+    });
+    let (Some(include), Some(exclude)) = (compile_all(&include), compile_all(&exclude)) else {
+        return false;
+    };
+    let files = files.unwrap_or_default();
+    sources.iter().all(|source| {
+        if source.is_empty() {
+            return false;
+        }
+        if files.iter().any(|file| file == source) {
+            return true;
+        }
+        let segments: Vec<&str> = source.split('/').collect();
+        include.iter().any(|pattern| matches(pattern, &segments))
+            && !exclude.iter().any(|pattern| {
+                // An `exclude` pattern also drops everything under a directory it matches.
+                (1..=segments.len()).any(|end| matches(pattern, &segments[..end]))
+            })
+    })
+}
+
+/// Drops a leading `./` (any number of them).
+fn normalize_entry(entry: &str) -> String {
+    let mut entry = entry.trim();
+    while let Some(rest) = entry.strip_prefix("./") {
+        entry = rest;
+    }
+    entry.to_string()
+}
+
+/// A path pattern split into segments. `None` for a pattern this reader does not handle
+/// (absolute, `..`, backslashes, empty): the caller then treats the folder as incomplete.
+fn compile(pattern: &str) -> Option<Vec<String>> {
+    if pattern.is_empty() || pattern.starts_with('/') || pattern.contains('\\') {
+        return None;
+    }
+    let mut segments: Vec<String> = pattern
+        .split('/')
+        .filter(|segment| !segment.is_empty() && *segment != ".")
+        .map(str::to_string)
+        .collect();
+    if segments.is_empty() || segments.iter().any(|segment| segment == "..") {
+        return None;
+    }
+    // A last segment without a wildcard or an extension names a directory.
+    let last = segments.last().unwrap();
+    if !has_wildcard(last) && !last.contains('.') {
+        segments.push("**".to_string());
+        segments.push("*".to_string());
+    }
+    Some(segments)
+}
+
+fn compile_all(patterns: &[String]) -> Option<Vec<Vec<String>>> {
+    patterns.iter().map(|pattern| compile(pattern)).collect()
+}
+
+fn has_wildcard(segment: &str) -> bool {
+    segment.contains('*') || segment.contains('?')
+}
+
+/// tsserver's matching: `**` stands for any number of directories, `*` and `?` for characters
+/// within one segment, and a wildcard never matches a name starting with `.`.
+fn matches(pattern: &[String], path: &[&str]) -> bool {
+    match pattern.split_first() {
+        None => path.is_empty(),
+        Some((first, rest)) if first == "**" => (0..=path.len()).any(|skip| {
+            path[..skip].iter().all(|dir| !dir.starts_with('.')) && matches(rest, &path[skip..])
+        }),
+        Some((first, rest)) => match path.split_first() {
+            Some((name, remaining)) => matches_segment(first, name) && matches(rest, remaining),
+            None => false,
+        },
+    }
+}
+
+fn matches_segment(pattern: &str, name: &str) -> bool {
+    if !has_wildcard(pattern) {
+        return pattern == name;
+    }
+    if name.starts_with('.') {
+        return false;
+    }
+    // tsserver keeps minified files out of a wildcard unless the pattern names them.
+    if pattern.contains('*') && name.ends_with(".min.js") && !pattern.ends_with(".min.js") {
+        return false;
+    }
+    wildcard(pattern.as_bytes(), name.as_bytes())
+}
+
+fn wildcard(pattern: &[u8], name: &[u8]) -> bool {
+    match pattern.split_first() {
+        None => name.is_empty(),
+        Some((b'*', rest)) => (0..=name.len()).any(|skip| wildcard(rest, &name[skip..])),
+        Some((b'?', rest)) => !name.is_empty() && wildcard(rest, &name[1..]),
+        Some((c, rest)) => name.first() == Some(c) && wildcard(rest, &name[1..]),
+    }
+}
+
+/// Removes the comments and trailing commas that tsconfig.json allows, so that the text parses
+/// as JSON. Strings are left alone.
+fn strip_jsonc(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut in_string = false;
+    while let Some(c) = chars.next() {
+        if in_string {
+            out.push(c);
+            if c == '\\' {
+                if let Some(escaped) = chars.next() {
+                    out.push(escaped);
+                }
+            } else if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                out.push(c);
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut previous = '\0';
+                for next in chars.by_ref() {
+                    if previous == '*' && next == '/' {
+                        break;
+                    }
+                    previous = next;
+                }
+                out.push(' ');
+            }
+            _ => out.push(c),
+        }
+    }
+    remove_trailing_commas(&out)
+}
+
+/// Drops a comma followed only by whitespace before `}` or `]` (outside strings).
+fn remove_trailing_commas(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut in_string = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_string {
+            out.push(c);
+            if c == '\\' && i + 1 < chars.len() {
+                out.push(chars[i + 1]);
+                i += 1;
+            } else if c == '"' {
+                in_string = false;
+            }
+        } else if c == '"' {
+            in_string = true;
+            out.push(c);
+        } else if c == ',' {
+            let next = chars[i + 1..].iter().find(|next| !next.is_whitespace());
+            if !matches!(next, Some('}') | Some(']')) {
+                out.push(c);
+            }
+        } else {
+            out.push(c);
+        }
+        i += 1;
+    }
+    out
 }
 
 /// A throwaway workspace folder for tests, cleaned up on drop. No dependency is added for

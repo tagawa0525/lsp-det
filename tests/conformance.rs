@@ -1629,17 +1629,20 @@ fn typescript_language_server_spec_7_3_cross_file_freshness_through_lsp_det_with
     client.shutdown();
 }
 
-/// A tsconfig change re-triggers the load, going through indexing and back to ready.
+/// A tsconfig change re-triggers the load, going through indexing and back to
+/// ready. Measured where coverage is not declared (projects without a
+/// solution), since a declared coverage turns the same change into `unknown`
+/// (ADR 0023 decision 4, the test below).
 #[test]
 #[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
 fn typescript_language_server_rearms_on_tsconfig_change_with_real_server() {
-    let project = support::TempTsProject::with_cross_file_reference("tsconfig");
+    let project = support::TempTsProject::without_solution("tsconfig");
     let mut client = ConformanceClient::start(&real_tsls(&project));
     client.initialize_with_root(true, &project.root);
-    client.did_open(&project.file("a.ts"), "typescript");
+    client.did_open(&project.file("packages/a/a.ts"), "typescript");
     client.wait_until_ready();
 
-    let tsconfig = project.file("tsconfig.json");
+    let tsconfig = project.file("packages/a/tsconfig.json");
     std::fs::write(
         &tsconfig,
         support::TSCONFIG.replace("\"strict\":true", "\"strict\":false"),
@@ -1656,6 +1659,43 @@ fn typescript_language_server_rearms_on_tsconfig_change_with_real_server() {
         );
     assert_eq!(observed["readiness"], json!("indexing"));
     client.wait_until_ready();
+    client.shutdown();
+}
+
+/// ADR 0023 decision 4: once coverage is declared, a change to the layout it
+/// rests on makes readiness `unknown` for the rest of the connection, even
+/// though tsserver reloads the project.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn typescript_language_server_a_tsconfig_change_after_declaring_coverage_is_unknown_with_real_server()
+ {
+    let project = support::TempTsProject::with_cross_file_reference("tsconfig-declared");
+    let mut client = ConformanceClient::start(&real_tsls(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert!(
+        !result["result"]["capabilities"]["experimental"]["serverStateProvider"]["coverage"]
+            .is_null(),
+        "the premise is broken: coverage is not declared for the 7.2 fixture: {result}"
+    );
+    client.did_open(&project.file("a.ts"), "typescript");
+    client.wait_until_ready();
+
+    let tsconfig = project.file("tsconfig.json");
+    std::fs::write(
+        &tsconfig,
+        support::TSCONFIG.replace("\"strict\":true", "\"strict\":false"),
+    )
+    .unwrap();
+    client.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": support::file_uri(&tsconfig), "type": 2}]}),
+    );
+    let observed = client
+        .await_notification_within("experimental/serverStateChanged", Duration::from_secs(8))
+        .expect("readiness did not move on the tsconfig change");
+    // That a later reload does not bring readiness back is pinned down
+    // deterministically by the mapping's unit test.
+    assert_eq!(observed["readiness"], json!("unknown"));
     client.shutdown();
 }
 

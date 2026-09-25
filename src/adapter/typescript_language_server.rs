@@ -33,12 +33,17 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::Mapping;
+use super::typescript_layout::{self, FolderLayout};
 use crate::initialize::ServerInfo;
 use crate::peek::MessageView;
 use crate::state::{FileChangeType, Health, Readiness, ServerState, ServerStateProvider};
 
 const PROGRESS_METHOD: &str = "$/progress";
 const LOG_MESSAGE_METHOD: &str = "window/logMessage";
+const DID_CHANGE_WATCHED_FILES_METHOD: &str = "workspace/didChangeWatchedFiles";
+const DID_CHANGE_WORKSPACE_FOLDERS_METHOD: &str = "workspace/didChangeWorkspaceFolders";
+/// `FileChangeType.Created`.
+const CREATED: u64 = 1;
 /// The notification specific to typescript-language-server. Arrives after the `initialize`
 /// response.
 const TYPESCRIPT_VERSION_METHOD: &str = "$/typescriptVersion";
@@ -129,6 +134,13 @@ pub struct TypescriptLanguageServerAdapter {
     state: ServerState,
     /// Tokens of a project load that have begun and are awaiting end.
     loading: Vec<Value>,
+    /// The layout of each workspace folder (ADR 0023, rule R1). Empty until the roots are
+    /// known, and then `coverage` is not declared.
+    layouts: Vec<FolderLayout>,
+    /// The layout that `coverage` rests on may have changed after it was declared. The promise
+    /// cannot be withdrawn from `InitializeResult`, so `readiness` stays `unknown` from then on
+    /// (ADR 0023 decision 4).
+    layout_changed: bool,
 }
 
 impl Default for TypescriptLanguageServerAdapter {
@@ -151,6 +163,41 @@ impl TypescriptLanguageServerAdapter {
             version_is_tested,
             state: ServerState::initializing(),
             loading: Vec::new(),
+            layouts: Vec::new(),
+            layout_changed: false,
+        }
+    }
+
+    /// Whether `coverage` is declared: a tested version, in a layout rule R1 deems complete.
+    fn declares_coverage(&self) -> bool {
+        self.version_is_tested && typescript_layout::all_complete(&self.layouts)
+    }
+
+    /// Whether a client notification can have changed the layout `coverage` rests on.
+    fn breaks_layout(&self, method: &str, body: &[u8]) -> bool {
+        let Ok(message) = serde_json::from_slice::<Value>(body) else {
+            return false;
+        };
+        let params = &message["params"];
+        match method {
+            DID_CHANGE_WATCHED_FILES_METHOD => params["changes"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|change| {
+                    let Some(path) = change["uri"].as_str().and_then(crate::uri::uri_to_path)
+                    else {
+                        return false;
+                    };
+                    let created = change["type"].as_u64() == Some(CREATED);
+                    self.layouts.iter().any(|layout| {
+                        typescript_layout::change_breaks_verdict(layout, &path, created)
+                    })
+                }),
+            DID_CHANGE_WORKSPACE_FOLDERS_METHOD => params["event"]["added"]
+                .as_array()
+                .is_some_and(|added| !added.is_empty()),
+            _ => false,
         }
     }
 
@@ -159,7 +206,9 @@ impl TypescriptLanguageServerAdapter {
         match value.kind.as_str() {
             "begin" if value.title.as_deref() == Some(PROJECT_LOAD_TITLE) => {
                 self.loading.push(token);
-                self.state.readiness = Readiness::Indexing;
+                if !self.layout_changed {
+                    self.state.readiness = Readiness::Indexing;
+                }
             }
             "end" => {
                 let index = self.loading.iter().position(|t| *t == token)?;
@@ -167,7 +216,9 @@ impl TypescriptLanguageServerAdapter {
                 if !self.loading.is_empty() {
                     return None;
                 }
-                self.state.readiness = Readiness::Ready;
+                if !self.layout_changed {
+                    self.state.readiness = Readiness::Ready;
+                }
                 // A successful load was observed. But an end after tsserver has crashed (the
                 // indicator resetting) is not a success. There is no restart, so it is not
                 // reverted.
@@ -196,11 +247,35 @@ impl Mapping for TypescriptLanguageServerAdapter {
     }
 
     fn guarantees(&self) -> ServerStateProvider {
-        if self.version_is_tested {
+        if !self.version_is_tested {
+            ServerStateProvider::notifications_only()
+        } else if self.declares_coverage() {
             ServerStateProvider::workspace(&[], &[FileChangeType::Changed])
         } else {
-            ServerStateProvider::notifications_only()
+            // tsserver searches only the projects it has loaded; outside the layouts rule R1
+            // deems complete, `ready` does not mean the whole workspace (ADR 0023).
+            ServerStateProvider::freshness_only(&[FileChangeType::Changed])
         }
+    }
+
+    fn learn_workspace_roots(&mut self, roots: &[std::path::PathBuf]) {
+        self.layouts = typescript_layout::assess(roots);
+    }
+
+    /// After `coverage` is declared, a change to the layout it rests on (a configuration file,
+    /// a JavaScript file outside `allowJs`, an added folder) makes `readiness` `unknown` for the
+    /// rest of the connection, and holding stops (ADR 0023 decision 4). A change the client
+    /// does not tell lsp-det about is not seen.
+    fn observe_client(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
+        if self.layout_changed || !self.declares_coverage() || !view.is_notification() {
+            return None;
+        }
+        if !self.breaks_layout(view.method()?, body) {
+            return None;
+        }
+        self.layout_changed = true;
+        self.state.readiness = Readiness::Unknown;
+        Some(self.state.clone())
     }
 
     /// The serverInfo version is the wrapper's (typescript-language-server's) version, not the

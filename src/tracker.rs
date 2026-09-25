@@ -28,6 +28,9 @@ pub struct Tracker {
     initialization_options: Option<serde_json::Value>,
     /// The `workspaceFolders` of the client's `initialize`, held for the same reason.
     workspace_folders: Vec<std::path::PathBuf>,
+    /// The workspace roots of the client's `initialize` (`workspaceFolders`, or `rootUri` if
+    /// absent), held for the same reason (`Mapping::learn_workspace_roots`, ADR 0023).
+    workspace_roots: Vec<std::path::PathBuf>,
     /// The arguments lsp-det itself launched the upstream with, held for the same reason
     /// (`Mapping::learn_upstream_arguments`, ADR 0020 addendum 2026-09-09).
     upstream_arguments: Vec<String>,
@@ -49,6 +52,7 @@ impl Tracker {
             named_but_unknown: false,
             initialization_options: None,
             workspace_folders: Vec::new(),
+            workspace_roots: Vec::new(),
             upstream_arguments: Vec::new(),
         }
     }
@@ -62,12 +66,14 @@ impl Tracker {
         }
     }
 
-    /// Remember the client's `initialize` (hand `initializationOptions` and `workspaceFolders`
-    /// to the mapping).
+    /// Remember the client's `initialize` (hand `initializationOptions`, `workspaceFolders`, and
+    /// the workspace roots to the mapping).
     pub fn remember_initialize(&mut self, body: &[u8]) {
         self.workspace_folders = crate::initialize::workspace_folders(body);
+        self.workspace_roots = crate::initialize::workspace_roots(body);
         if let Some(adapter) = self.adapter.as_mut() {
             adapter.learn_workspace_folders(&self.workspace_folders);
+            adapter.learn_workspace_roots(&self.workspace_roots);
         }
         let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
             return;
@@ -139,6 +145,7 @@ impl Tracker {
             adapter.learn_initialization_options(options);
         }
         adapter.learn_workspace_folders(&self.workspace_folders);
+        adapter.learn_workspace_roots(&self.workspace_roots);
         adapter.learn_upstream_arguments(&self.upstream_arguments);
         self.state = adapter.initial_state();
         self.adapter = Some(adapter);
@@ -356,8 +363,25 @@ mod tests {
         // by the wrapper's own version (6.0.0). What the guarantees depend on is the version of
         // the analysis engine (TypeScript), which appears in the startup log and in
         // $/typescriptVersion. The serverInfo version does not replace the basis for the
-        // guarantees (which version is the basis is up to the mapping).
+        // guarantees (which version is the basis is up to the mapping). coverage also needs a
+        // workspace layout rule R1 deems complete (ADR 0023), so the client's initialize
+        // names such a folder.
+        let workspace =
+            crate::adapter::typescript_layout::TempWorkspace::new("tracker-engine-version");
+        workspace
+            .write("tsconfig.json", "{}")
+            .write("a.ts", "export const a = 1;\n");
         let mut tracker = Tracker::new();
+        tracker.remember_initialize(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"rootUri": crate::uri::path_to_uri(&workspace.path), "capabilities": {}},
+            })
+            .to_string()
+            .as_bytes(),
+        );
         let startup = r#"{"jsonrpc":"2.0","method":"window/logMessage","params":{"type":3,"message":"Using Typescript version (user-setting) 5.9.3 from path \"/x/tsserver.js\""}}"#;
         observe(&mut tracker, startup);
         assert_eq!(

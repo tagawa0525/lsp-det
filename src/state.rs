@@ -157,8 +157,12 @@ impl ServerStateProvider {
     /// workspace but whose incorporation of changes it can (typescript-language-server in a
     /// layout rule R1 does not deem complete, ADR 0023). The `coverage` key is omitted.
     pub fn freshness_only(file_changes: &[FileChangeType]) -> Self {
-        let _ = file_changes;
-        todo!("ADR 0023")
+        ServerStateProvider {
+            coverage: None,
+            freshness: Some(Freshness {
+                file_changes: file_changes.to_vec(),
+            }),
+        }
     }
 
     /// `coverage` based on the index of the requesting document only (with the list of methods

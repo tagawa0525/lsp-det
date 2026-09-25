@@ -1,7 +1,7 @@
 # ADR 0023: typescript-language-server の coverage を workspace の形で宣言する
 
 - 日付: 2026-09-23
-- 状態: 提案（ユーザーの判断待ち）
+- 状態: 採用（2026-09-25。ユーザーの決定。推奨どおり）
 - 関連: [research/typescript-language-server-no-solution-coverage.md](../research/typescript-language-server-no-solution-coverage.md)、[ADR 0009](0009-success-criterion-and-two-sided-reference.md) 決定 D-5（保証は測った版に）、[ADR 0020](0020-v0.5-dart-sorbet-jdtls-clangd.md) と [ADR 0021](0021-v0.6-nixd-nil-and-daily-dogfooding.md) の追補（2026-09-09。観測者がサーバー自身の探索をなぞって workspace を読む先例）
 
 ## 経緯
@@ -18,6 +18,15 @@ lsp-det の typescript-language-server の写像は、検証済みの版（TypeS
 2. 案 A を採るなら、どの形を「完全」とみなすか（規則 R1 / R2）
 3. 仕様 8.2 の 5 に「workspace の形」を書き足すか
 4. 案 A を採るなら、宣言の後に配置が変わったときどうするか（下の「会話の途中で配置が変わるとき」。推奨は `readiness` を `unknown` にする）
+
+## 決定
+
+2026-09-25 にユーザーが推奨どおりに決めた。
+
+1. **案 A を採る**。写像は `initialize` の workspace の根で tsconfig.json / jsconfig.json の配置を読み、完全とみなせる形のときだけ `coverage` を宣言する。そうでなければ `coverage` を宣言せず、`freshness` は残す。`readiness` と保留は変えない。B・D・E は却下、C は保留（再検討の条件は下の表）、F は採らない
+2. **規則は R1 を先に入れ、R2 は後に続ける**。R1 で宣言の誤りを止める。R2 は宣言を広げるので、solution の形の fixture を準拠テスト 7.2 に足して通すのと同じ変更で入れる
+3. **仕様 8.2 の 5 に書き足す**。「観測者は、テストを通した版であっても、workspace の形がテストの範囲の外にあると判定できるときは宣言してはならない」の旨。仕様の版を上げて 11 章に記す（ADR 0022 決定 A）
+4. **会話の途中で配置が変わったら `readiness` を `unknown` にする**（下の「会話の途中で配置が変わるとき」のとおり。保留もやめる）。lsp-det に届かない変化は仕様 10 章の typescript-language-server の行に欠けとして書く
 
 ## 案
 

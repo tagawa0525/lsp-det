@@ -121,9 +121,9 @@ fn assess_folder(root: &Path) -> FolderLayout {
         .file_name()
         .is_some_and(|name| name == "jsconfig.json");
     // jsconfig.json turns `allowJs` on unless it says otherwise; tsconfig.json leaves it off.
-    let allow_js = match &settings["compilerOptions"]["allowJs"] {
-        Value::Null => is_jsconfig,
-        Value::Bool(value) => *value,
+    let allow_js = match compiler_option(&settings, "allowJs") {
+        Ok(None) => is_jsconfig,
+        Ok(Some(Value::Bool(value))) => *value,
         _ => return incomplete(false),
     };
     let Some(scope) = ProjectScope::read(&settings) else {
@@ -221,13 +221,19 @@ impl ProjectScope {
                 vec!["**/*".to_string()]
             }
         });
-        let exclude = exclude.unwrap_or_else(|| {
-            let mut defaults: Vec<String> = DEFAULT_EXCLUDE.iter().map(|d| d.to_string()).collect();
-            if let Some(out_dir) = settings["compilerOptions"]["outDir"].as_str() {
-                defaults.push(normalize_entry(out_dir));
+        let exclude = match exclude {
+            Some(exclude) => exclude,
+            None => {
+                let mut defaults: Vec<String> =
+                    DEFAULT_EXCLUDE.iter().map(|d| d.to_string()).collect();
+                match compiler_option(settings, "outDir") {
+                    Ok(None) => {}
+                    Ok(Some(Value::String(out_dir))) => defaults.push(normalize_entry(out_dir)),
+                    _ => return None,
+                }
+                defaults
             }
-            defaults
-        });
+        };
         Some(ProjectScope {
             files: files.unwrap_or_default(),
             include: compile_all(&include)?,
@@ -251,6 +257,17 @@ impl ProjectScope {
                 // An `exclude` pattern also drops everything under a directory it matches.
                 (1..=segments.len()).any(|end| matches(pattern, &segments[..end]))
             })
+    }
+}
+
+/// A `compilerOptions` entry: `Ok(None)` when it is not written, `Err` when `compilerOptions`
+/// is written but is not an object. An explicit `null` comes back as `Ok(Some(Null))`, for the
+/// caller to reject.
+fn compiler_option<'a>(settings: &'a Value, key: &str) -> Result<Option<&'a Value>, ()> {
+    match settings.get("compilerOptions") {
+        None => Ok(None),
+        Some(Value::Object(options)) => Ok(options.get(key)),
+        Some(_) => Err(()),
     }
 }
 

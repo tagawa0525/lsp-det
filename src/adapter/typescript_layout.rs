@@ -37,6 +37,17 @@ pub struct FolderLayout {
     /// Whether the folder's configuration puts JavaScript files into the project. `false`
     /// when there is no single configuration to read.
     pub allow_js: bool,
+    /// The files the configuration takes in. `None` when there is no single configuration to
+    /// read.
+    scope: Option<ProjectScope>,
+}
+
+/// A configuration's `files` / `include` / `exclude`, compiled for tsserver's matching.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectScope {
+    files: Vec<String>,
+    include: Vec<Vec<String>>,
+    exclude: Vec<Vec<String>>,
 }
 
 /// Reads each workspace folder.
@@ -65,8 +76,19 @@ pub fn change_breaks_verdict(layout: &FolderLayout, path: &Path, created: bool) 
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("");
-    CONFIG_NAMES.contains(&name)
-        || (created && has_extension(path, &JAVASCRIPT_EXTENSIONS) && !layout.allow_js)
+    if CONFIG_NAMES.contains(&name) {
+        return true;
+    }
+    let is_javascript = has_extension(path, &JAVASCRIPT_EXTENSIONS);
+    if !created || !(is_javascript || has_extension(path, &TYPESCRIPT_EXTENSIONS)) {
+        return false;
+    }
+    // A new source breaks the verdict unless the configuration takes it in.
+    let takes_in = (!is_javascript || layout.allow_js)
+        && layout.scope.as_ref().is_some_and(|scope| {
+            relative_slash_path(&layout.root, path).is_some_and(|source| scope.takes_in(&source))
+        });
+    !takes_in
 }
 
 fn assess_folder(root: &Path) -> FolderLayout {
@@ -74,6 +96,7 @@ fn assess_folder(root: &Path) -> FolderLayout {
         root: root.to_path_buf(),
         complete: false,
         allow_js,
+        scope: None,
     };
     let mut configs = Vec::new();
     let mut sources = Vec::new();
@@ -88,7 +111,8 @@ fn assess_folder(root: &Path) -> FolderLayout {
     }
     let Some(settings) = std::fs::read_to_string(config)
         .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&strip_jsonc(&text)).ok())
+        .and_then(|text| strip_jsonc(&text))
+        .and_then(|json| serde_json::from_str::<Value>(&json).ok())
         .filter(Value::is_object)
     else {
         return incomplete(false);
@@ -96,21 +120,25 @@ fn assess_folder(root: &Path) -> FolderLayout {
     let is_jsconfig = config
         .file_name()
         .is_some_and(|name| name == "jsconfig.json");
-    let allow_js_setting = &settings["compilerOptions"]["allowJs"];
-    let allow_js = if is_jsconfig {
-        allow_js_setting != &Value::Bool(false)
-    } else {
-        allow_js_setting == &Value::Bool(true)
+    // jsconfig.json turns `allowJs` on unless it says otherwise; tsconfig.json leaves it off.
+    let allow_js = match &settings["compilerOptions"]["allowJs"] {
+        Value::Null => is_jsconfig,
+        Value::Bool(value) => *value,
+        _ => return incomplete(false),
+    };
+    let Some(scope) = ProjectScope::read(&settings) else {
+        return incomplete(allow_js);
     };
     let complete = settings.get("extends").is_none()
-        && sources
-            .iter()
-            .all(|source| allow_js || !has_extension(Path::new(source), &JAVASCRIPT_EXTENSIONS))
-        && project_contains(&settings, &sources);
+        && sources.iter().all(|source| {
+            (allow_js || !has_extension(Path::new(source), &JAVASCRIPT_EXTENSIONS))
+                && scope.takes_in(source)
+        });
     FolderLayout {
         root: root.to_path_buf(),
         complete,
         allow_js,
+        scope: Some(scope),
     }
 }
 
@@ -167,55 +195,63 @@ fn has_extension(path: &Path, extensions: &[&str]) -> bool {
         .is_some_and(|extension| extensions.contains(&extension))
 }
 
-/// Whether the configuration's `files` / `include` / `exclude` take in every source.
-fn project_contains(settings: &Value, sources: &[String]) -> bool {
-    let list = |key: &str| -> Result<Option<Vec<String>>, ()> {
-        match settings.get(key) {
-            None => Ok(None),
-            Some(Value::Array(items)) => items
-                .iter()
-                .map(|item| item.as_str().map(normalize_entry).ok_or(()))
-                .collect::<Result<Vec<_>, _>>()
-                .map(Some),
-            Some(_) => Err(()),
-        }
-    };
-    let (Ok(files), Ok(include), Ok(exclude)) = (list("files"), list("include"), list("exclude"))
-    else {
-        return false;
-    };
-    let include = include.unwrap_or_else(|| {
-        if files.is_some() {
-            Vec::new()
-        } else {
-            vec!["**/*".to_string()]
-        }
-    });
-    let exclude = exclude.unwrap_or_else(|| {
-        let mut defaults: Vec<String> = DEFAULT_EXCLUDE.iter().map(|d| d.to_string()).collect();
-        if let Some(out_dir) = settings["compilerOptions"]["outDir"].as_str() {
-            defaults.push(normalize_entry(out_dir));
-        }
-        defaults
-    });
-    let (Some(include), Some(exclude)) = (compile_all(&include), compile_all(&exclude)) else {
-        return false;
-    };
-    let files = files.unwrap_or_default();
-    sources.iter().all(|source| {
+impl ProjectScope {
+    /// `None` when the configuration writes something this reader does not understand.
+    fn read(settings: &Value) -> Option<Self> {
+        let list = |key: &str| -> Result<Option<Vec<String>>, ()> {
+            match settings.get(key) {
+                None => Ok(None),
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .map(|item| item.as_str().map(normalize_entry).ok_or(()))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(Some),
+                Some(_) => Err(()),
+            }
+        };
+        let (Ok(files), Ok(include), Ok(exclude)) =
+            (list("files"), list("include"), list("exclude"))
+        else {
+            return None;
+        };
+        let include = include.unwrap_or_else(|| {
+            if files.is_some() {
+                Vec::new()
+            } else {
+                vec!["**/*".to_string()]
+            }
+        });
+        let exclude = exclude.unwrap_or_else(|| {
+            let mut defaults: Vec<String> = DEFAULT_EXCLUDE.iter().map(|d| d.to_string()).collect();
+            if let Some(out_dir) = settings["compilerOptions"]["outDir"].as_str() {
+                defaults.push(normalize_entry(out_dir));
+            }
+            defaults
+        });
+        Some(ProjectScope {
+            files: files.unwrap_or_default(),
+            include: compile_all(&include)?,
+            exclude: compile_all(&exclude)?,
+        })
+    }
+
+    /// Whether a source (relative to the folder, joined by `/`) belongs to the project.
+    fn takes_in(&self, source: &str) -> bool {
         if source.is_empty() {
             return false;
         }
-        if files.iter().any(|file| file == source) {
+        if self.files.iter().any(|file| file == source) {
             return true;
         }
         let segments: Vec<&str> = source.split('/').collect();
-        include.iter().any(|pattern| matches(pattern, &segments))
-            && !exclude.iter().any(|pattern| {
+        self.include
+            .iter()
+            .any(|pattern| matches(pattern, &segments))
+            && !self.exclude.iter().any(|pattern| {
                 // An `exclude` pattern also drops everything under a directory it matches.
                 (1..=segments.len()).any(|end| matches(pattern, &segments[..end]))
             })
-    })
+    }
 }
 
 /// Drops a leading `./` (any number of them).
@@ -297,8 +333,8 @@ fn wildcard(pattern: &[u8], name: &[u8]) -> bool {
 }
 
 /// Removes the comments and trailing commas that tsconfig.json allows, so that the text parses
-/// as JSON. Strings are left alone.
-fn strip_jsonc(text: &str) -> String {
+/// as JSON. Strings are left alone. `None` for a block comment that never closes.
+fn strip_jsonc(text: &str) -> Option<String> {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     let mut in_string = false;
@@ -330,18 +366,23 @@ fn strip_jsonc(text: &str) -> String {
             '/' if chars.peek() == Some(&'*') => {
                 chars.next();
                 let mut previous = '\0';
+                let mut closed = false;
                 for next in chars.by_ref() {
                     if previous == '*' && next == '/' {
+                        closed = true;
                         break;
                     }
                     previous = next;
+                }
+                if !closed {
+                    return None;
                 }
                 out.push(' ');
             }
             _ => out.push(c),
         }
     }
-    remove_trailing_commas(&out)
+    Some(remove_trailing_commas(&out))
 }
 
 /// Drops a comma followed only by whitespace before `}` or `]` (outside strings).

@@ -1,6 +1,6 @@
 # typescript-language-server: solution のない multi-project の workspace で coverage の宣言が破れる（2026-09-23）
 
-Serena の #1937 の再現（[serena-request-path-state-prototype.md](serena-request-path-state-prototype.md)）の副産物として、lsp-det 自身の typescript-language-server の写像が、workspace の形によっては守れない `coverage` を宣言していることが分かった。本報告はそれを lsp-det 経由で測り直し、原因を tsserver のソースで確かめる。扱いは [ADR 0023](../adr/0023-typescript-coverage-by-workspace-layout.md)（提案）。
+Serena の #1937 の再現（[serena-request-path-state-prototype.md](serena-request-path-state-prototype.md)）の副産物として、lsp-det 自身の typescript-language-server の写像が、workspace の形によっては守れない `coverage` を宣言していることが分かった。本報告はそれを lsp-det 経由で測り直し、原因を tsserver のソースで確かめる。扱いは [ADR 0023](../adr/0023-typescript-coverage-by-workspace-layout.md)（2026-09-25 採用。workspace の tsconfig.json / jsconfig.json の配置を読み、完全とみなせる形のときだけ `coverage` を宣言する）。
 
 ## 結論
 
@@ -48,7 +48,7 @@ TypeScript 5.9.3（flake の `typescript/lib/typescript.js`）と 6.0.3 で、�
 ## 読み
 
 - 宣言の誤りは準拠テストの fixture の形に由来する。7.2 は tsconfig.json が 1 つの workspace で通り、その結果が workspace の形によらず宣言に使われている。8.2 の 5 は「テストを通した版の範囲を超えて宣言してはならない」と版だけを見ていて、workspace の形がテストの範囲の外にあることを想定していない
-- lsp-det は写像を選んだ時点で `initialize` の `workspaceFolders` を知っている（`src/tracker.rs` の `adopt` が `learn_workspace_folders` を呼んでから `provider` が宣言を返す）。tsserver と同じ規則で workspace の tsconfig.json の配置を読めば、宣言を workspace ごとに決められる。扱いの選択肢は ADR 0023
+- lsp-det は写像を選んだ時点で `initialize` の `workspaceFolders` を知っている（`src/tracker.rs` の `adopt` が `learn_workspace_folders` を呼んでから `provider` が宣言を返す）。tsserver と同じ規則で workspace の tsconfig.json の配置を読めば、宣言を workspace ごとに決められる。扱いの選択肢と採った案は ADR 0023
 - 保留（`indexing` の間の 7.0 の要求を待たせる）はどの形でも効く。宣言をやめても、#1937 のような一過性の窓は塞げる
 
 ## 一般化してはならない点

@@ -75,3 +75,16 @@ lsp-det に届かない変化（クライアントが通知しないディスク
 実装（PR #119）のレビューで、決定 4 の対象の 2 つ目「`allowJs` のない設定の下での JavaScript のファイルの Created」では足りないことが分かった。規則 R1 は設定の `files` / `include` / `exclude` が全ソースを含むことも求めるので、たとえば `include: ["src"]` の設定の下で `src` の外に `.ts` が新しくできても、判定は不完全に変わる。`allowJs` が真の設定の下で `src` の外にできた `.js` も同じである。
 
 2026-09-26 にユーザーが承認し、対象の 2 つ目を「`workspace/didChangeWatchedFiles` で、設定の project に入らないソースの Created」に改めた。入るかどうかは判定と同じ照合（`files` / `include` / `exclude`、JavaScript なら `allowJs`）で決める。`allowJs` の外の JavaScript はその一つの場合になる。1 つ目（設定ファイルの変化）と 3 つ目（フォルダの追加）は変えない。仕様 10 章の typescript-language-server の行は同じ PR で合わせてある。
+
+## 追補（2026-09-26）: 設定ファイルの変化では配置を読み直す
+
+決定 4 のままでは、配置が完全なままの設定の変更（`strict` を切り替える等）でも `readiness` が以後ずっと `unknown` になり、tsserver が読み込み直すあいだの横断リクエストも保留されない。設定ファイル 1 つの最も素直な workspace で、lsp-det が塞ぐはずの窓が開く。
+
+2026-09-26 にユーザーが決め、設定ファイル（`tsconfig.json` / `jsconfig.json`）の Created / Changed / Deleted を受け取ったら、そのフォルダの配置をその時点のディスクで規則 R1 により読み直すことにした。
+
+- まだ完全なら追跡を続ける。tsserver の読み込み直しの `$/progress` で `indexing` を経て `ready` に戻り、保留も効く
+- 完全でなくなったら、今までどおり以後 `readiness` を `unknown` にする（一度 `unknown` にしたら戻さない）
+- 同じ通知に含まれる新規のソースは、読み直した後の配置で判定する
+- フォルダの追加は今までどおり `unknown` にする
+
+通知はクライアントが保存した後に届くので、lsp-det が読むディスクは tsserver が読み直すものと同じである。フォルダを歩き直すのは設定ファイルの変化のときだけで、新規のソースはそのファイル 1 つを設定の範囲と照らすだけで済む。

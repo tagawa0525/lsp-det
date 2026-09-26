@@ -1708,7 +1708,12 @@ fn typescript_language_server_rearms_on_tsconfig_change_with_real_server() {
 fn typescript_language_server_rearms_when_the_layout_stays_complete_with_real_server() {
     let project = support::TempTsProject::with_cross_file_reference("tsconfig-kept");
     let mut client = ConformanceClient::start(&real_tsls(&project));
-    client.initialize_with_root(true, &project.root);
+    let result = client.initialize_with_root(true, &project.root);
+    assert!(
+        !result["result"]["capabilities"]["experimental"]["serverStateProvider"]["coverage"]
+            .is_null(),
+        "the premise is broken: coverage is not declared for the 7.2 fixture: {result}"
+    );
     client.did_open(&project.file("a.ts"), "typescript");
     client.wait_until_ready();
 

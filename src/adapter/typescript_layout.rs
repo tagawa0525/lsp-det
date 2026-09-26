@@ -55,6 +55,15 @@ pub fn assess(roots: &[PathBuf]) -> Vec<FolderLayout> {
     roots.iter().map(|root| assess_folder(root)).collect()
 }
 
+/// Whether the workspace as a whole is complete: exactly one folder, and that folder complete.
+/// tsserver does not know workspace folders and searches only the projects it has loaded, so a
+/// second folder is a second project whose references are missed until a file in it is opened
+/// (ADR 0023 addendum 2026-09-26).
+pub fn workspace_complete(layouts: &[FolderLayout]) -> bool {
+    let _ = layouts;
+    todo!("ADR 0023 addendum 2026-09-26")
+}
+
 /// Whether every folder is complete. A workspace without any known folder is not.
 pub fn all_complete(layouts: &[FolderLayout]) -> bool {
     !layouts.is_empty() && layouts.iter().all(|layout| layout.complete)
@@ -566,6 +575,22 @@ mod tests {
             .write("a.js", SOURCE)
             .write("b.ts", SOURCE);
         assert!(complete(&w));
+    }
+
+    #[test]
+    fn several_folders_are_not_complete_even_if_each_is() {
+        let good = TempWorkspace::new("folders-good");
+        good.write("tsconfig.json", "{}").write("a.ts", SOURCE);
+        let other = TempWorkspace::new("folders-other");
+        other.write("tsconfig.json", "{}").write("b.ts", SOURCE);
+        assert!(workspace_complete(&assess(std::slice::from_ref(
+            &good.path
+        ))));
+        assert!(!workspace_complete(&assess(&[
+            good.path.clone(),
+            other.path.clone()
+        ])));
+        assert!(!workspace_complete(&assess(&[])));
     }
 
     #[test]

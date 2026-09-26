@@ -1229,6 +1229,23 @@ fn typescript_language_server_spec_8_2_5_declares_no_coverage_for_projects_witho
 }
 
 #[test]
+fn typescript_language_server_spec_8_2_5_declares_no_coverage_for_several_workspace_folders() {
+    // ADR 0023 addendum 2026-09-26: each folder is complete, but tsserver does
+    // not search a folder whose files are not open.
+    let project = support::TempTsProject::two_folders("fake-two-folders");
+    let server = ServerUnderTest::lsp_det_with_fake_typescript_language_server();
+    let mut client = ConformanceClient::start(&server);
+    let result =
+        client.initialize_with_folders(true, &[&project.root.join("A"), &project.root.join("B")]);
+    assert_eq!(
+        result["result"]["capabilities"]["experimental"]["serverStateProvider"],
+        freshness_only(),
+        "declared coverage over several workspace folders: {result}"
+    );
+    client.shutdown();
+}
+
+#[test]
 fn typescript_language_server_reads_the_layout_under_a_root_uri_without_workspace_folders() {
     let project = support::TempTsProject::with_cross_file_reference("fake-root-uri");
     let server = ServerUnderTest::lsp_det_with_fake_typescript_language_server();
@@ -1628,6 +1645,29 @@ fn typescript_language_server_declares_no_coverage_without_a_solution_with_real_
     assert!(
         provider["coverage"].is_null(),
         "declared coverage for projects tsserver does not search as a whole: {provider}"
+    );
+    assert_eq!(
+        provider["freshness"],
+        json!({"fileChanges": ["Changed"]}),
+        "lost the freshness promise: {provider}"
+    );
+    client.shutdown();
+}
+
+/// ADR 0023 addendum 2026-09-26: two workspace folders, each with one
+/// tsconfig.json taking in every source. References from A miss B's call
+/// until a file in B is opened, so coverage must not be declared.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn typescript_language_server_declares_no_coverage_for_several_folders_with_real_server() {
+    let project = support::TempTsProject::two_folders("two-folders");
+    let mut client = ConformanceClient::start(&real_tsls(&project));
+    let result =
+        client.initialize_with_folders(true, &[&project.root.join("A"), &project.root.join("B")]);
+    let provider = &result["result"]["capabilities"]["experimental"]["serverStateProvider"];
+    assert!(
+        provider["coverage"].is_null(),
+        "declared coverage over folders tsserver does not search as a whole: {provider}"
     );
     assert_eq!(
         provider["freshness"],

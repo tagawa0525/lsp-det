@@ -91,6 +91,27 @@ pub fn change_breaks_verdict(layout: &FolderLayout, path: &Path, created: bool) 
     !takes_in
 }
 
+/// Whether `path` is a configuration file in `layout`'s folder, whose change calls for
+/// [`reassess`] (ADR 0023 addendum 2026-09-26). Paths under `node_modules` and `.git` are not.
+pub fn is_config_change(layout: &FolderLayout, path: &Path) -> bool {
+    let _ = (layout, path);
+    todo!("ADR 0023 addendum 2026-09-26")
+}
+
+/// Whether a newly created `path` is a source in `layout`'s folder that the configuration does
+/// not take in (by `files` / `include` / `exclude`, and `allowJs` for JavaScript). Paths under
+/// `node_modules` and `.git` are not.
+pub fn new_source_outside(layout: &FolderLayout, path: &Path) -> bool {
+    let _ = (layout, path);
+    todo!("ADR 0023 addendum 2026-09-26")
+}
+
+/// Reads `layout`'s folder again from the disk as it is now.
+pub fn reassess(layout: &FolderLayout) -> FolderLayout {
+    let _ = layout;
+    todo!("ADR 0023 addendum 2026-09-26")
+}
+
 fn assess_folder(root: &Path) -> FolderLayout {
     let incomplete = |allow_js| FolderLayout {
         root: root.to_path_buf(),
@@ -741,6 +762,90 @@ mod tests {
     }
 
     // --- changes during the conversation -------------------------------------------------
+
+    #[test]
+    fn config_files_in_the_folder_are_layout_changes() {
+        let w = TempWorkspace::new("is-config-change");
+        w.write("tsconfig.json", "{}").write("a.ts", SOURCE);
+        let layout = &assess(std::slice::from_ref(&w.path))[0];
+        for inside in ["tsconfig.json", "jsconfig.json", "packages/b/tsconfig.json"] {
+            assert!(is_config_change(layout, &w.path.join(inside)), "{inside}");
+        }
+        for outside in [
+            "a.ts",
+            "node_modules/dep/tsconfig.json",
+            ".git/tsconfig.json",
+        ] {
+            assert!(
+                !is_config_change(layout, &w.path.join(outside)),
+                "{outside}"
+            );
+        }
+        assert!(!is_config_change(
+            layout,
+            Path::new("/elsewhere/tsconfig.json")
+        ));
+    }
+
+    #[test]
+    fn new_sources_outside_the_project_are_detected() {
+        let w = TempWorkspace::new("new-source");
+        w.write(
+            "tsconfig.json",
+            r#"{"compilerOptions":{"allowJs":true},"include":["src"]}"#,
+        )
+        .write("src/a.ts", SOURCE);
+        let layout = &assess(std::slice::from_ref(&w.path))[0];
+        for outside in ["tools.ts", "tools.js", "src/.hidden/b.ts"] {
+            assert!(
+                new_source_outside(layout, &w.path.join(outside)),
+                "{outside}"
+            );
+        }
+        for inside in [
+            "src/b.ts",
+            "src/b.js",
+            "node_modules/dep/x.ts",
+            "tsconfig.json",
+            "README.md",
+        ] {
+            assert!(
+                !new_source_outside(layout, &w.path.join(inside)),
+                "{inside}"
+            );
+        }
+
+        let ts = TempWorkspace::new("new-source-ts");
+        ts.write("tsconfig.json", "{}").write("a.ts", SOURCE);
+        let layout = &assess(std::slice::from_ref(&ts.path))[0];
+        assert!(new_source_outside(layout, &ts.path.join("b.js")));
+        assert!(!new_source_outside(layout, &ts.path.join("b.ts")));
+
+        let js = TempWorkspace::new("new-source-js");
+        js.write("jsconfig.json", "{}").write("a.js", SOURCE);
+        let layout = &assess(std::slice::from_ref(&js.path))[0];
+        assert!(!new_source_outside(layout, &js.path.join("b.js")));
+    }
+
+    #[test]
+    fn reassessing_reads_the_folder_again() {
+        let w = TempWorkspace::new("reassess");
+        w.write("tsconfig.json", "{}").write("a.ts", SOURCE);
+        let layout = assess(std::slice::from_ref(&w.path)).remove(0);
+        assert!(layout.complete);
+
+        w.write("tsconfig.json", r#"{"compilerOptions":{"strict":false}}"#);
+        assert!(
+            reassess(&layout).complete,
+            "a change that keeps every source"
+        );
+
+        w.write("tsconfig.json", r#"{"exclude":["a.ts"]}"#);
+        assert!(!reassess(&layout).complete, "a change that drops a source");
+
+        std::fs::remove_file(w.path.join("tsconfig.json")).unwrap();
+        assert!(!reassess(&layout).complete, "the configuration is gone");
+    }
 
     #[test]
     fn a_config_file_change_breaks_the_verdict() {

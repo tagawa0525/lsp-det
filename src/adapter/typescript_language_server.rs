@@ -671,15 +671,52 @@ mod tests {
     }
 
     #[test]
-    fn a_config_change_after_declaring_coverage_makes_readiness_unknown_for_good() {
+    fn a_config_change_that_keeps_the_layout_complete_keeps_tracking() {
+        // ADR 0023 addendum 2026-09-26: the layout is read again, and it is still complete.
+        let workspace = complete_workspace("config-kept");
+        let mut adapter = ready_on(&workspace);
+        workspace.write(
+            "tsconfig.json",
+            r#"{"compilerOptions":{"strict":false},"include":["**/*.ts"]}"#,
+        );
+        assert_eq!(
+            observe(
+                &mut adapter,
+                &watched(&workspace.path.join("tsconfig.json"), 2)
+            ),
+            None,
+            "withdrew the promise although the layout is still complete"
+        );
+        let reloading = interpret(&mut adapter, &load_begin("2")).expect("the reload begins");
+        assert_eq!(reloading.readiness, Readiness::Indexing);
+        let reloaded = interpret(&mut adapter, &load_end("2")).expect("the reload ends");
+        assert_eq!(reloaded.readiness, Readiness::Ready);
+    }
+
+    #[test]
+    fn a_config_change_that_breaks_the_layout_makes_readiness_unknown_for_good() {
         let workspace = complete_workspace("config-change");
         let mut adapter = ready_on(&workspace);
+        workspace.write(
+            "tsconfig.json",
+            r#"{"include":["**/*.ts"],"exclude":["a.ts"]}"#,
+        );
         let state = observe(
             &mut adapter,
             &watched(&workspace.path.join("tsconfig.json"), 2),
         )
-        .expect("a config change must move the state");
+        .expect("a config change that drops a source must move the state");
         assert_eq!(state.readiness, Readiness::Unknown);
+
+        // Once withdrawn, the promise is not made again, even if the layout is restored.
+        workspace.write("tsconfig.json", r#"{"include":["**/*.ts"]}"#);
+        assert_eq!(
+            observe(
+                &mut adapter,
+                &watched(&workspace.path.join("tsconfig.json"), 2)
+            ),
+            None
+        );
 
         // A later project load does not bring the promise back.
         interpret(&mut adapter, &load_begin("2"));
@@ -696,6 +733,7 @@ mod tests {
     fn a_new_config_in_a_subdirectory_makes_readiness_unknown() {
         let workspace = complete_workspace("new-config");
         let mut adapter = ready_on(&workspace);
+        workspace.write("packages/b/tsconfig.json", "{}");
         let state = observe(
             &mut adapter,
             &watched(&workspace.path.join("packages/b/tsconfig.json"), 1),

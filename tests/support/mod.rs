@@ -472,6 +472,35 @@ impl ConformanceClient {
         self.initialize_raw_with_capabilities(capabilities)
     }
 
+    /// Completes `initialize` → `initialized` with several `workspaceFolders` (the first one
+    /// also as `rootUri`).
+    pub fn initialize_with_folders(
+        &mut self,
+        declare_server_state: bool,
+        folders: &[&std::path::Path],
+    ) -> Value {
+        let mut capabilities = json!({"textDocument": {"hover": {}}});
+        if declare_server_state {
+            capabilities["experimental"] = json!({"serverState": true});
+        }
+        let workspace_folders: Vec<Value> = folders
+            .iter()
+            .enumerate()
+            .map(|(i, folder)| json!({"uri": file_uri(folder), "name": format!("folder{i}")}))
+            .collect();
+        let result = self.request(
+            "initialize",
+            json!({
+                "processId": std::process::id(),
+                "rootUri": file_uri(folders[0]),
+                "workspaceFolders": workspace_folders,
+                "capabilities": capabilities,
+            }),
+        );
+        self.notify("initialized", json!({}));
+        result
+    }
+
     /// Completes `initialize` → `initialized` with only `rootUri` (no `workspaceFolders`), as a
     /// client that predates workspace folders sends it.
     pub fn initialize_with_root_uri_only(
@@ -2164,6 +2193,29 @@ impl TempTsProject {
 }
 
 impl TempTsProject {
+    /// Two workspace folders under one directory, each with a tsconfig.json taking in every
+    /// source (ADR 0023 addendum 2026-09-26): `A/a.ts` defines `target`, `B/b.ts` calls it.
+    /// Pass `root.join("A")` and `root.join("B")` as the workspace folders.
+    pub fn two_folders(tag: &str) -> Self {
+        let root = std::env::temp_dir().join(format!(
+            "lsp-det-conformance-ts-{tag}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        for folder in ["A", "B"] {
+            let dir = root.join(folder);
+            std::fs::create_dir_all(&dir).expect("cannot create the temporary project");
+            std::fs::write(dir.join("tsconfig.json"), TSCONFIG).unwrap();
+        }
+        std::fs::write(root.join("A/a.ts"), TS_A).unwrap();
+        std::fs::write(
+            root.join("B/b.ts"),
+            "import { target } from '../A/a';\n\nexport function caller(): number {\n  return target();\n}\n",
+        )
+        .unwrap();
+        TempTsProject { root }
+    }
+
     /// Two projects without a solution tsconfig (ADR 0023): `packages/a` defines `target`,
     /// `packages/b` calls it. tsserver searches only the projects it has loaded, so references
     /// from `packages/a/a.ts` miss `packages/b/b.ts` until b is opened.

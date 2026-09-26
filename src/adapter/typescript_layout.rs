@@ -60,30 +60,39 @@ pub fn all_complete(layouts: &[FolderLayout]) -> bool {
     !layouts.is_empty() && layouts.iter().all(|layout| layout.complete)
 }
 
-/// Whether a change to `path` can break the verdict of [`assess`] for `layout`: a
-/// configuration file anywhere in the folder, or (when `created`) a JavaScript file the
-/// configuration does not take in. Paths under `node_modules` and `.git` never do.
-pub fn change_breaks_verdict(layout: &FolderLayout, path: &Path, created: bool) -> bool {
-    let Ok(relative) = path.strip_prefix(&layout.root) else {
-        return false;
-    };
-    if relative.components().any(|component| {
+/// The path relative to `layout`'s folder, or `None` for a path outside it or under
+/// `node_modules` / `.git`.
+fn inside<'a>(layout: &FolderLayout, path: &'a Path) -> Option<&'a Path> {
+    let relative = path.strip_prefix(&layout.root).ok()?;
+    let skipped = relative.components().any(|component| {
         matches!(component, Component::Normal(name) if SKIPPED_DIRS.iter().any(|d| name == *d))
-    }) {
-        return false;
-    }
-    let name = path
-        .file_name()
+    });
+    (!skipped).then_some(relative)
+}
+
+fn is_config_file(path: &Path) -> bool {
+    path.file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or("");
-    if CONFIG_NAMES.contains(&name) {
-        return true;
+        .is_some_and(|name| CONFIG_NAMES.contains(&name))
+}
+
+/// Whether `path` is a configuration file in `layout`'s folder, whose change calls for
+/// [`reassess`] (ADR 0023 addendum 2026-09-26). Paths under `node_modules` and `.git` are not.
+pub fn is_config_change(layout: &FolderLayout, path: &Path) -> bool {
+    inside(layout, path).is_some() && is_config_file(path)
+}
+
+/// Whether a newly created `path` is a source in `layout`'s folder that the configuration does
+/// not take in (by `files` / `include` / `exclude`, and `allowJs` for JavaScript). Paths under
+/// `node_modules` and `.git` are not.
+pub fn new_source_outside(layout: &FolderLayout, path: &Path) -> bool {
+    if inside(layout, path).is_none() || is_config_file(path) {
+        return false;
     }
     let is_javascript = has_extension(path, &JAVASCRIPT_EXTENSIONS);
-    if !created || !(is_javascript || has_extension(path, &TYPESCRIPT_EXTENSIONS)) {
+    if !is_javascript && !has_extension(path, &TYPESCRIPT_EXTENSIONS) {
         return false;
     }
-    // A new source breaks the verdict unless the configuration takes it in.
     let takes_in = (!is_javascript || layout.allow_js)
         && layout.scope.as_ref().is_some_and(|scope| {
             relative_slash_path(&layout.root, path).is_some_and(|source| scope.takes_in(&source))
@@ -91,25 +100,9 @@ pub fn change_breaks_verdict(layout: &FolderLayout, path: &Path, created: bool) 
     !takes_in
 }
 
-/// Whether `path` is a configuration file in `layout`'s folder, whose change calls for
-/// [`reassess`] (ADR 0023 addendum 2026-09-26). Paths under `node_modules` and `.git` are not.
-pub fn is_config_change(layout: &FolderLayout, path: &Path) -> bool {
-    let _ = (layout, path);
-    todo!("ADR 0023 addendum 2026-09-26")
-}
-
-/// Whether a newly created `path` is a source in `layout`'s folder that the configuration does
-/// not take in (by `files` / `include` / `exclude`, and `allowJs` for JavaScript). Paths under
-/// `node_modules` and `.git` are not.
-pub fn new_source_outside(layout: &FolderLayout, path: &Path) -> bool {
-    let _ = (layout, path);
-    todo!("ADR 0023 addendum 2026-09-26")
-}
-
 /// Reads `layout`'s folder again from the disk as it is now.
 pub fn reassess(layout: &FolderLayout) -> FolderLayout {
-    let _ = layout;
-    todo!("ADR 0023 addendum 2026-09-26")
+    assess_folder(&layout.root)
 }
 
 fn assess_folder(root: &Path) -> FolderLayout {
@@ -845,106 +838,5 @@ mod tests {
 
         std::fs::remove_file(w.path.join("tsconfig.json")).unwrap();
         assert!(!reassess(&layout).complete, "the configuration is gone");
-    }
-
-    #[test]
-    fn a_config_file_change_breaks_the_verdict() {
-        let w = TempWorkspace::new("change-config");
-        w.write("tsconfig.json", "{}").write("a.ts", SOURCE);
-        let layout = &assess(std::slice::from_ref(&w.path))[0];
-        assert!(change_breaks_verdict(
-            layout,
-            &w.path.join("tsconfig.json"),
-            false
-        ));
-        assert!(change_breaks_verdict(
-            layout,
-            &w.path.join("packages/b/tsconfig.json"),
-            true
-        ));
-        assert!(change_breaks_verdict(
-            layout,
-            &w.path.join("jsconfig.json"),
-            true
-        ));
-    }
-
-    #[test]
-    fn a_new_javascript_file_breaks_the_verdict_only_outside_allow_js() {
-        let w = TempWorkspace::new("change-js");
-        w.write("tsconfig.json", "{}").write("a.ts", SOURCE);
-        let layout = &assess(std::slice::from_ref(&w.path))[0];
-        assert!(change_breaks_verdict(layout, &w.path.join("b.js"), true));
-        assert!(!change_breaks_verdict(layout, &w.path.join("b.js"), false));
-        assert!(!change_breaks_verdict(layout, &w.path.join("b.ts"), true));
-
-        let js = TempWorkspace::new("change-js-allowed");
-        js.write("jsconfig.json", "{}").write("a.js", SOURCE);
-        let layout = &assess(std::slice::from_ref(&js.path))[0];
-        assert!(!change_breaks_verdict(layout, &js.path.join("b.js"), true));
-    }
-
-    #[test]
-    fn a_new_source_outside_the_project_breaks_the_verdict() {
-        let w = TempWorkspace::new("change-outside-include");
-        w.write(
-            "tsconfig.json",
-            r#"{"compilerOptions":{"allowJs":true},"include":["src"]}"#,
-        )
-        .write("src/a.ts", SOURCE);
-        let layout = &assess(std::slice::from_ref(&w.path))[0];
-        assert!(layout.complete);
-        assert!(change_breaks_verdict(
-            layout,
-            &w.path.join("tools.ts"),
-            true
-        ));
-        assert!(change_breaks_verdict(
-            layout,
-            &w.path.join("tools.js"),
-            true
-        ));
-        assert!(change_breaks_verdict(
-            layout,
-            &w.path.join("src/.hidden/b.ts"),
-            true
-        ));
-        assert!(!change_breaks_verdict(
-            layout,
-            &w.path.join("src/b.ts"),
-            true
-        ));
-        assert!(!change_breaks_verdict(
-            layout,
-            &w.path.join("src/b.js"),
-            true
-        ));
-        assert!(!change_breaks_verdict(
-            layout,
-            &w.path.join("tools.ts"),
-            false
-        ));
-    }
-
-    #[test]
-    fn changes_under_node_modules_or_outside_the_folder_do_not_break_the_verdict() {
-        let w = TempWorkspace::new("change-skipped");
-        w.write("tsconfig.json", "{}").write("a.ts", SOURCE);
-        let layout = &assess(std::slice::from_ref(&w.path))[0];
-        assert!(!change_breaks_verdict(
-            layout,
-            &w.path.join("node_modules/dep/tsconfig.json"),
-            true
-        ));
-        assert!(!change_breaks_verdict(
-            layout,
-            &w.path.join(".git/tsconfig.json"),
-            true
-        ));
-        assert!(!change_breaks_verdict(
-            layout,
-            Path::new("/elsewhere/tsconfig.json"),
-            true
-        ));
     }
 }

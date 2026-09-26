@@ -173,27 +173,42 @@ impl TypescriptLanguageServerAdapter {
         self.version_is_tested && typescript_layout::all_complete(&self.layouts)
     }
 
-    /// Whether a client notification can have changed the layout `coverage` rests on.
-    fn breaks_layout(&self, method: &str, body: &[u8]) -> bool {
+    /// Whether a client notification leaves the layout `coverage` rests on no longer complete.
+    /// A configuration file change reads its folder again (ADR 0023 addendum 2026-09-26); a new
+    /// source is checked against the layout as read after that; an added folder always counts.
+    fn layout_broken_by(&mut self, method: &str, body: &[u8]) -> bool {
         let Ok(message) = serde_json::from_slice::<Value>(body) else {
             return false;
         };
         let params = &message["params"];
         match method {
-            DID_CHANGE_WATCHED_FILES_METHOD => params["changes"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|change| {
-                    let Some(path) = change["uri"].as_str().and_then(crate::uri::uri_to_path)
-                    else {
-                        return false;
-                    };
-                    let created = change["type"].as_u64() == Some(CREATED);
-                    self.layouts.iter().any(|layout| {
-                        typescript_layout::change_breaks_verdict(layout, &path, created)
+            DID_CHANGE_WATCHED_FILES_METHOD => {
+                let changes: Vec<(std::path::PathBuf, bool)> = params["changes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|change| {
+                        let path = change["uri"].as_str().and_then(crate::uri::uri_to_path)?;
+                        Some((path, change["type"].as_u64() == Some(CREATED)))
                     })
-                }),
+                    .collect();
+                for layout in &mut self.layouts {
+                    if changes
+                        .iter()
+                        .any(|(path, _)| typescript_layout::is_config_change(layout, path))
+                    {
+                        *layout = typescript_layout::reassess(layout);
+                    }
+                }
+                !typescript_layout::all_complete(&self.layouts)
+                    || changes.iter().any(|(path, created)| {
+                        *created
+                            && self
+                                .layouts
+                                .iter()
+                                .any(|layout| typescript_layout::new_source_outside(layout, path))
+                    })
+            }
             DID_CHANGE_WORKSPACE_FOLDERS_METHOD => params["event"]["added"]
                 .as_array()
                 .is_some_and(|added| !added.is_empty()),
@@ -262,15 +277,16 @@ impl Mapping for TypescriptLanguageServerAdapter {
         self.layouts = typescript_layout::assess(roots);
     }
 
-    /// After `coverage` is declared, a change to the layout it rests on (a configuration file,
-    /// a JavaScript file outside `allowJs`, an added folder) makes `readiness` `unknown` for the
-    /// rest of the connection, and holding stops (ADR 0023 decision 4). A change the client
-    /// does not tell lsp-det about is not seen.
+    /// After `coverage` is declared, a change that leaves the layout no longer complete (a
+    /// configuration file change read again from the disk, a new source outside the project, an
+    /// added folder) makes `readiness` `unknown` for the rest of the connection, and holding
+    /// stops (ADR 0023 decision 4 and addendum 2026-09-26). A change the client does not tell
+    /// lsp-det about is not seen.
     fn observe_client(&mut self, view: &MessageView, body: &[u8]) -> Option<ServerState> {
         if self.layout_changed || !self.declares_coverage() || !view.is_notification() {
             return None;
         }
-        if !self.breaks_layout(view.method()?, body) {
+        if !self.layout_broken_by(view.method()?, body) {
             return None;
         }
         self.layout_changed = true;

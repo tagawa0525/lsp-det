@@ -2,8 +2,10 @@
 //!
 //! tsserver searches only the projects it has loaded: the project of each opened file and the
 //! projects reachable from a loaded solution. `textDocument/references` is therefore complete
-//! over the whole workspace only when a single project already contains every source. Rule R1
-//! deems a workspace folder complete only when all of the following hold:
+//! over the whole workspace only when a single project already contains every source. The
+//! workspace must have exactly one folder (a second folder is a second project, see
+//! [`workspace_complete`]), and rule R1 deems that folder complete only when all of the
+//! following hold:
 //!
 //! - exactly one `tsconfig.json` / `jsconfig.json` exists under the folder (`node_modules` and
 //!   `.git` are skipped), and it sits at the folder root
@@ -60,13 +62,7 @@ pub fn assess(roots: &[PathBuf]) -> Vec<FolderLayout> {
 /// second folder is a second project whose references are missed until a file in it is opened
 /// (ADR 0023 addendum 2026-09-26).
 pub fn workspace_complete(layouts: &[FolderLayout]) -> bool {
-    let _ = layouts;
-    todo!("ADR 0023 addendum 2026-09-26")
-}
-
-/// Whether every folder is complete. A workspace without any known folder is not.
-pub fn all_complete(layouts: &[FolderLayout]) -> bool {
-    !layouts.is_empty() && layouts.iter().all(|layout| layout.complete)
+    matches!(layouts, [only] if only.complete)
 }
 
 /// The path relative to `layout`'s folder, or `None` for a path outside it or under
@@ -499,7 +495,7 @@ mod tests {
     const SOURCE: &str = "export const x = 1;\n";
 
     fn complete(workspace: &TempWorkspace) -> bool {
-        all_complete(&assess(std::slice::from_ref(&workspace.path)))
+        workspace_complete(&assess(std::slice::from_ref(&workspace.path)))
     }
 
     // --- complete layouts --------------------------------------------------------------
@@ -564,7 +560,7 @@ mod tests {
             .write("a.js", SOURCE)
             .write("b.ts", SOURCE);
         let layouts = assess(std::slice::from_ref(&w.path));
-        assert!(all_complete(&layouts));
+        assert!(workspace_complete(&layouts));
         assert!(layouts[0].allow_js);
     }
 
@@ -594,29 +590,8 @@ mod tests {
     }
 
     #[test]
-    fn every_folder_must_be_complete() {
-        let good = TempWorkspace::new("two-good");
-        good.write("tsconfig.json", "{}").write("a.ts", SOURCE);
-        let other = TempWorkspace::new("two-other");
-        other.write("tsconfig.json", "{}").write("b.ts", SOURCE);
-        assert!(all_complete(&assess(&[
-            good.path.clone(),
-            other.path.clone()
-        ])));
-
-        let bad = TempWorkspace::new("two-bad");
-        bad.write("b.ts", SOURCE);
-        assert!(!all_complete(&assess(&[
-            good.path.clone(),
-            bad.path.clone()
-        ])));
-    }
-
-    // --- incomplete layouts ------------------------------------------------------------
-
-    #[test]
     fn no_folder_is_not_complete() {
-        assert!(!all_complete(&assess(&[])));
+        assert!(!workspace_complete(&assess(&[])));
     }
 
     #[test]
@@ -679,7 +654,7 @@ mod tests {
             .write("a.ts", SOURCE)
             .write("tools/build.mjs", SOURCE);
         let layouts = assess(std::slice::from_ref(&w.path));
-        assert!(!all_complete(&layouts));
+        assert!(!workspace_complete(&layouts));
         assert!(!layouts[0].allow_js);
     }
 

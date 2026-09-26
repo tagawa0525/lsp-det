@@ -170,7 +170,7 @@ impl TypescriptLanguageServerAdapter {
 
     /// Whether `coverage` is declared: a tested version, in a layout rule R1 deems complete.
     fn declares_coverage(&self) -> bool {
-        self.version_is_tested && typescript_layout::all_complete(&self.layouts)
+        self.version_is_tested && typescript_layout::workspace_complete(&self.layouts)
     }
 
     /// Whether a client notification leaves the layout `coverage` rests on no longer complete.
@@ -200,7 +200,7 @@ impl TypescriptLanguageServerAdapter {
                         *layout = typescript_layout::reassess(layout);
                     }
                 }
-                !typescript_layout::all_complete(&self.layouts)
+                !typescript_layout::workspace_complete(&self.layouts)
                     || changes.iter().any(|(path, created)| {
                         *created
                             && self

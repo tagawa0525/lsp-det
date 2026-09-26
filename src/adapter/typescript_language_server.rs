@@ -746,6 +746,34 @@ mod tests {
     }
 
     #[test]
+    fn a_new_source_in_the_same_notification_is_judged_against_the_reread_layout() {
+        // One notification widens the configuration and creates a file the old one left out.
+        // Judged against the layout before the change, tools.ts would be outside.
+        let workspace = TempWorkspace::new("tsls-same-notification");
+        workspace
+            .write("tsconfig.json", r#"{"include":["src"]}"#)
+            .write("src/a.ts", "export const a = 1;\n");
+        let mut adapter = ready_on(&workspace);
+        workspace
+            .write("tsconfig.json", r#"{"include":["src","tools.ts"]}"#)
+            .write("tools.ts", "export const t = 1;\n");
+        let body = json!({
+            "jsonrpc": "2.0",
+            "method": "workspace/didChangeWatchedFiles",
+            "params": {"changes": [
+                {"uri": crate::uri::path_to_uri(&workspace.path.join("tsconfig.json")), "type": 2},
+                {"uri": crate::uri::path_to_uri(&workspace.path.join("tools.ts")), "type": 1},
+            ]},
+        })
+        .to_string();
+        assert_eq!(
+            observe(&mut adapter, &body),
+            None,
+            "judged the new source against the layout before the change"
+        );
+    }
+
+    #[test]
     fn a_new_config_in_a_subdirectory_makes_readiness_unknown() {
         let workspace = complete_workspace("new-config");
         let mut adapter = ready_on(&workspace);

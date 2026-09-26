@@ -1243,6 +1243,39 @@ fn typescript_language_server_reads_the_layout_under_a_root_uri_without_workspac
 }
 
 #[test]
+fn typescript_language_server_a_config_change_that_keeps_the_layout_complete_keeps_holding() {
+    // ADR 0023 addendum 2026-09-26: the layout is read again; still complete,
+    // so the reload goes through indexing and back to ready.
+    let project = support::TempTsProject::with_cross_file_reference("fake-config-kept");
+    let server = ServerUnderTest::lsp_det_with_fake_typescript_language_server();
+    let mut client = ConformanceClient::start(&server);
+    client.initialize_with_root(true, &project.root);
+    client.make_upstream_begin_project_load("1");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Indexing);
+    client.make_upstream_end_project_load("1");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+
+    std::fs::write(
+        project.file("tsconfig.json"),
+        support::TSCONFIG.replace("\"strict\":true", "\"strict\":false"),
+    )
+    .unwrap();
+    client.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": support::file_uri(&project.file("tsconfig.json")), "type": 2}]}),
+    );
+    client.make_upstream_begin_project_load("2");
+    assert_eq!(
+        client.await_state_changed().readiness,
+        Readiness::Indexing,
+        "withdrew the promise although the layout is still complete"
+    );
+    client.make_upstream_end_project_load("2");
+    assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
+    client.shutdown();
+}
+
+#[test]
 fn typescript_language_server_a_config_change_after_declaring_coverage_makes_readiness_unknown() {
     let project = support::TempTsProject::with_cross_file_reference("fake-config-change");
     let server = ServerUnderTest::lsp_det_with_fake_typescript_language_server();
@@ -1253,6 +1286,12 @@ fn typescript_language_server_a_config_change_after_declaring_coverage_makes_rea
     client.make_upstream_end_project_load("1");
     assert_eq!(client.await_state_changed().readiness, Readiness::Ready);
 
+    // The change drops b.ts from the project: the layout is no longer complete.
+    std::fs::write(
+        project.file("tsconfig.json"),
+        r#"{"include":["**/*.ts"],"exclude":["b.ts"]}"#,
+    )
+    .unwrap();
     client.notify(
         "workspace/didChangeWatchedFiles",
         json!({"changes": [{"uri": support::file_uri(&project.file("tsconfig.json")), "type": 2}]}),
@@ -1662,14 +1701,12 @@ fn typescript_language_server_rearms_on_tsconfig_change_with_real_server() {
     client.shutdown();
 }
 
-/// ADR 0023 decision 4: once coverage is declared, a change to the layout it
-/// rests on makes readiness `unknown` for the rest of the connection, even
-/// though tsserver reloads the project.
+/// ADR 0023 addendum 2026-09-26: a tsconfig change that keeps the layout
+/// complete is followed like any reload, through indexing and back to ready.
 #[test]
 #[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
-fn typescript_language_server_a_tsconfig_change_after_declaring_coverage_is_unknown_with_real_server()
- {
-    let project = support::TempTsProject::with_cross_file_reference("tsconfig-declared");
+fn typescript_language_server_rearms_when_the_layout_stays_complete_with_real_server() {
+    let project = support::TempTsProject::with_cross_file_reference("tsconfig-kept");
     let mut client = ConformanceClient::start(&real_tsls(&project));
     let result = client.initialize_with_root(true, &project.root);
     assert!(
@@ -1686,6 +1723,38 @@ fn typescript_language_server_a_tsconfig_change_after_declaring_coverage_is_unkn
         support::TSCONFIG.replace("\"strict\":true", "\"strict\":false"),
     )
     .unwrap();
+    client.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [{"uri": support::file_uri(&tsconfig), "type": 2}]}),
+    );
+    let observed = client
+        .await_notification_within("experimental/serverStateChanged", Duration::from_secs(8))
+        .expect("readiness did not move on the tsconfig change");
+    assert_eq!(observed["readiness"], json!("indexing"));
+    client.wait_until_ready();
+    client.shutdown();
+}
+
+/// ADR 0023 decision 4: once coverage is declared, a change that takes the
+/// layout out of rule R1 makes readiness `unknown` for the rest of the
+/// connection, even though tsserver reloads the project.
+#[test]
+#[ignore = "Real server integration. Local only (v0.1-design.md chapter 6). Run with cargo test -- --ignored"]
+fn typescript_language_server_a_tsconfig_change_after_declaring_coverage_is_unknown_with_real_server()
+ {
+    let project = support::TempTsProject::with_cross_file_reference("tsconfig-declared");
+    let mut client = ConformanceClient::start(&real_tsls(&project));
+    let result = client.initialize_with_root(true, &project.root);
+    assert!(
+        !result["result"]["capabilities"]["experimental"]["serverStateProvider"]["coverage"]
+            .is_null(),
+        "the premise is broken: coverage is not declared for the 7.2 fixture: {result}"
+    );
+    client.did_open(&project.file("a.ts"), "typescript");
+    client.wait_until_ready();
+
+    let tsconfig = project.file("tsconfig.json");
+    std::fs::write(&tsconfig, r#"{"include":["**/*.ts"],"exclude":["b.ts"]}"#).unwrap();
     client.notify(
         "workspace/didChangeWatchedFiles",
         json!({"changes": [{"uri": support::file_uri(&tsconfig), "type": 2}]}),

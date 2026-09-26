@@ -69,3 +69,9 @@ lsp-det に届かない変化（クライアントが通知しないディスク
 - `tests/conformance.rs`（実サーバーの no-solution の workspace で `coverage` を宣言しないこと。今は RED）、偽上流のテスト（途中の設定ファイルの変化で `readiness` が `unknown` になること）
 - 仕様 8.2 の 5 と 10 章の typescript-language-server の行（英日）、11 章
 - `docs/research/typescript-language-server-readiness-measurement.md` の末尾、`README.md` / `README.ja.md` の該当箇所、`CHANGELOG.md`、`CLAUDE.md` の現在地
+
+## 追補（2026-09-26）: 途中の変化の対象を新規のソース一般に広げる
+
+実装（PR #119）のレビューで、決定 4 の対象の 2 つ目「`allowJs` のない設定の下での JavaScript のファイルの Created」では足りないことが分かった。規則 R1 は設定の `files` / `include` / `exclude` が全ソースを含むことも求めるので、たとえば `include: ["src"]` の設定の下で `src` の外に `.ts` が新しくできても、判定は不完全に変わる。`allowJs` が真の設定の下で `src` の外にできた `.js` も同じである。
+
+2026-09-26 にユーザーが承認し、対象の 2 つ目を「`workspace/didChangeWatchedFiles` で、設定の project に入らないソースの Created」に改めた。入るかどうかは判定と同じ照合（`files` / `include` / `exclude`、JavaScript なら `allowJs`）で決める。`allowJs` の外の JavaScript はその一つの場合になる。1 つ目（設定ファイルの変化）と 3 つ目（フォルダの追加）は変えない。仕様 10 章の typescript-language-server の行は同じ PR で合わせてある。
